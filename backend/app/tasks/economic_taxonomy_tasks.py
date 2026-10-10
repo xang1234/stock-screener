@@ -933,6 +933,25 @@ def refresh_economic_taxonomy_generation():
 
 
 @celery_app.task(
+    name="app.tasks.economic_taxonomy_tasks.backfill_legacy_developments"
+)
+def backfill_legacy_developments(taxonomy_version_id: str | None = None):
+    """Keep the processing version's legacy development links mapped (#513).
+
+    The snapshot builder fails closed on legacy observations this has not
+    covered; unchanged legacy links make the run a cheap no-op.
+    """
+    from app.services.economic_development_backfill import (
+        backfill_legacy_developments as backfill,
+    )
+
+    with SessionLocal.begin() as db:
+        return backfill(
+            db, UUID(taxonomy_version_id) if taxonomy_version_id else None
+        )
+
+
+@celery_app.task(
     name="app.tasks.economic_taxonomy_tasks.apply_economic_theme_lifecycle"
 )
 def apply_economic_theme_lifecycle(interpretation_set_id: str | None = None):

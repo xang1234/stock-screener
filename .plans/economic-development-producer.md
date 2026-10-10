@@ -78,17 +78,27 @@ projection.
 
 ### PR 2 — legacy links → economic rows (question 2)
 
-- Migration: `EconomicThemeDevelopment` gains `taxonomy_version_id`, required for
-  `legacy_mapping` rows and null otherwise; uniqueness covers the version.
-- A backfill (CLI and task) writes the `legacy_mapping` rows for one taxonomy
-  version from `ThemeDevelopmentTheme` with that version's
-  `LegacyClaimAllocation` / `LegacyDestinationMapping` (the logic moves out of
-  the builder), replacing that version's rows. It runs at cutover and whenever
-  the processing version changes, and records a completion marker.
-- The builder reads native rows plus `legacy_mapping` rows of the version it
-  builds, and fails closed when legacy links exist but that version has no
-  completion marker. The `_SNAPSHOT_BUILDER` allowlist entry goes; the backfill
-  is a separate entry under the rollback/bridge category until retirement.
+- Storage (as built): `legacy_mapping` rows hold **one** version at a time —
+  the processing version, the only one the builder builds. A one-row
+  `EconomicDevelopmentBackfill` marker (migration 0063) names that version, an
+  observation watermark, and a fingerprint (count, max observation id) of the
+  legacy links. This avoids a nullable version column in the
+  `(observation_id, economic_theme_id)` primary key. Sealed versions' allocations
+  and destinations are immutable, so a version's mapping changes only when
+  legacy links do.
+- The backfill (`backfill_legacy_developments` task, every minute, a no-op
+  while the fingerprint matches) writes the version's rows from
+  `ThemeDevelopmentTheme` with its `LegacyClaimAllocation` /
+  `LegacyDestinationMapping` (logic moved out of the builder), replacing any
+  other version's rows and marker. A split without an allocation fails it, as it
+  failed the builder before. No CLI: the task takes an optional version id.
+- The builder reads only `EconomicThemeDevelopment`. It fails closed
+  (`legacy_development_backfill_missing`) when a pinned legacy observation (no
+  source family) is above the marker's watermark or the marker is for another
+  version, and then ignores `legacy_mapping` rows. In shadow/dual a new legacy
+  observation therefore holds the build until the next backfill run (about a
+  minute). The `_SNAPSHOT_BUILDER` allowlist entry is gone; the backfill task is
+  its own entry under rollback machinery.
 
 ### PR 2 — rollback projection (question 3)
 
@@ -97,6 +107,10 @@ projection.
   window whose economic theme maps 1:1 to a legacy theme (version's
   destinations); skip and log ambiguous ones. Nothing extra runs during normal
   economic operation.
+- As built: `RollbackRecovery.rebuild_legacy_projections` calls
+  `project_economic_developments` for the processing version. "1:1" is per
+  pipeline: exactly one of the theme's legacy destinations is in the
+  observation's pipeline, so narrative observations project nothing.
 
 ## Done when (from the issue)
 

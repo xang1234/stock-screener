@@ -187,6 +187,28 @@ class EconomicThemeDevelopment(Base):
     )
 
 
+class EconomicDevelopmentBackfill(Base):
+    """Which taxonomy version the ``legacy_mapping`` development links are for (#513).
+
+    One row: a backfill for another version replaces the links and this
+    marker. Observations above ``through_observation_id`` are not covered.
+    """
+
+    __tablename__ = "economic_development_backfills"
+
+    taxonomy_version_id = Column(
+        Uuid(as_uuid=True),
+        ForeignKey("economic_taxonomy_versions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    through_observation_id = Column(Integer, nullable=False)
+    legacy_link_count = Column(Integer, nullable=False)
+    legacy_link_max_observation_id = Column(Integer)
+    completed_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class LegacyDevelopmentEventMapping(Base):
     __tablename__ = "legacy_development_event_mappings"
 

@@ -85,6 +85,7 @@ from app.infra.db.models.social_signals import (
 )
 
 from .theme_intelligence import (
+    EconomicDevelopmentBackfill,
     EconomicThemeDevelopment,
     LegacyDevelopmentEventMapping,
     ThemeDevelopmentEvent,
@@ -229,6 +230,7 @@ __all__ = [
     "ResearchRootBudget",
     "ResearchWorkItem",
     "ResearchWorkLease",
+    "EconomicDevelopmentBackfill",
     "EconomicThemeDevelopment",
     "LegacyDevelopmentEventMapping",
     "ThemeDevelopmentEvent",

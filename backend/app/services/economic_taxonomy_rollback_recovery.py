@@ -18,6 +18,7 @@ from app.models.economic_taxonomy_runtime import (
     TaxonomyProjectionEvent,
     TaxonomySourceRevisionLog,
 )
+from app.services.economic_development_backfill import project_economic_developments
 from app.services.economic_taxonomy_fence import exclusive_publication
 from app.services.economic_taxonomy_publication_contracts import (
     CompatibilityNotAcknowledged,
@@ -144,6 +145,12 @@ class RollbackRecovery:
                         outcome="success" if applied else "stale_noop",
                         details={"rollback_recovery": True},
                     )
+                )
+            # Developments recorded under economic authority have no legacy
+            # links until now (#513).
+            if authority.processing_taxonomy_version_id is not None:
+                project_economic_developments(
+                    session, authority.processing_taxonomy_version_id
                 )
             session.flush()
             if not runtime.generation_acknowledged(generation_id):

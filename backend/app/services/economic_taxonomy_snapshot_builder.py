@@ -49,9 +49,9 @@ from app.models.economic_taxonomy_runtime import (
 )
 from app.models.stock_universe import StockUniverse
 from app.models.theme_intelligence import (
+    EconomicDevelopmentBackfill,
     EconomicThemeDevelopment,
     ThemeDevelopmentObservation,
-    ThemeDevelopmentTheme,
 )
 from app.services.economic_taxonomy_interpretations import (
     manifest_social_revision_contracts,
@@ -355,8 +355,7 @@ def _build_economic_snapshot_payloads(
     development_rows = _development_rows(
         db,
         observation_ids=development_ids,
-        allocations=allocations,
-        destinations=destinations,
+        taxonomy_version_id=taxonomy.id,
     )
     if any(theme_id not in theme_ids for _, theme_id in development_rows):
         raise SnapshotBundleError("snapshot_reference_not_in_taxonomy")
@@ -661,7 +660,14 @@ def _pinned_development_observation_ids(db, manifest):
     return observation_ids
 
 
-def _development_rows(db, *, observation_ids, allocations, destinations):
+def _development_rows(db, *, observation_ids, taxonomy_version_id):
+    """Pinned observations with their economic theme links (#513).
+
+    Legacy links arrive as ``legacy_mapping`` rows from the version's backfill
+    (``economic_development_backfill``). An observation recorded by the legacy
+    producer (no source family) that the backfill has not covered fails the
+    build rather than losing its themes.
+    """
     if not observation_ids:
         return []
     ids = {int(value) for value in observation_ids}
@@ -673,50 +679,22 @@ def _development_rows(db, *, observation_ids, allocations, destinations):
             )
         )
     }
-    theme_links = {
-        (row.observation_id, row.economic_theme_id)
-        for row in db.scalars(
-            select(EconomicThemeDevelopment).where(
-                EconomicThemeDevelopment.observation_id.in_(ids)
-            )
-        )
-    }
-    allocation_by_claim = {
-        (
-            row.legacy_theme_cluster_id,
-            row.allocation_kind,
-            row.allocation_key,
-        ): row
-        for row in allocations
-    }
-    destinations_by_legacy = {}
-    for row in destinations:
-        destinations_by_legacy.setdefault(row.legacy_theme_cluster_id, []).append(
-            row.destination_theme_id
-        )
-    for link in db.scalars(
-        select(ThemeDevelopmentTheme).where(
-            ThemeDevelopmentTheme.observation_id.in_(ids)
-        )
+    backfill = db.get(EconomicDevelopmentBackfill, taxonomy_version_id)
+    covered = backfill.through_observation_id if backfill is not None else 0
+    if any(
+        row.source_family_id is None and row.id > covered
+        for row in observations.values()
     ):
-        allocation = allocation_by_claim.get(
-            (
-                link.theme_id,
-                "development",
-                f"theme_development_observation:{link.observation_id}",
-            )
-        )
-        if allocation is not None:
-            if allocation.destination_theme_id is not None:
-                theme_links.add(
-                    (link.observation_id, allocation.destination_theme_id)
-                )
-            continue
-        mapped = destinations_by_legacy.get(link.theme_id, [])
-        if len(mapped) == 1:
-            theme_links.add((link.observation_id, mapped[0]))
-        elif len(mapped) > 1:
-            raise SnapshotBundleError("legacy_development_allocation_missing")
+        raise SnapshotBundleError("legacy_development_backfill_missing")
+    links = select(EconomicThemeDevelopment).where(
+        EconomicThemeDevelopment.observation_id.in_(ids)
+    )
+    if backfill is None:
+        # The legacy_mapping rows are another version's.
+        links = links.where(EconomicThemeDevelopment.link_origin != "legacy_mapping")
+    theme_links = {
+        (row.observation_id, row.economic_theme_id) for row in db.scalars(links)
+    }
     return [
         (observations[observation_id], theme_id)
         for observation_id, theme_id in sorted(

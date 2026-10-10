@@ -21,6 +21,7 @@ from app.models.theme_intelligence import (
     ThemeDevelopmentObservation,
     ThemeDevelopmentTheme,
 )
+from app.services.economic_development_backfill import backfill_legacy_developments
 from app.services.economic_taxonomy_snapshot_builder import (
     GenerationSnapshotInputs,
     SnapshotBundleError,
@@ -241,16 +242,22 @@ def test_snapshot_resolves_reviewed_split_legacy_development(db_session):
         artifact_integrity_hash="legacy-development-metrics-artifact",
     )
 
-    bundle = build_snapshot_bundle(
-        db_session,
-        GenerationSnapshotInputs(
-            taxonomy_version_id=taxonomy.id,
-            interpretation_set_id=interpretation.id,
-            generation_input_manifest_id=manifest.id,
-            metrics_revision_id=metrics.id,
-            created_by="test:reviewer",
-        ),
+    inputs = GenerationSnapshotInputs(
+        taxonomy_version_id=taxonomy.id,
+        interpretation_set_id=interpretation.id,
+        generation_input_manifest_id=manifest.id,
+        metrics_revision_id=metrics.id,
+        created_by="test:reviewer",
     )
+    # The builder reads no legacy links: an unmapped legacy observation fails
+    # it until the version's backfill covers it (#513).
+    with db_session.begin_nested(), pytest.raises(
+        SnapshotBundleError, match="legacy_development_backfill_missing"
+    ):
+        build_snapshot_bundle(db_session, inputs)
+    assert backfill_legacy_developments(db_session, taxonomy.id)["status"] == "backfilled"
+
+    bundle = build_snapshot_bundle(db_session, inputs)
     catalog = db_session.scalar(
         select(ReaderSnapshotEntry).where(
             ReaderSnapshotEntry.reader_snapshot_bundle_id == bundle.id,
