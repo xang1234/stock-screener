@@ -296,89 +296,244 @@
   ],
   "top_candidates": [
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Buy",
       "company_name": "NVIDIA Corporation",
       "composite_score": 92.0,
       "current_price": 145.0,
+      "data_status": "ok",
       "eps_growth_qq": 36.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Semiconductors",
+      "is_scannable": true,
       "market_cap": 3000000000000,
+      "minervini_rating": "Strong Buy",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Strong Buy",
       "rs_rating": 95,
       "sales_growth_qq": 30.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 150.8,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 82.0,
+      "se_readiness_score": 89.0,
       "se_setup_ready": true,
       "se_setup_score": 87.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 2,
       "symbol": "NVDA",
-      "volume": 26000000
+      "vcp_detected": true,
+      "vcp_num_bases": 3,
+      "volume": 26000000,
+      "volume_breakthrough_rating": "Strong Buy",
+      "volume_surge": true
     },
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Buy",
       "company_name": "Palo Alto Networks",
       "composite_score": 84.0,
       "current_price": 332.0,
+      "data_status": "ok",
       "eps_growth_qq": 23.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Cybersecurity",
+      "is_scannable": true,
       "market_cap": 120000000000,
+      "minervini_rating": "Strong Buy",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Strong Buy",
       "rs_rating": 91,
       "sales_growth_qq": 20.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 345.28,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 74.0,
+      "se_readiness_score": 81.0,
       "se_setup_ready": true,
       "se_setup_score": 79.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 2,
       "symbol": "PANW",
-      "volume": 8500000
+      "vcp_detected": false,
+      "vcp_num_bases": null,
+      "volume": 8500000,
+      "volume_breakthrough_rating": "Pass",
+      "volume_surge": false
     },
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Buy",
       "company_name": "Broadcom Inc.",
       "composite_score": 83.0,
       "current_price": 1135.0,
+      "data_status": "ok",
       "eps_growth_qq": 24.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Semiconductors",
+      "is_scannable": true,
       "market_cap": 900000000000,
+      "minervini_rating": "Buy",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Buy",
       "rs_rating": 90,
       "sales_growth_qq": 18.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 1180.4,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 73.0,
+      "se_readiness_score": 80.0,
       "se_setup_ready": true,
       "se_setup_score": 78.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 2,
       "symbol": "AVGO",
-      "volume": 13000000
+      "vcp_detected": false,
+      "vcp_num_bases": null,
+      "volume": 13000000,
+      "volume_breakthrough_rating": "Pass",
+      "volume_surge": false
     },
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Buy",
       "company_name": "Microsoft Corporation",
       "composite_score": 82.0,
       "current_price": 430.0,
+      "data_status": "ok",
       "eps_growth_qq": 19.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Software",
+      "is_scannable": true,
       "market_cap": 3200000000000,
+      "minervini_rating": "Buy",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Buy",
       "rs_rating": 90,
       "sales_growth_qq": 16.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 447.2,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 72.0,
+      "se_readiness_score": 79.0,
       "se_setup_ready": true,
       "se_setup_score": 77.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 2,
       "symbol": "MSFT",
-      "volume": 14000000
+      "vcp_detected": true,
+      "vcp_num_bases": null,
+      "volume": 14000000,
+      "volume_breakthrough_rating": "Pass",
+      "volume_surge": false
     },
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Watch",
       "company_name": "Snowflake Inc.",
       "composite_score": 55.0,
       "current_price": 176.0,
+      "data_status": "ok",
       "eps_growth_qq": 7.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Cloud Software",
+      "is_scannable": true,
       "market_cap": 60000000000,
+      "minervini_rating": "Watch",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Watch",
       "rs_rating": 67,
       "sales_growth_qq": 9.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 183.04,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 45.0,
+      "se_readiness_score": 52.0,
       "se_setup_ready": false,
       "se_setup_score": 50.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 1,
       "symbol": "SNOW",
-      "volume": 5500000
+      "vcp_detected": false,
+      "vcp_num_bases": null,
+      "volume": 5500000,
+      "volume_breakthrough_rating": "Pass",
+      "volume_surge": false
     }
   ]
 }

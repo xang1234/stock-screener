@@ -223,6 +223,42 @@ def _coerce_details_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _vcp_num_bases_from_details(d: dict[str, Any]) -> int | None:
+    """Read the persisted Minervini VCP base count, or ``None`` when absent.
+
+    The scan result assembler stores the detector output under
+    ``details.screeners.minervini.details.full_analysis.vcp.num_bases``. This
+    helper only walks that stored path — it never infers a count from
+    ``vcp_detected`` nor from the length of any candidate list, and it never
+    recomputes the pattern. A missing intermediate object, a non-mapping node,
+    or a non-integral ``num_bases`` yields ``None``. A base count is a count, so
+    a negative value is rejected as well; zero stays valid.
+    """
+    node: Any = d
+    for key in (
+        "details",
+        "screeners",
+        "minervini",
+        "details",
+        "full_analysis",
+        "vcp",
+        "num_bases",
+    ):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+
+    if isinstance(node, bool):
+        return None
+    if isinstance(node, int):
+        count = node
+    elif isinstance(node, float) and node.is_integer():
+        count = int(node)
+    else:
+        return None
+    return count if count >= 0 else None
+
+
 def _upsert_stmt(session: Session, values: list[dict[str, Any]]):
     stmt = pg_insert(StockFeatureDaily).values(values)
     return stmt.on_conflict_do_update(
@@ -899,10 +935,13 @@ def _map_feature_to_scan_result(
         "action_state": d.get("action_state"),
         "opportunity_state": d.get("opportunity_state"),
         "minervini_score": d.get("minervini_score"),
+        "minervini_rating": d.get("minervini_rating"),
         "canslim_score": d.get("canslim_score"),
+        "canslim_rating": d.get("canslim_rating"),
         "ipo_score": d.get("ipo_score"),
         "custom_score": d.get("custom_score"),
         "volume_breakthrough_score": d.get("volume_breakthrough_score"),
+        "volume_breakthrough_rating": d.get("volume_breakthrough_rating"),
         "rs_rating": d.get("rs_rating"),
         "rs_rating_1m": d.get("rs_rating_1m"),
         "rs_rating_3m": d.get("rs_rating_3m"),
@@ -913,6 +952,7 @@ def _map_feature_to_scan_result(
         "market_cap": d.get("market_cap"),
         "ma_alignment": d.get("ma_alignment"),
         "vcp_detected": d.get("vcp_detected"),
+        "vcp_num_bases": _vcp_num_bases_from_details(d),
         "vcp_score": d.get("vcp_score"),
         "vcp_pivot": d.get("vcp_pivot"),
         "vcp_ready_for_breakout": d.get("vcp_ready_for_breakout"),
