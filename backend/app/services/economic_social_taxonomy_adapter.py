@@ -30,6 +30,8 @@ from app.models.economic_taxonomy_runtime import (
     EvidencePacket,
     ProcessingRequest,
     SocialAssociationRevisionRef,
+    SourceFamily,
+    SourceLineage,
     TaxonomyAuthority,
 )
 from app.models.stock_universe import StockUniverse
@@ -38,6 +40,7 @@ from app.services.economic_source_admission import (
     AdmissionResult,
     EconomicSourceAdmissionService,
     EvidenceAdmission,
+    post_family_key,
 )
 from app.services.economic_taxonomy_fence import producer_write
 from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
@@ -599,12 +602,15 @@ class EconomicSocialTaxonomyAdapter:
                 )
                 if current_state == "conflict_review_required":
                     continue
-                if requested_state == "proposed" and current_state in {None, "proposed"}:
+                if requested_state == "proposed" and current_state in {None, "proposed", "accepted"}:
+                    # Evaluated for an accepted listing too: new evidence on it
+                    # can qualify the company and so its undecided siblings.
                     accepted = self._automatic_acceptances(
                         association, now=social_packet.available_at
                     )
                     if accepted:
-                        requested_state = "accepted"
+                        if current_state != "accepted":
+                            requested_state = "accepted"
                         siblings.extend(row for row in accepted if row.id != association.id)
                 if current_state in {"accepted", "rejected"} and requested_state == "proposed":
                     continue
@@ -713,8 +719,37 @@ class EconomicSocialTaxonomyAdapter:
             effective = effective_by_lineage[packet.source_lineage_id]
             return effective is not None and admission._standing(packet, effective) == 0
 
-        # A work bridged from a legacy association at cutover has no packet;
-        # it was legacy evidence and still counts.
+        def bridged_work_stands(work_id):
+            # A work bridged from a legacy association at cutover has no
+            # packet. It still counts unless a correction now speaks for its
+            # post: then only a standing packet of its own keeps it.
+            work = self.db.get(SocialExtractionWork, work_id)
+            post_id = (work.input_snapshot_json or {}).get("provider_post_id") if work else None
+            if not post_id:
+                return True
+            lineage_id = self.db.scalar(
+                select(SourceLineage.id)
+                .join(SourceFamily, SourceFamily.id == SourceLineage.source_family_id)
+                .where(
+                    SourceFamily.canonical_source_key == post_family_key("x", str(post_id)),
+                    SourceLineage.scope_suffix == "",
+                )
+            )
+            if lineage_id is None:
+                return True
+            if lineage_id not in effective_by_lineage:
+                effective_by_lineage[lineage_id] = admission.effective_packet(lineage_id)
+            if effective_by_lineage[lineage_id] is None:
+                return True
+            own = [
+                packet
+                for packet in self.db.scalars(
+                    select(EvidencePacket).where(EvidencePacket.source_lineage_id == lineage_id)
+                )
+                if (packet.source_metadata or {}).get("social_work_id") == work_id
+            ]
+            return any(stands(packet) for packet in own)
+
         sources = [
             (work_id, packet.available_at if packet is not None else None)
             for work_id, packet in self.db.execute(
@@ -725,7 +760,7 @@ class EconomicSocialTaxonomyAdapter:
                     EconomicSocialAssociationSource.social_work_id.is_not(None),
                 )
             )
-            if packet is None or stands(packet)
+            if (bridged_work_stands(work_id) if packet is None else stands(packet))
         ]
         now = max([utc(now), *(utc(at) for _, at in sources if at is not None)])
         catalog = SocialThemeProjectionService(self.db)._economic_catalog()

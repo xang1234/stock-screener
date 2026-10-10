@@ -743,6 +743,64 @@ def test_processor_counts_a_bridged_pre_cutover_work(social_fixture):
     assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "accepted"
 
 
+def test_processor_accepts_a_proposed_sibling_when_evidence_lands_on_an_accepted_listing(social_fixture):
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationRevision
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    adapter = EconomicSocialTaxonomyAdapter(f.db)
+    listings = {}
+    for symbol, state in (("AAA", "accepted"), ("0005.HK", "proposed")):
+        security = f.db.query(StockUniverse).filter_by(symbol=symbol).one()
+        listings[symbol] = adapter.get_or_create_association(theme.id, security.id)
+        adapter.revise(listings[symbol].id, state=state, idempotency_key=f"seed-{symbol}",
+                       actor="admin", reason="seed", mirror_acknowledged=True)
+    f.db.commit()
+
+    _project_economic(f, f.save(("AAA",), author="first"), theme.id)
+    _project_economic(f, f.save(("AAA",), author="second"), theme.id)
+
+    latest = f.db.query(EconomicSocialAssociationRevision).filter_by(
+        association_id=listings["0005.HK"].id
+    ).order_by(EconomicSocialAssociationRevision.revision_number.desc()).first()
+    assert (latest.details or {}).get("requested_state", latest.state) == "accepted"
+
+
+def test_processor_ignores_a_bridged_work_whose_post_was_corrected(social_fixture):
+    # The bridged work has no packet of its own; a correction is now the
+    # post's effective packet, so the original claim no longer counts.
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from app.services.economic_source_admission import (
+        EconomicSourceAdmissionService,
+        EvidenceAdmission,
+    )
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    security = f.db.query(StockUniverse).filter_by(symbol="AAA").one()
+    association = EconomicSocialTaxonomyAdapter(f.db).get_or_create_association(theme.id, security.id)
+    bridged = f.save(("AAA",), author="first")
+    correction = f.save(("BBB",), author="first")
+    f.db.add(EconomicSocialAssociationSource(
+        association_id=association.id, source_kind="social_work",
+        source_key=f"social_work:{bridged}", social_work_id=bridged,
+    ))
+    post_id = f.db.get(SocialExtractionWork, bridged).input_snapshot_json["provider_post_id"]
+    EconomicSourceAdmissionService(f.db).admit_social_work(EvidenceAdmission(
+        provider="x", canonical_source_family=f"x:post:{post_id}", capture_route="social",
+        original_text="corrected", preparation_version="social-prep-v1",
+        captured_at=NOW, available_at=NOW, evidence_channels=("narrative",),
+        source_metadata={"social_work_id": correction, "social_memberships": []},
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
+
+
 def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
     from tests.unit.economic_taxonomy_reader_helpers import seed_generation
 
