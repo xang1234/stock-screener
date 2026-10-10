@@ -13,6 +13,7 @@ vi.mock('../../api/socialSignals', () => ({
   transitionSocialSource: vi.fn(), refreshSocialSignals: vi.fn(),
   getSocialAnalysis: vi.fn(), retrySocialAnalysis: vi.fn(),
   getSocialAssociations: vi.fn(), decideSocialAssociation: vi.fn(),
+  decideEconomicSocialAssociation: vi.fn(),
   getSocialCompanyIdentities: vi.fn(), updateSocialCompanyIdentities: vi.fn(),
   getSocialRuns: vi.fn(), getSocialValidation: vi.fn(),
 }));
@@ -127,32 +128,20 @@ describe('SocialSignalHealthPanel', () => {
     ));
   });
 
-  it('sends the economic revision with a decision on a bridged association', async () => {
-    api.getSocialAssociations.mockResolvedValue([{
-      association_id: 12, economic_association_id: 'a1b2', theme_name: 'AI Memory',
-      market: 'US', canonical_symbol: 'MU', state: 'proposed', version: 2, economic_revision: 4,
-    }]);
-    api.decideSocialAssociation.mockResolvedValue({ status: 'accepted' });
-    renderPanel();
-    await unlock();
-    fireEvent.change(await screen.findByLabelText('Decision reason 12'), { target: { value: 'Verified' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Accept MU' }));
-    await waitFor(() => expect(api.decideSocialAssociation).toHaveBeenCalledWith(
-      'secret', 12,
-      { target: 'accepted', reason: 'Verified', expected_version: 2, expected_economic_revision: 4 },
-    ));
-  });
-
-  it('offers no decision for an economic association without a legacy link', async () => {
+  it('decides an economic association by its economic id and revision', async () => {
     api.getSocialAssociations.mockResolvedValue([{
       association_id: null, economic_association_id: 'a1b2', theme_name: 'Semiconductors',
-      market: 'US', canonical_symbol: 'AMD', state: 'proposed', version: null,
+      market: 'US', canonical_symbol: 'AMD', state: 'proposed', version: null, economic_revision: 4,
     }]);
+    api.decideEconomicSocialAssociation.mockResolvedValue({ status: 'accepted' });
     renderPanel();
     await unlock();
-    expect(await screen.findByText(/Semiconductors · US:AMD · proposed/)).toBeInTheDocument();
-    expect(screen.getByText(/not decidable here/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Accept AMD' })).not.toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText('Decision reason a1b2'), { target: { value: 'Verified' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Accept AMD' }));
+    await waitFor(() => expect(api.decideEconomicSocialAssociation).toHaveBeenCalledWith(
+      'secret', 'a1b2', { target: 'accepted', reason: 'Verified', expected_revision: 4 },
+    ));
+    expect(api.decideSocialAssociation).not.toHaveBeenCalled();
   });
 
   it('reloads the identity draft after an optimistic version conflict', async () => {

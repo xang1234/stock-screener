@@ -20,7 +20,6 @@ from app.domain.social_signals.records import (
     validate_utc_timestamp,
 )
 from app.infra.db.models.social_analysis import (
-    EconomicSocialAssociationSource,
     SocialExtractionWork,
     SocialRunWork,
     SocialThemeAssociation,
@@ -718,21 +717,16 @@ class SocialThemeProjectionService:
         if target == "accepted":
             association.accepted_at = association.accepted_at or now
 
-    def decide(self, association_id, target, reason, actor, expected_version, *, expected_economic_revision=None):
+    def decide(self, association_id, target, reason, actor, expected_version):
         if self.admin_authorized is not True:
             raise PermissionError("admin_required")
         if target not in {"accepted", "rejected"} or not isinstance(reason, str) or not reason.strip() or not isinstance(actor, str) or not actor.strip():
             raise ValueError("decision_reason_and_actor_required")
         authority = self.db.get(TaxonomyAuthority, 1)
         if authority is not None and authority.mode == "economic":
-            return self._decide_economic(
-                association_id,
-                target,
-                reason.strip(),
-                actor.strip(),
-                expected_version,
-                expected_economic_revision,
-            )
+            # Decisions address economic associations once economic is
+            # authoritative; the legacy row is only a mirror (#515).
+            raise ValueError("economic_association_decision_required")
         expected_epoch = authority.authority_epoch if authority is not None else 1
         payload = {
             "association_id": association_id,
@@ -775,49 +769,32 @@ class SocialThemeProjectionService:
                 payload=payload,
             )
 
-    def _decide_economic(self, association_id, target, reason, actor, expected_version, expected_economic_revision=None):
-        """Revise the bridged global association once economic is authoritative.
+    def decide_economic_association(self, association_id, target, reason, actor, expected_revision):
+        """Revise an economic Social association by its own id (#515).
 
-        The legacy row is a compatibility mirror after cutover, so it changes
-        only through ordered delivery of the resulting projection event.
+        Native and legacy-bridged associations alike; a bridged legacy row is a
+        compatibility mirror that changes through ordered delivery.
         """
-        association = self.db.get(
-            SocialThemeAssociation, association_id, populate_existing=True
-        )
-        if association is None or association.version != expected_version:
-            raise ValueError("association_version_conflict")
-        economic_ids = set(
-            self.db.scalars(
-                select(EconomicSocialAssociationSource.association_id).where(
-                    EconomicSocialAssociationSource.source_kind
-                    == "legacy_association",
-                    EconomicSocialAssociationSource.legacy_association_id
-                    == association_id,
-                )
-            )
-        )
-        if not economic_ids:
-            raise ValueError("economic_association_missing")
-        if len(economic_ids) != 1:
-            raise ValueError("economic_association_ambiguous")
-        (economic_id,) = economic_ids
-        if expected_economic_revision is None:
-            # The economic state can move on without the legacy mirror changing,
-            # so the legacy version alone can't guard this decision.
-            raise ValueError("economic_revision_required")
-        idempotency_key = (
-            f"legacy-admin:{association_id}:v{expected_version}:"
-            f"r{expected_economic_revision}:{target}:"
-            f"{_semantic_hash({'reason': reason, 'actor': actor})}"
-        )
+        if self.admin_authorized is not True:
+            raise PermissionError("admin_required")
+        if target not in {"accepted", "rejected"} or not isinstance(reason, str) or not reason.strip() or not isinstance(actor, str) or not actor.strip():
+            raise ValueError("decision_reason_and_actor_required")
+        authority = self.db.get(TaxonomyAuthority, 1)
+        if authority is None or authority.mode != "economic":
+            raise ValueError("economic_authority_required")
+        reason, actor = reason.strip(), actor.strip()
         return EconomicSocialTaxonomyAdapter(self.db).revise(
-            economic_id,
+            association_id,
             state=target,
-            idempotency_key=idempotency_key,
+            # The revision tells a repeated decision apart from a retry.
+            idempotency_key=(
+                f"economic-admin:{association_id}:r{expected_revision}:{target}:"
+                f"{_semantic_hash({'reason': reason, 'actor': actor})}"
+            ),
             actor=actor,
             reason=reason,
             mirror_acknowledged=False,
-            expected_revision=expected_economic_revision,
+            expected_revision=expected_revision,
         )
 
     def effective_live_membership(self, theme_cluster_id):

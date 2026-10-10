@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
@@ -10,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.social_signals import (
-    MarketCode, QueueView, RankMode, SocialAssociationDecisionRequest,
+    EconomicSocialAssociationDecisionRequest, MarketCode, QueueView, RankMode,
+    SocialAssociationDecisionRequest,
     SocialCompanyIdentityUpdate, SocialEvidenceResponse, SocialQueueResponse,
     SocialRuntimeUpdate, SocialSectionResponse, SocialSourceCreateRequest,
     SocialSourceRenameRequest, SocialSourceTransitionRequest,
@@ -448,12 +450,10 @@ def admin_associations(
 def _economic_associations(db, *, state, market):
     """Economic associations in the legacy list shape (#477).
 
-    Decisions are still addressed by legacy id and version, so a bridged row
-    carries both; a native row has neither and is not decidable here (#515).
+    Each is decided by its economic id and revision (#515), so no legacy row is
+    read; ``association_id`` and ``version`` stay null.
     """
-    from app.infra.db.models.social_analysis import (
-        EconomicSocialAssociationSource, SocialThemeAssociation,
-    )
+    from app.infra.db.models.social_analysis import EconomicSocialAssociationSource
     from app.models.economic_taxonomy import EconomicThemeRevision
     from app.models.economic_taxonomy_runtime import TaxonomyAuthority
     from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
@@ -466,42 +466,24 @@ def _economic_associations(db, *, state, market):
     ids = [association.id for association, _, _ in rows]
     sources = db.scalars(select(EconomicSocialAssociationSource).where(
         EconomicSocialAssociationSource.association_id.in_(ids))).all() if ids else []
-    bridged = {}
+    bridged, work_ids = set(), {}
     for source in sources:
-        if source.source_kind == "legacy_association" and source.legacy_association_id:
-            bridged.setdefault(source.association_id, set()).add(source.legacy_association_id)
-    # _decide_economic refuses a legacy id bridged to more than one economic
-    # association (e.g. after a remap), so only a unique bridge is decidable.
-    targets = {}
-    candidate_ids = {lid for lids in bridged.values() for lid in lids}
-    if candidate_ids:
-        for source in db.scalars(select(EconomicSocialAssociationSource).where(
-                EconomicSocialAssociationSource.source_kind == "legacy_association",
-                EconomicSocialAssociationSource.legacy_association_id.in_(candidate_ids))):
-            targets.setdefault(source.legacy_association_id, set()).add(source.association_id)
-    legacy_ids = {}
-    for aid, lids in bridged.items():
-        unique_ids = sorted(lid for lid in lids if len(targets.get(lid, ())) == 1)
-        if unique_ids:
-            legacy_ids[aid] = unique_ids[0]
-    work_ids = {}
-    for source in sources:
+        if source.source_kind == "legacy_association":
+            bridged.add(source.association_id)
         if source.social_work_id is not None:
             work_ids.setdefault(source.association_id, set()).add(source.social_work_id)
-    legacy_versions = dict(db.execute(select(SocialThemeAssociation.id, SocialThemeAssociation.version).where(
-        SocialThemeAssociation.id.in_(legacy_ids.values()))).all()) if legacy_ids else {}
     authority = db.get(TaxonomyAuthority, 1)
     names = dict(db.execute(select(EconomicThemeRevision.theme_id, EconomicThemeRevision.display_name).where(
         EconomicThemeRevision.taxonomy_version_id == authority.processing_taxonomy_version_id)).all())
-    return [{"association_id": legacy_ids.get(association.id),
+    return [{"association_id": None,
              "economic_association_id": str(association.id),
              "theme_id": str(association.economic_theme_id),
              "theme_name": names.get(association.economic_theme_id),
              "market": security.market, "canonical_symbol": security.symbol,
              "state": revision.state,
-             "origin": "legacy_bridge" if association.id in legacy_ids else "economic",
+             "origin": "legacy_bridge" if association.id in bridged else "economic",
              "decision_owner": None,
-             "version": legacy_versions.get(legacy_ids.get(association.id)),
+             "version": None,
              "economic_revision": revision.revision_number,
              "evidence_work_ids": sorted(work_ids.get(association.id, ()))}
             for association, revision, security in rows]
@@ -519,9 +501,28 @@ def decide_admin_association(
             SocialThemeProjectionService(db, admin_authorized=True).decide(
                 association_id, body.target, body.reason, ADMIN_ACTOR,
                 body.expected_version,
-                expected_economic_revision=body.expected_economic_revision,
             )
         return {"association_id": association_id, "status": body.target}
+    except ValueError as exc:
+        raise _admin_error(exc) from exc
+
+
+@router.post("/admin/economic-associations/{association_id}/decision",
+             dependencies=[Depends(require_admin)])
+def decide_admin_economic_association(
+    association_id: UUID, body: EconomicSocialAssociationDecisionRequest,
+    db: Session = Depends(get_db),
+):
+    """Decide an economic Social association, native or bridged (#515)."""
+    from app.services.social_theme_projection_service import SocialThemeProjectionService
+    try:
+        with db.begin():
+            SocialThemeProjectionService(db, admin_authorized=True).decide_economic_association(
+                association_id, body.target, body.reason, ADMIN_ACTOR, body.expected_revision,
+            )
+        return {"economic_association_id": str(association_id), "status": body.target}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"code": "association_not_found"}) from exc
     except ValueError as exc:
         raise _admin_error(exc) from exc
 

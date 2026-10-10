@@ -29,10 +29,6 @@ _DEVELOPMENT_BACKFILL = (
     "ThemeDevelopmentTheme links to economic rows for the snapshot builder (#513)."
 )
 _PIPELINE_DIAGNOSTICS = "Audit 'Readers with no routing': pipeline diagnostics read legacy tables."
-_SOCIAL_ASSOCIATIONS = (
-    "Admin associations list: under economic authority it serves economic associations, "
-    "but reads the legacy version that decisions on bridged rows still take (#515)."
-)
 _ROLLBACK = (
     "Audit 'Rollback machinery (keep until retirement)': compatibility delivery "
     "maintains legacy projections."
@@ -112,10 +108,6 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
         _PIPELINE_DIAGNOSTICS,
         {"ThemeCluster", "ThemeMention", "ThemeMergeSuggestion"},
     ),
-    "GET /api/v1/social-signals/admin/associations": (
-        _SOCIAL_ASSOCIATIONS,
-        {"SocialThemeAssociation"},
-    ),
     "task app.tasks.economic_taxonomy_tasks.deliver_taxonomy_outbox": (
         _ROLLBACK,
         {"SocialThemeAssociation", "SocialThemeDecision", "ThemeCluster", "ThemeConstituent"},
@@ -124,7 +116,7 @@ ALLOWLIST: dict[str, tuple[str, set[str]]] = {
         _SOCIAL_BRIDGE,
         {"SocialThemeAssociation"},
     ),
-    "POST /api/v1/social-signals/admin/associations/{association_id}/decision": (
+    "POST /api/v1/social-signals/admin/economic-associations/{association_id}/decision": (
         _SOCIAL_BRIDGE,
         {"SocialThemeAssociation"},
     ),
