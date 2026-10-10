@@ -780,6 +780,30 @@ def test_economic_application_covers_the_current_catalog_whatever_keys_it_is_giv
     assert {basket.theme_key for basket in application.baskets} == set(f.service.theme_keys(projection)) - {"unrelated"}
 
 
+def test_economic_application_loads_each_themes_memberships_once(social_fixture, monkeypatch):
+    from app.services.economic_social_taxonomy_adapter import EconomicSocialTaxonomyAdapter
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    seed_generation(f.db, display_name="Cooling")
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",))])
+    loads = []
+    real = EconomicSocialTaxonomyAdapter.current_live_memberships
+
+    def counting(self, theme_id):
+        loads.append(theme_id)
+        return real(self, theme_id)
+
+    monkeypatch.setattr(EconomicSocialTaxonomyAdapter, "current_live_memberships", counting)
+
+    application = f.service.prepare_application(projection, theme_keys=())
+
+    themes = {basket.theme_key for basket in application.baskets}
+    assert len(application.baskets) == 5 * len(themes)
+    assert len(loads) == len(themes)
+
+
 def test_economic_catalog_drops_keys_two_themes_claim():
     from app.services.social_theme_projection_service import SocialThemeProjectionService
 

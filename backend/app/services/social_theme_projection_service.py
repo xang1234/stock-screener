@@ -391,7 +391,7 @@ class SocialThemeProjectionService:
         baskets = []
         for key, theme_id in sorted(themes.items()):
             reader = EconomicAcceptedBasketReader(self.db, economic_theme_id=theme_id)
-            baskets.extend(reader.read(key, market) for market in ("US", "HK", "CN", "JP", "TW"))
+            baskets.extend(reader.read_markets(key, ("US", "HK", "CN", "JP", "TW")))
         return PreparedThemeApplication(projection, tuple(baskets), decoded,
                                         self._economic_fingerprint(projection, themes, catalog))
 

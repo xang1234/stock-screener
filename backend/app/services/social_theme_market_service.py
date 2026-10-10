@@ -103,6 +103,10 @@ class EconomicAcceptedBasketReader:
         self.association_revision_ref_ids = tuple(association_revision_ref_ids)
 
     def read(self, theme_key, market):
+        return self.read_markets(theme_key, (market,))[0]
+
+    def read_markets(self, theme_key, markets):
+        """One snapshot per market from a single load of the theme's memberships."""
         identity = SocialCompanyIdentityService(self.db).read()
         adapter = EconomicSocialTaxonomyAdapter(self.db)
         memberships = (
@@ -126,14 +130,15 @@ class EconomicAcceptedBasketReader:
         resolver = SocialTickerResolver(
             self.db, verified_company_ids=identity.verified_company_ids
         )
-        accepted, stock_symbols = [], set()
+        by_market = {market: ([], set()) for market in markets}
         for item in memberships:
             if not item.live or item.state != "accepted":
                 continue
             security = securities.get(item.security_id)
-            if security is None or security.market != market:
+            if security is None or security.market not in by_market:
                 continue
             resolved = resolver.resolve(security.symbol, security.market)
+            accepted, stock_symbols = by_market[security.market]
             accepted.append(
                 EffectiveThemeMembership(
                     security.symbol,
@@ -145,18 +150,22 @@ class EconomicAcceptedBasketReader:
             )
             if resolved.security_kind == "stock":
                 stock_symbols.add(security.symbol)
-        accepted = tuple(sorted(accepted, key=lambda item: item.canonical_symbol))
-        # As the legacy reader: an ETF is a member, not company-stock coverage.
-        stocks = tuple(item.canonical_symbol for item in accepted if item.canonical_symbol in stock_symbols)
-        return AcceptedBasketSnapshot(
-            theme_key,
-            market,
-            accepted,
-            stocks,
-            identity.version,
-            identity.policy_version,
-            identity.registry_version,
-        )
+        snapshots = []
+        for market in markets:
+            accepted, stock_symbols = by_market[market]
+            accepted = tuple(sorted(accepted, key=lambda item: item.canonical_symbol))
+            # As the legacy reader: an ETF is a member, not company-stock coverage.
+            stocks = tuple(item.canonical_symbol for item in accepted if item.canonical_symbol in stock_symbols)
+            snapshots.append(AcceptedBasketSnapshot(
+                theme_key,
+                market,
+                accepted,
+                stocks,
+                identity.version,
+                identity.policy_version,
+                identity.registry_version,
+            ))
+        return tuple(snapshots)
 
 
 class SocialThemeMarketService:
