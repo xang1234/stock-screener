@@ -39,12 +39,12 @@ from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_equivalence_service import ThemeEquivalenceService
 from ...services.theme_merging_service import ThemeMergingService
-from .themes_common import reject_legacy_theme_writes
+from .themes_common import reject_legacy_theme_reads, reject_legacy_theme_writes
 
 router = APIRouter()
 
 
-@router.get("/merge-suggestions", response_model=ThemeMergeSuggestionsResponse)
+@router.get("/merge-suggestions", response_model=ThemeMergeSuggestionsResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_merge_suggestions(
     status: Optional[str] = Query(None, description="Filter by status: pending, approved, rejected, auto_merged"),
     limit: int = Query(50, ge=1, le=200),
@@ -100,7 +100,7 @@ def reject_merge_suggestion(
     return result
 
 
-@router.get("/merge-history", response_model=ThemeMergeHistoryListResponse)
+@router.get("/merge-history", response_model=ThemeMergeHistoryListResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_merge_history(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -146,7 +146,7 @@ def run_theme_consolidation_async(
     }
 
 
-@router.get("/merge-plan/dry-run", response_model=MergePlanDryRunResponse)
+@router.get("/merge-plan/dry-run", response_model=MergePlanDryRunResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_merge_plan_dry_run(
     limit_pairs: int = Query(120, ge=1, le=500, description="Max similar pairs to analyze"),
     pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
@@ -235,7 +235,7 @@ def run_manual_review_wave(
     return ManualReviewWaveResponse(**result)
 
 
-@router.get("/candidates/queue", response_model=CandidateThemeQueueResponse)
+@router.get("/candidates/queue", response_model=CandidateThemeQueueResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_candidate_theme_queue(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -284,7 +284,7 @@ def review_candidate_themes(
     )
 
 
-@router.get("/relationship-graph", response_model=ThemeRelationshipGraphResponse)
+@router.get("/relationship-graph", response_model=ThemeRelationshipGraphResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_relationship_graph(
     theme_cluster_id: int = Query(..., ge=1, description="Root theme cluster id"),
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),

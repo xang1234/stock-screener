@@ -75,7 +75,10 @@ DECORATOR_MARKERS = frozenset({"app.services.legacy_theme_write_guard.skip_in_ec
 ROUTING_MARKERS = PREDICATE_MARKERS | RAISING_MARKERS | CONTEXT_MARKERS | DECORATOR_MARKERS
 _FLIP = {"economic": "legacy", "legacy": "economic"}  # authority is legacy or economic
 
-GUARD_DEPENDENCIES = frozenset({"app.api.v1.themes_common.reject_legacy_theme_writes"})
+GUARD_DEPENDENCIES = frozenset({
+    "app.api.v1.themes_common.reject_legacy_theme_writes",
+    "app.api.v1.themes_common.reject_legacy_theme_reads",  # legacy-only readers (#557)
+})
 
 # Reported for an entry point the gate cannot map to source, so it cannot pass
 # unchecked; exempt one only through ALLOWLIST, with a reason.

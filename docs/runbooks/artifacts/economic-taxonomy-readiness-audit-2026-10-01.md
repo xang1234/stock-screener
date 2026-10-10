@@ -236,18 +236,18 @@ something checkable.
 
 | Reader | What it reads | In economic mode |
 |---|---|---|
-| `themes_review_merge.py` GETs: merge suggestions, merge history, merge-plan dry run, candidate queue, relationship graph | legacy clusters and suggestions | Serves legacy data (UI hidden; API still reachable) |
-| `themes_intelligence.py` GETs: equivalence preview, history and search; `/{id}/developments` | legacy identities | Same |
+| `themes_review_merge.py` GETs: merge suggestions, merge history, merge-plan dry run, candidate queue, relationship graph | legacy clusters and suggestions | Serves legacy data (UI hidden; API still reachable). *Since #557 these return 409 (`economic_generation_endpoint_required`) under economic authority.* |
+| `themes_intelligence.py` GETs: equivalence preview, history and search; `/{id}/developments` | legacy identities | Same. *Since #557 the equivalence GETs return 409 under economic authority; `/{id}/developments` is to be routed to `EconomicThemeDevelopment`.* |
 | `watchlist_stewardship_service.py:328` | `ThemeAlert` | **Serves legacy-derived alerts**: `check_for_alerts` is unfenced (G2), but lifecycle-transition alerts stop because they come from the fenced lifecycle path |
 | `validation_service.py:235` (`/validation`, stock validation) | `ThemeAlert`, `ThemeCluster` | Same |
 | MCP `market_copilot._recent_alerts` (`market_copilot.py:1495`), used by `market_overview` (`:239`) and a second tool (`:719`) | `ThemeAlert` | Same |
-| `GET /themes/matching/telemetry` (`themes_queries.py:409-439`; the module's other endpoints are routed) | `ThemeMention` | Serves legacy matcher statistics |
+| `GET /themes/matching/telemetry` (`themes_queries.py:409-439`; the module's other endpoints are routed) | `ThemeMention` | Serves legacy matcher statistics. *Since #557 it returns 409 (`economic_generation_endpoint_required`) under economic authority.* |
 | `theme_development_worker.discover` (`:43-57`), from beat `theme-development-preparation` every minute (`celery_app.py:541-545`, task `theme_intelligence_tasks.py:16-29`) and `POST /themes/developments/backfill` with `apply=true` (`themes_intelligence.py:177-195`) | `ThemeMention` | Keeps reading legacy mentions; no authority check on either path |
 | Content listing mention annotations (`api/v1/themes.py:106-115`) | `ThemeMention` | Serves legacy annotations |
 | Social publication preparation: `social_signal_writer.prepare_run()` and `publish()` (`social_signal_writer.py:716`, `:784`) → `SocialThemeProjectionService.prepare_application()` (`social_theme_projection_service.py:153-175`, `:189-226`) | `ThemeCluster`, `ThemeMention`, `ThemeAlias`, `ThemeConstituent`, `SocialThemeAssociation` | **Legacy, shadow and dual modes:** runs for every live Social run, before `apply_live` makes its economic-mode check (`:433`); Social publication in these modes still needs the legacy tables. **Economic authority (since #515):** preparation maps theme keys through the economic catalog, reads accepted economic memberships and reads no legacy theme table; the processor applies automatic acceptance. Retirement is not blocked here once a deployment serves economic authority. |
 | One-off `theme_pipeline_state_backfill_service` (`:122-130`; CLI `scripts/backfill_theme_pipeline_state.py`) | `ThemeMention`, to infer status | Writes only shared `ContentItemPipelineState`, so the G2 fence must **not** block it; adapt it before `ThemeMention` is removed |
 | **Economic** reader snapshot builder (`economic_taxonomy_snapshot_builder.py:698-717`) | `ThemeDevelopmentTheme`, mapped to economic themes | **The economic side itself depends on legacy development links.** Retirement must migrate these links first |
-| `GET /themes/pipeline/state-health`, `/themes/pipeline/observability` (`themes_content_pipeline.py:215-245`, via `theme_pipeline_state_service.py:338-352`, `:430-475`) | `ThemeMention`, `ThemeCluster`, `ThemeMergeSuggestion` | Serves legacy-only diagnostics |
+| `GET /themes/pipeline/state-health`, `/themes/pipeline/observability` (`themes_content_pipeline.py:215-245`, via `theme_pipeline_state_service.py:338-352`, `:430-475`) | `ThemeMention`, `ThemeCluster`, `ThemeMergeSuggestion` | Serves legacy-only diagnostics. *Since #557 these return 409 (`economic_generation_endpoint_required`) under economic authority.* |
 | `SocialSignalOperationsService.snapshot` (`social_signal_operations_service.py:106-111`), used by `GET /operations/social-signals` and `GET /social-signals/admin/health` | counts `SocialThemeAssociation` | Counts legacy Social associations |
 | `GET /social-signals/admin/associations` (`social_signals.py:422-442`) | `SocialThemeAssociation` joined to `ThemeCluster` | Serves legacy associations; the decision endpoint beside it is mode-aware, but this list is not. *Since #515 the list serves economic associations under economic authority without reading `SocialThemeAssociation`.* |
 | `theme_development_preparation`, `theme_platform/content_browser_queries`, `social_refresh_support` | legacy clusters and mentions | Serves legacy data |
@@ -307,8 +307,9 @@ tasks write only shared ingestion state (`ingest_content`,
 `poll_due_sources`, `prepare_live_attachments`).
 
 This check works at the module and task level. A module listed as routed may
-still contain an unrouted endpoint, as `themes_queries` does with
-`/matching/telemetry`. Endpoint-level completeness is criterion 4's job.
+still contain an unrouted endpoint, as `themes_queries` did with
+`/matching/telemetry` (refused under economic authority since #557).
+Endpoint-level completeness is criterion 4's job.
 
 ## Proposed follow-ups
 

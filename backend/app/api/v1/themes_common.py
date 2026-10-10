@@ -18,6 +18,7 @@ from ...services.legacy_theme_write_guard import (
     legacy_theme_writes_blocked,
     mark_legacy_theme_writer,
 )
+from ...services.theme_development_preparation import economic_authority
 from ...services.theme_identity_normalization import (
     UNKNOWN_THEME_KEY,
     canonical_theme_key,
@@ -39,6 +40,17 @@ def reject_legacy_theme_writes(db: Session = Depends(get_db)) -> None:
     if legacy_theme_writes_blocked(db):
         raise HTTPException(status_code=409, detail=ECONOMIC_ENDPOINT_REQUIRED)
     mark_legacy_theme_writer(db)
+
+
+def reject_legacy_theme_reads(db: Session = Depends(get_db)) -> None:
+    """Route dependency: legacy-only Theme readers return 409 under economic authority (#557).
+
+    For curation and diagnostics with no economic counterpart; nothing keeps
+    their legacy rows current once economic authority serves. Unlike the write
+    guard, fenced rollback recovery still reads: legacy rows are intact then.
+    """
+    if economic_authority(db):
+        raise HTTPException(status_code=409, detail=ECONOMIC_ENDPOINT_REQUIRED)
 
 
 def detect_source_type_from_url(url: str, provided_type: str | None) -> str:

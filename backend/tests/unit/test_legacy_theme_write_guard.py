@@ -477,6 +477,63 @@ def test_reset_check_reads_the_authority_mode(db_session):
     assert recovery._reset_blocked_by_authority(db_session.connection()) is True
 
 
+# Legacy-only readers with no economic counterpart: refused, not routed (#557).
+REFUSED_READS = [
+    "/merge-suggestions",
+    "/merge-history",
+    "/merge-plan/dry-run",
+    "/candidates/queue",
+    "/relationship-graph",
+    "/equivalence/preview?source_id=1&target_id=2",
+    "/equivalence/history",
+    "/equivalence/search?q=ai",
+    "/matching/telemetry",
+    "/pipeline/state-health",
+    "/pipeline/observability",
+]
+
+
+async def _get(db_session, path):
+    app.dependency_overrides[get_db] = lambda: db_session
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/v1/themes{path}")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", REFUSED_READS)
+async def test_legacy_only_read_returns_409_under_economic_authority(db_session, monkeypatch, path):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    _authority(db_session, "economic")
+
+    response = await _get(db_session, path)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "economic_generation_endpoint_required"
+
+
+@pytest.mark.asyncio
+async def test_legacy_only_read_still_serves_while_rollback_recovery_fences_writes(
+    db_session, monkeypatch
+):
+    # Reading legacy rows is harmless while writes are fenced; only economic
+    # authority, where nothing maintains them, refuses the read.
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    _authority(db_session, "legacy", writes_fenced=True)
+
+    response = await _get(db_session, "/merge-history")
+
+    assert response.status_code == 200, response.text
+
+
 @pytest.mark.parametrize("mode", sorted(LEGACY_WRITE_MODES))
 def test_writes_fenced_blocks_legacy_writers_in_every_mode(db_session, mode):
     # Rollback recovery fences writes without leaving a legacy write mode.

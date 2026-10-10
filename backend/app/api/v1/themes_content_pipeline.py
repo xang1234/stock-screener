@@ -21,7 +21,12 @@ from ...services.theme_pipeline_state_service import (
 )
 from ...theme_platform.content_browser_queries import render_content_items_csv_chunk
 from ...theme_platform.contracts import PipelineRunStatusPayload
-from .themes_common import _VALID_THEME_PIPELINES, reject_legacy_theme_writes, resolve_source_ids_for_pipeline
+from .themes_common import (
+    _VALID_THEME_PIPELINES,
+    reject_legacy_theme_reads,
+    reject_legacy_theme_writes,
+    resolve_source_ids_for_pipeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +227,7 @@ def get_failed_items_count(
     return {"failed_count": count, "max_age_days": 30}
 
 
-@router.get("/pipeline/state-health")
+@router.get("/pipeline/state-health", dependencies=[Depends(reject_legacy_theme_reads)])
 def get_pipeline_state_health(
     pipeline: Optional[str] = Query(None, description="Pipeline: technical or fundamental"),
     window_days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
@@ -239,7 +244,7 @@ def get_pipeline_state_health(
     )
 
 
-@router.get("/pipeline/observability", response_model=ThemePipelineObservabilityResponse)
+@router.get("/pipeline/observability", response_model=ThemePipelineObservabilityResponse, dependencies=[Depends(reject_legacy_theme_reads)])
 def get_pipeline_observability(
     pipeline: str = Query(..., description="Pipeline: technical or fundamental"),
     window_days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
