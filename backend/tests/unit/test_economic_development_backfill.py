@@ -379,6 +379,30 @@ def test_stale_mapping_rows_are_deleted_in_chunks(db_session, monkeypatch):
     assert _economic_links(db_session) == expected
 
 
+def test_a_link_added_to_a_covered_observation_reopens_it(db_session):
+    # The legacy producer can add a theme to an observation the backfill has
+    # covered; the builder must not publish it without that theme.
+    from app.services.theme_development_service import _ensure_links
+
+    first, second = _legacy(db_session), _legacy(db_session)
+    version, _themes = _version(db_session, {first: ["Copper Miners"], second: ["Gold Miners"]})
+    observation = _observation(db_session)
+    db_session.add(ThemeDevelopmentTheme(observation_id=observation.id, theme_id=first.id))
+    db_session.flush()
+    backfill_legacy_developments(db_session, version.id)
+
+    _ensure_links(
+        db_session,
+        observation,
+        legacy_theme_ids=[first.id, second.id],
+        economic_theme_ids=[],
+        economic_link_origin="economic_native",
+    )
+
+    with pytest.raises(SnapshotBundleError, match="legacy_development_backfill_missing"):
+        _development_rows(db_session, observation_ids=[observation.id], taxonomy_version_id=version.id)
+
+
 def test_a_later_rollback_retracts_links_its_version_no_longer_projects(db_session):
     # An earlier rollback projected under the old version's destinations; the
     # current version no longer maps that theme, so its link must go.

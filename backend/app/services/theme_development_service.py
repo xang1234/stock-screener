@@ -19,6 +19,7 @@ from app.models.economic_taxonomy_runtime import (
 )
 from app.models.theme import ContentItem
 from app.models.theme_intelligence import (
+    EconomicDevelopmentBackfill,
     EconomicThemeDevelopment,
     LegacyDevelopmentEventMapping,
     ThemeDevelopmentEvent,
@@ -355,6 +356,15 @@ def _ensure_links(
                     )
                 )
                 changed = True
+        if changed and observation.source_family_id is None:
+            # The snapshot builder trusts the backfill watermark; reopen this
+            # observation until the next backfill maps its new link.
+            db.query(EconomicDevelopmentBackfill).filter(
+                EconomicDevelopmentBackfill.through_observation_id >= observation.id
+            ).update(
+                {"through_observation_id": observation.id - 1},
+                synchronize_session=False,
+            )
     current_economic = {
         link.economic_theme_id for link in observation.economic_theme_links
     }
