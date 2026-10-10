@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from app.infra.db.repositories.economic_taxonomy_repo import EconomicTaxonomyRepository
-from app.models.economic_taxonomy_runtime import SourceFamily
+from app.models.economic_taxonomy_runtime import SourceFamily, TaxonomyAuthority
 from app.models.theme import ContentItem, ThemeCluster
 from app.models.theme_intelligence import (
     EconomicDevelopmentBackfill,
@@ -309,3 +309,37 @@ def test_builder_fails_when_the_backfill_moves_to_another_version_mid_read(db_se
 
     with pytest.raises(SnapshotBundleError, match="legacy_development_backfill_changed"):
         _development_rows(db_session, observation_ids=[observation.id], taxonomy_version_id=old.id)
+
+
+def test_backfill_skips_a_processing_version_replaced_while_it_waited(db_session, monkeypatch):
+    import app.services.economic_development_backfill as backfill_module
+
+    cluster = _legacy(db_session)
+    old, _old = _version(db_session, {cluster: ["Copper Miners"]})
+    new, _new = _version(db_session, {cluster: ["Copper Producers"]})
+    db_session.add(
+        TaxonomyAuthority(
+            id=1,
+            mode="economic",
+            processing_taxonomy_version_id=old.id,
+            processing_head_revision=1,
+            authority_epoch=1,
+            writes_fenced=False,
+            rollback_state="ready",
+        )
+    )
+    observation = _observation(db_session)
+    db_session.add(ThemeDevelopmentTheme(observation_id=observation.id, theme_id=cluster.id))
+    db_session.flush()
+    real = backfill_module.exclusive_publication
+
+    def processor_commits_first(session):
+        # The processor moved to the new version while this run waited.
+        session.get(TaxonomyAuthority, 1).processing_taxonomy_version_id = new.id
+        session.flush()
+        return real(session)
+
+    monkeypatch.setattr(backfill_module, "exclusive_publication", processor_commits_first)
+
+    assert backfill_legacy_developments(db_session)["status"] == "processing_version_changed"
+    assert db_session.get(EconomicDevelopmentBackfill, old.id) is None

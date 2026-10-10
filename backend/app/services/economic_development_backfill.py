@@ -78,7 +78,8 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
     economic observations carry native links, and their legacy links are the
     rollback projection of those (which may land on a split legacy theme).
     """
-    if taxonomy_version_id is None:
+    follow_processing = taxonomy_version_id is None
+    if follow_processing:
         authority = db.get(TaxonomyAuthority, 1)
         taxonomy_version_id = authority.processing_taxonomy_version_id if authority else None
     version = db.get(TaxonomyVersion, taxonomy_version_id) if taxonomy_version_id else None
@@ -90,7 +91,12 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
     # Drains legacy writers (they hold the shared producer fence), so every
     # observation at or below the watermark has committed its links; it also
     # serializes backfills.
-    with exclusive_publication(db):
+    with exclusive_publication(db) as locked:
+        db.refresh(locked)
+        if follow_processing and locked.processing_taxonomy_version_id != version.id:
+            # The processor moved on while this waited; the next run maps the
+            # new version instead of replacing its rows with obsolete ones.
+            return {"status": "processing_version_changed"}
         if _is_current(db, version.id):
             return {"status": "current", "taxonomy_version_id": str(version.id)}
         through = db.scalar(select(func.max(ThemeDevelopmentObservation.id))) or 0
