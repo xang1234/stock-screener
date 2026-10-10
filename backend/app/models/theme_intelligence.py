@@ -204,6 +204,8 @@ class EconomicDevelopmentBackfill(Base):
     through_observation_id = Column(Integer, nullable=False)
     legacy_link_count = Column(Integer, nullable=False)
     legacy_max_observation_id = Column(Integer)
+    # Split legacy links without an allocation: a build pinning one fails.
+    unallocated_observation_ids = Column(JSON, nullable=False, default=list)
     completed_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

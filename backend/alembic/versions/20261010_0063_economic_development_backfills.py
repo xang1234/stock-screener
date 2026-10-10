@@ -18,6 +18,12 @@ def upgrade() -> None:
         sa.Column("legacy_link_count", sa.Integer(), nullable=False),
         sa.Column("legacy_max_observation_id", sa.Integer(), nullable=True),
         sa.Column(
+            "unallocated_observation_ids",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'[]'"),
+        ),
+        sa.Column(
             "completed_at",
             sa.DateTime(timezone=True),
             nullable=False,

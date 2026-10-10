@@ -34,11 +34,12 @@ _DELETE_CHUNK = 1000
 
 
 def map_legacy_links(links, *, allocations, destinations):
-    """``{(observation_id, economic_theme_id)}`` for legacy ``(observation_id, theme_id)`` links.
+    """``({(observation_id, economic_theme_id)}, {unallocated observation_id})``.
 
     A reviewed allocation wins (a reviewed exclusion maps nothing); otherwise a
     legacy theme with one destination maps to it, and one split across several
-    destinations needs an allocation.
+    destinations needs an allocation: without one the observation is reported,
+    and only a build that pins it fails.
     """
     allocation_by_claim = {
         (row.legacy_theme_cluster_id, row.allocation_kind, row.allocation_key): row
@@ -49,7 +50,7 @@ def map_legacy_links(links, *, allocations, destinations):
         destinations_by_legacy.setdefault(row.legacy_theme_cluster_id, []).append(
             row.destination_theme_id
         )
-    mapped = set()
+    mapped, unallocated = set(), set()
     for observation_id, theme_id in links:
         allocation = allocation_by_claim.get(
             (theme_id, "development", f"theme_development_observation:{observation_id}")
@@ -62,8 +63,8 @@ def map_legacy_links(links, *, allocations, destinations):
         if len(targets) == 1:
             mapped.add((observation_id, targets[0]))
         elif len(targets) > 1:
-            raise ValueError("legacy_development_allocation_missing")
-    return mapped
+            unallocated.add(observation_id)
+    return mapped, unallocated
 
 
 def _version_rows(db, model, taxonomy_version_id):
@@ -103,7 +104,7 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
             return {"status": "current", "taxonomy_version_id": str(version.id)}
         through = db.scalar(select(func.max(ThemeDevelopmentObservation.id))) or 0
         count, max_observation = _fingerprint(db)
-        mapped = map_legacy_links(
+        mapped, unallocated = map_legacy_links(
             db.execute(
                 _on_legacy_observations(
                     select(ThemeDevelopmentTheme.observation_id, ThemeDevelopmentTheme.theme_id),
@@ -145,12 +146,13 @@ def backfill_legacy_developments(db, taxonomy_version_id=None):
             )
             for observation_id, theme_id in added
         )
-        _write_marker(db, version.id, through, count, max_observation)
+        _write_marker(db, version.id, through, count, max_observation, unallocated)
     return {
         "status": "backfilled",
         "taxonomy_version_id": str(version.id),
         "added": len(added),
         "removed": len(stale),
+        "unallocated": len(unallocated),
     }
 
 
@@ -194,7 +196,7 @@ def _is_current(db, taxonomy_version_id):
     )
 
 
-def _write_marker(db, taxonomy_version_id, through, count, max_observation):
+def _write_marker(db, taxonomy_version_id, through, count, max_observation, unallocated):
     db.execute(delete(EconomicDevelopmentBackfill))
     db.add(
         EconomicDevelopmentBackfill(
@@ -202,6 +204,7 @@ def _write_marker(db, taxonomy_version_id, through, count, max_observation):
             through_observation_id=through,
             legacy_link_count=count,
             legacy_max_observation_id=max_observation,
+            unallocated_observation_ids=sorted(unallocated),
         )
     )
     db.flush()

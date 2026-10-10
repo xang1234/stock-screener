@@ -90,8 +90,10 @@ projection.
   while the fingerprint matches) writes the version's rows from
   `ThemeDevelopmentTheme` with its `LegacyClaimAllocation` /
   `LegacyDestinationMapping` (logic moved out of the builder), replacing any
-  other version's rows and marker. A split without an allocation fails it, as it
-  failed the builder before. No CLI, and the task takes no version: only the processing version, revalidated under the fence, may replace the mapped rows.
+  other version's rows and marker. A split link without an allocation (e.g. a
+  superseded observation migration never allocated) is skipped and its
+  observation recorded on the marker; as before, only a build that pins it
+  fails (`legacy_development_allocation_missing`). No CLI, and the task takes no version: only the processing version, revalidated under the fence, may replace the mapped rows.
   It maps only links on legacy-producer observations (no source family); links
   on economic observations are the rollback projection of their native links.
   When the fingerprint moved it takes `exclusive_publication`, which drains

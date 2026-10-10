@@ -176,16 +176,29 @@ def test_backfill_for_a_new_version_replaces_the_old_rows(db_session):
         _development_rows(db_session, observation_ids=[observation.id], taxonomy_version_id=old.id)
 
 
-def test_split_legacy_theme_without_allocation_fails_the_backfill(db_session):
-    cluster = _legacy(db_session)
-    version, _themes = _version(db_session, {cluster: ["Copper Miners", "Copper Smelters"]})
-    observation = _observation(db_session)
-    db_session.add(ThemeDevelopmentTheme(observation_id=observation.id, theme_id=cluster.id))
+def test_split_legacy_theme_without_allocation_fails_only_builds_that_pin_it(db_session):
+    # As before the backfill: an unallocated split link (e.g. on a historical,
+    # superseded observation migration never allocated) fails a build only
+    # when that build pins the observation.
+    split, mapped = _legacy(db_session), _legacy(db_session)
+    version, _themes = _version(
+        db_session, {split: ["Copper Miners", "Copper Smelters"], mapped: ["Gold Miners"]}
+    )
+    unallocated = _observation(db_session)
+    other = _observation(db_session)
+    db_session.add_all(
+        [
+            ThemeDevelopmentTheme(observation_id=unallocated.id, theme_id=split.id),
+            ThemeDevelopmentTheme(observation_id=other.id, theme_id=mapped.id),
+        ]
+    )
     db_session.flush()
 
-    with pytest.raises(ValueError, match="legacy_development_allocation_missing"):
-        backfill_legacy_developments(db_session, version.id)
-    assert db_session.get(EconomicDevelopmentBackfill, version.id) is None
+    assert backfill_legacy_developments(db_session, version.id)["status"] == "backfilled"
+
+    assert len(_development_rows(db_session, observation_ids=[other.id], taxonomy_version_id=version.id)) == 1
+    with pytest.raises(SnapshotBundleError, match="legacy_development_allocation_missing"):
+        _development_rows(db_session, observation_ids=[unallocated.id], taxonomy_version_id=version.id)
 
 
 def test_builder_reads_native_links_without_a_backfill(db_session):

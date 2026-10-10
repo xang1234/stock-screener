@@ -661,14 +661,17 @@ def _pinned_development_observation_ids(db, manifest):
 
 
 def _backfill_marker(db, taxonomy_version_id):
-    """``(through_observation_id, completed_at)`` of the version's backfill, or None."""
+    """``(through_observation_id, completed_at, unallocated ids)`` of the version's backfill, or None."""
     row = db.execute(
         select(
             EconomicDevelopmentBackfill.through_observation_id,
             EconomicDevelopmentBackfill.completed_at,
+            EconomicDevelopmentBackfill.unallocated_observation_ids,
         ).where(EconomicDevelopmentBackfill.taxonomy_version_id == taxonomy_version_id)
     ).first()
-    return tuple(row) if row is not None else None
+    if row is None:
+        return None
+    return row[0], row[1], frozenset(row[2] or ())
 
 
 def _development_rows(db, *, observation_ids, taxonomy_version_id):
@@ -697,6 +700,8 @@ def _development_rows(db, *, observation_ids, taxonomy_version_id):
         for row in observations.values()
     ):
         raise SnapshotBundleError("legacy_development_backfill_missing")
+    if backfill is not None and ids & backfill[2]:
+        raise SnapshotBundleError("legacy_development_allocation_missing")
     links = select(EconomicThemeDevelopment).where(
         EconomicThemeDevelopment.observation_id.in_(ids)
     )
