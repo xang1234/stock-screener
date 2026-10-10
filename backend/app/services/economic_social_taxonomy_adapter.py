@@ -699,14 +699,24 @@ class EconomicSocialTaxonomyAdapter:
         ):
             if resolver.resolve(sibling_security.symbol, sibling_security.market).company_id == company.company_id:
                 listings.append(sibling)
-        sources = self.db.execute(
-            select(EconomicSocialAssociationSource.social_work_id, EvidencePacket.available_at)
-            .outerjoin(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
-            .where(
-                EconomicSocialAssociationSource.association_id.in_([row.id for row in listings]),
-                EconomicSocialAssociationSource.social_work_id.is_not(None),
+        admission = EconomicSourceAdmissionService(self.db)
+        sources = [
+            (work_id, available_at)
+            for work_id, packet_id, available_at in self.db.execute(
+                select(
+                    EconomicSocialAssociationSource.social_work_id,
+                    EvidencePacket.id,
+                    EvidencePacket.available_at,
+                )
+                .join(EvidencePacket, EvidencePacket.id == EconomicSocialAssociationSource.evidence_packet_id)
+                .where(
+                    EconomicSocialAssociationSource.association_id.in_([row.id for row in listings]),
+                    EconomicSocialAssociationSource.social_work_id.is_not(None),
+                )
             )
-        ).all()
+            # A packet a correction displaced no longer speaks for its post.
+            if admission._latest_disposition(packet_id) in {"effective", "equivalent"}
+        ]
         now = max([utc(now), *(utc(at) for _, at in sources if at is not None)])
         catalog = SocialThemeProjectionService(self.db)._economic_catalog()
         decoded = []

@@ -688,6 +688,27 @@ def test_processor_accepts_every_listing_of_a_company_on_company_evidence(social
     assert states == {"AAA": "accepted", "0005.HK": "accepted"}
 
 
+def test_processor_ignores_evidence_from_a_superseded_packet(social_fixture):
+    # A correction displaces the first post's packet; its claim no longer counts.
+    from app.models.economic_taxonomy_runtime import EvidencePacket
+    from app.models.economic_taxonomy_runtime_evidence import EvidencePrecedenceRevision
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    theme = seed_generation(f.db, display_name="Cooling")["memory"]
+    f.db.commit()
+    first = f.save(("AAA",), author="first")
+    _project_economic(f, first, theme.id)
+    displaced = f.db.query(EvidencePacket).one()
+    f.db.add(EvidencePrecedenceRevision(
+        source_lineage_id=displaced.source_lineage_id, evidence_packet_id=displaced.id,
+        revision_number=99, disposition="superseded", reason="corrected capture",
+    ))
+    f.db.commit()
+
+    assert _project_economic(f, f.save(("AAA",), author="second"), theme.id) == "proposed"
+
+
 def test_processor_keeps_one_authors_repeated_posts_proposed(social_fixture):
     from tests.unit.economic_taxonomy_reader_helpers import seed_generation
 
