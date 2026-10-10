@@ -739,6 +739,21 @@ def test_processor_does_not_count_a_claim_about_an_uncatalogued_theme(social_fix
     assert _project_economic(f, elsewhere, theme.id) == "proposed"
 
 
+def test_economic_application_covers_the_current_catalog_whatever_keys_it_is_given(social_fixture):
+    # The keys come from another session; a rename in between must not drop
+    # a theme's basket.
+    from tests.unit.economic_taxonomy_reader_helpers import seed_generation
+
+    f = social_fixture
+    seed_generation(f.db, display_name="Cooling")
+    f.db.commit()
+    projection = f.prepare([f.save(("AAA",), theme="Unrelated")])
+
+    application = f.service.prepare_application(projection, theme_keys=("renamed_away",))
+
+    assert {basket.theme_key for basket in application.baskets} == set(f.service.theme_keys(projection)) - {"unrelated"}
+
+
 def test_economic_catalog_drops_keys_two_themes_claim():
     from app.services.social_theme_projection_service import SocialThemeProjectionService
 

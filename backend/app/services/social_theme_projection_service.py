@@ -189,6 +189,11 @@ class SocialThemeProjectionService:
         return self.catalog_from(names=names, aliases=aliases)
 
     @staticmethod
+    def _catalog_themes(catalog):
+        """``{theme key: economic theme id}`` for every theme the catalog reaches."""
+        return {key: theme_id for theme_id, key in catalog.values()}
+
+    @staticmethod
     def catalog_from(*, names, aliases):
         """Map normalized display names and aliases to ``(theme id, theme key)``.
 
@@ -280,8 +285,7 @@ class SocialThemeProjectionService:
         """
         if economic_authority(self.db):
             catalog = self._economic_catalog()
-            return self._economic_fingerprint(
-                projection, {key: catalog[key][0] for key in theme_keys if key in catalog}, catalog)
+            return self._economic_fingerprint(projection, self._catalog_themes(catalog), catalog)
         from app.models.stock_universe import StockUniverse
         catalog = self.db.execute(select(ThemeCluster.id, ThemeCluster.canonical_key, ThemeCluster.aliases,
             ThemeCluster.is_active, ThemeCluster.lifecycle_state).where(ThemeCluster.pipeline == self.pipeline).order_by(ThemeCluster.id)).all()
@@ -372,18 +376,16 @@ class SocialThemeProjectionService:
             return PreparedThemeApplication(projection, tuple(baskets), decoded, self._fingerprint(projection, tuple(themes)))
 
     def _prepare_economic_application(self, projection, theme_keys):
-        """Baskets of the economic themes the run's keys map to (#515).
+        """Baskets of every current economic catalog theme (#515).
 
         Accepted economic Social memberships only: acceptance is the
         processor's, and a key the catalog does not know has no basket.
         """
         from app.services.social_theme_market_service import EconomicAcceptedBasketReader
         catalog = self._economic_catalog()
-        themes = {catalog[key][1]: catalog[key][0] for key in theme_keys if key in catalog}
-        for claim in projection.proposals:
-            mapped = catalog.get(canonical_theme_key(claim.raw_theme))
-            if mapped is not None:
-                themes.setdefault(mapped[1], mapped[0])
+        # Every current catalog theme, whatever keys the caller passed: they
+        # may come from another session, before a rename.
+        themes = self._catalog_themes(catalog)
         decoded = tuple((wid, *_decode(self.db.get(SocialExtractionWork, wid))) for wid in sorted(projection.work_ids))
         self._prepared_decoded = {wid: (post, result) for wid, post, result in decoded}
         baskets = []
