@@ -26,12 +26,14 @@ The result is `price_refresh.rs_anchor_repair`, also printed in the job log:
 
 The job log lines start with `[static-daily prices:<MARKET>]`, for example `RS anchor repair: 1695/1706 repaired, 11 unresolved {...}`.
 
-Each market build also writes `coverage.json` to its `static-market-diagnostics-<MARKET>` artifact, on every outcome including a rejected market. It records:
-- `latest_session_priced`, `rs_eligible` and `scored`. These are counted separately, because RS eligibility does not imply a composite score.
+Each market build also writes `coverage.json` to its `static-market-diagnostics-<MARKET>` artifact, including for a market that the guard keeps on its last good artifact. It records:
+- `latest_session_priced`, `rs_eligible` and `scored`. These are counted separately, because RS eligibility does not imply a composite score. `scored` appears only when a feature snapshot ran.
 - The RS status and reason, `history_gaps` and `rs_anchor_repair`.
-- `seed_source_revision`, the daily-price bundle the build started from. It appears only when a feature snapshot ran.
+- `seed_source_revision`, the daily-price bundle the build started from.
 
-The same counts appear as a one-row table in the build job's summary. A missing-anchor collapse shows as `rs_eligible` far below `latest_session_priced`.
+The same counts appear as a one-row table in the build job's summary. A missing-anchor collapse shows as `rs_eligible` far below `latest_session_priced`. For a rejected market, `rs_eligible` is the rejected run's count.
+
+The file is written whenever the daily refresh finishes. It is not written for a price-stage checkpoint, or when the refresh or export raises an error; the job log is then the record.
 
 ### Measured baseline (2026-10-07 daily-price bundles)
 

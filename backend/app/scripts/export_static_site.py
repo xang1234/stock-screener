@@ -342,8 +342,8 @@ def _write_market_diagnostics(output_dir: Path, market: str, snapshot: Mapping[s
     return diagnostics_path
 
 
-def _snapshot_score_counts(market: str, run_id: int) -> tuple[int | None, str | None]:
-    """Scored rows of a feature run, and the daily-price bundle it was seeded from."""
+def _snapshot_score_counts(market: str, run_id: int | None) -> tuple[int | None, str | None]:
+    """Scored rows of a feature run (if any), and the daily-price bundle seeded."""
     try:
         with SessionLocal() as db:
             scored = (
@@ -353,13 +353,16 @@ def _snapshot_score_counts(market: str, run_id: int) -> tuple[int | None, str | 
                     StockFeatureDaily.composite_score.isnot(None),
                 )
                 .scalar()
+                if run_id is not None
+                else None
             )
-            state = DailyPriceBundleService().get_import_state(db, market) or {}
+            state = DailyPriceBundleService().get_import_state(db, market)
     except SQLAlchemyError as exc:
         # Diagnostics only: the counts are reported missing, the export goes on.
-        print(f"Could not count scored {market} symbols for run {run_id}: {exc}")
+        print(f"Could not read {market} score coverage for run {run_id}: {exc}")
         return None, None
-    return scored, state.get("source_revision")
+    revision = state.get("source_revision") if isinstance(state, dict) else None
+    return scored, revision
 
 
 def _market_coverage(
@@ -370,28 +373,33 @@ def _market_coverage(
     A missing-anchor RS collapse shows up here as rs_eligible far below
     latest_session_priced, with the anchors in history_gaps and the repair's
     outcome in rs_anchor_repair. scored is counted separately: RS eligibility
-    does not imply a composite score.
+    does not imply a composite score. A failed RS result (including the
+    anchor-gap rejection) keeps its counts under ``diagnostics``.
     """
     if market is None:
         return None
     price = refresh_results.get("price_refresh") or {}
     rs = (refresh_results.get("market_rs") or {}).get(market) or {}
+    rs_details = rs.get("diagnostics") or {}
     snapshot = (refresh_results.get("feature_snapshots") or {}).get(market) or {}
-    history_gaps = rs.get("history_gaps") or {}
-    scored, seed_revision = (
-        _snapshot_score_counts(market, snapshot["run_id"])
-        if snapshot.get("run_id") is not None
-        else (None, None)
-    )
+    history_gaps = rs.get("history_gaps") or rs_details.get("history_gaps") or {}
+    scored, seed_revision = _snapshot_score_counts(market, snapshot.get("run_id"))
+    eligible = rs.get("eligible_symbol_count")
+    priced = history_gaps.get("current_prices_available")
+    expected = snapshot.get("total_symbols")
     return {
         "market": market,
         "as_of_date": rs.get("as_of_date") or price.get("as_of_date"),
         "seed_source_revision": seed_revision,
-        "expected_universe": snapshot.get("total_symbols"),
-        "latest_session_priced": history_gaps.get("current_prices_available"),
+        "expected_universe": (
+            expected if expected is not None else rs_details.get("expected_symbol_count")
+        ),
+        "latest_session_priced": (
+            priced if priced is not None else rs_details.get("current_prices_available")
+        ),
         "rs_status": rs.get("status"),
         "rs_reason": rs.get("reason_code"),
-        "rs_eligible": rs.get("eligible_symbol_count"),
+        "rs_eligible": eligible if eligible is not None else rs_details.get("eligible_symbol_count"),
         "scored": scored,
         "snapshot_status": snapshot.get("status"),
         "snapshot_reason": snapshot.get("reason"),
@@ -407,6 +415,14 @@ def _write_market_coverage(output_dir: Path, coverage: Mapping[str, Any] | None)
     # directory as the market's diagnostics artifact on every outcome.
     if coverage is None:
         return
+    try:
+        _write_market_coverage_files(output_dir, coverage)
+    except OSError as exc:
+        # Diagnostics only: never turn an exported market into a failed one.
+        print(f"Could not write {coverage['market']} coverage diagnostics: {exc}")
+
+
+def _write_market_coverage_files(output_dir: Path, coverage: Mapping[str, Any]) -> None:
     path = output_dir / "diagnostics" / str(coverage["market"]).lower() / "coverage.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -753,7 +769,12 @@ def _reject_static_rs_history_gap_collapse(
         "as_of_date": as_of_date.isoformat(),
         "formula_version": BALANCED_RS_FORMULA_VERSION,
         "reason_code": MARKET_RS_REASON_HISTORICAL_ADJUSTED_ANCHOR_GAP_ABOVE_THRESHOLD,
-        "diagnostics": {"history_gaps": gaps, "max_history_gap_share": threshold},
+        "diagnostics": {
+            "history_gaps": gaps,
+            "max_history_gap_share": threshold,
+            # The rejected run's own count: how far RS collapsed.
+            "eligible_symbol_count": result.get("eligible_symbol_count"),
+        },
         "market_rs_run_id": None,
     }
 
@@ -1803,6 +1824,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.market,
             )
             if _snapshot_skipped_not_trading_day(selected_market_non_publishable_snapshot):
+                _write_market_coverage(Path(args.output_dir), market_coverage)
                 print(
                     f"Static site export skipped for market {args.market} because it is not a trading day."
                 )

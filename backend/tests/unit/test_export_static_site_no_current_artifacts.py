@@ -625,8 +625,27 @@ def _run_au(monkeypatch, tmp_path, feature_snapshot, market_rs):
 
 def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_path):
     """#539: a market kept on its last good artifact still reports why."""
+    from datetime import date
+
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("STATIC_RS_MAX_HISTORY_GAP_SHARE", raising=False)
+    monkeypatch.setattr(
+        export_script, "_snapshot_score_counts", lambda market, run_id: (None, "daily_prices_au:20261007")
+    )
+    # The real guard's output, not a hand-built shape.
+    rejected = export_script._reject_static_rs_history_gap_collapse(  # noqa: SLF001
+        {
+            "status": "completed",
+            "market": "AU",
+            "as_of_date": "2026-10-08",
+            "eligible_symbol_count": 84,
+            "history_gaps": _AU_HISTORY_GAPS,
+        },
+        market="AU",
+        as_of_date=date(2026, 10, 8),
+    )
+    assert rejected["status"] == "failed"
     output_dir = _run_au(
         monkeypatch,
         tmp_path,
@@ -637,12 +656,7 @@ def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_pa
             "as_of_date": "2026-10-08",
             "failure_diagnostics": {"reason_code": "historical_adjusted_anchor_gap_above_threshold"},
         },
-        {
-            "status": "failed",
-            "reason_code": "historical_adjusted_anchor_gap_above_threshold",
-            "eligible_symbol_count": 84,
-            "history_gaps": _AU_HISTORY_GAPS,
-        },
+        rejected,
     )
 
     assert export_script.main() == export_script.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
@@ -651,7 +665,7 @@ def test_main_records_rs_coverage_when_anchor_gaps_reject_rs(monkeypatch, tmp_pa
     assert coverage == {
         "market": "AU",
         "as_of_date": "2026-10-08",
-        "seed_source_revision": None,
+        "seed_source_revision": "daily_prices_au:20261007",
         "expected_universe": None,
         "latest_session_priced": 1845,
         "rs_status": "failed",
@@ -709,6 +723,33 @@ def test_main_records_scored_count_after_a_cleaning_export(monkeypatch, tmp_path
     assert coverage["expected_universe"] == 2101
     assert coverage["seed_source_revision"] == "daily_prices_au:20261008"
     assert coverage["rs_eligible"] == 1766
+
+
+def test_market_coverage_reads_counts_from_failed_rs_diagnostics(monkeypatch):
+    # A current-coverage failure carries its counts under diagnostics.
+    monkeypatch.setattr(export_script, "_snapshot_score_counts", lambda market, run_id: (None, None))
+    coverage = export_script._market_coverage(  # noqa: SLF001
+        "DE",
+        {
+            "market_rs": {
+                "DE": {
+                    "status": "failed",
+                    "reason_code": "current_adjusted_price_coverage_below_threshold",
+                    "diagnostics": {"current_prices_available": 1228, "expected_symbol_count": 1456},
+                }
+            }
+        },
+    )
+    assert coverage["latest_session_priced"] == 1228
+    assert coverage["expected_universe"] == 1456
+    assert coverage["rs_eligible"] is None
+
+
+def test_a_failed_coverage_write_does_not_fail_the_publish(monkeypatch, tmp_path, capsys):
+    blocker = tmp_path / "out"
+    blocker.write_text("a file where the diagnostics directory should go")
+    export_script._write_market_coverage(blocker, {"market": "AU"})  # noqa: SLF001
+    assert "Could not write AU coverage diagnostics" in capsys.readouterr().out
 
 
 def test_snapshot_score_counts_reads_scored_rows_and_seed_revision(db_session):
