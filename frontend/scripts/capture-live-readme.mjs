@@ -124,12 +124,13 @@ await step('rrg', async () => {
   await page.getByRole('tab', { name: 'RRG', exact: true }).click();
   await dwell(4500);
   await png('rrg-groups');
-  const sectors = page.getByRole('button', { name: 'Sectors', exact: true }).first();
-  if (await sectors.count()) {
-    await sectors.click(); await dwell(3000);
-    await page.getByRole('checkbox', { name: /Labels/i }).first().check().catch(() => {});
-    await dwell(1500); await png('rrg-sectors');
-  }
+  // rrg-rotation.png is the sector scope with labels; a missing control must
+  // fail the step rather than save an unlabelled or loading chart.
+  await page.getByRole('button', { name: 'Sectors', exact: true }).first().click();
+  await dwell(3000);
+  await page.getByRole('checkbox', { name: /Labels/i }).first().check();
+  await dwell(1500);
+  await png('rrg-sectors');
 });
 
 // 6b. Options Command Center (US only; the nav hides it for other markets)
