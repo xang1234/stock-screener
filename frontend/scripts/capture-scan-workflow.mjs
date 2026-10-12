@@ -82,8 +82,8 @@ try {
   const firstRowBtn = page.locator('table tbody tr').first().locator('button').first();
   await firstRowBtn.hover().catch(() => {});
   await dwell(300);
-  await firstRowBtn.click().catch(() => {});
-  await page.waitForSelector('text=Space: Next Stock', { timeout: 10000 }).catch(() => {});
+  await firstRowBtn.click();
+  await page.waitForSelector('text=Space: Next Stock', { timeout: 10000 });
   await dwell(2400);
   // Walk to the next couple of stocks with the keyboard shortcut.
   for (let i = 0; i < 2; i++) { await page.keyboard.press('Space'); await dwell(1500); }
@@ -93,31 +93,31 @@ try {
   // 3. Groups — ranked industry groups, then the RRG rotation view.
   await navTo('Groups', '/groups', 'table');
   await dwell(2000);
-  await page.getByRole('tab', { name: 'RRG', exact: true }).click().catch(() => {});
+  await page.getByRole('tab', { name: 'RRG', exact: true }).click();
   await dwell(2400);
-  await page.getByRole('button', { name: 'Sectors', exact: true }).first().click().catch(() => {});
+  await page.getByRole('button', { name: 'Sectors', exact: true }).first().click();
   await dwell(1400);
   const labels = page.getByRole('checkbox', { name: /Labels/i }).first();
   if (await labels.count().catch(() => 0)) { await labels.check().catch(() => labels.click()); }
   await dwell(2600);
 
   // 4. Stock Matrix — sector x market-cap heat grid.
-  await page.getByRole('tab', { name: 'Matrix', exact: true }).click().catch(() => {});
-  await page.waitForSelector('[data-matrix-stock]', { timeout: 20000 }).catch(() => {});
+  await page.getByRole('tab', { name: 'Matrix', exact: true }).click();
+  await page.waitForSelector('[data-matrix-stock]', { timeout: 20000 });
   await dwell(1200);
   // Technology fills every market-cap column (unfiltered opens on sparse Basic Materials).
-  await page.getByRole('combobox', { name: /^Sector/ }).click().catch(() => {});
+  await page.getByRole('combobox', { name: /^Sector/ }).click();
   await dwell(500);
-  await page.getByRole('option', { name: 'Technology', exact: true }).click().catch(() => {});
+  await page.getByRole('option', { name: 'Technology', exact: true }).click();
   // Drop the Unknown cap column so the five sized tiers fit 1440px, and so the
   // row set matches capture-group-readme.mjs.
-  await page.getByRole('button', { name: 'Unknown cap', exact: true }).click().catch(() => {});
+  await page.getByRole('button', { name: 'Unknown cap', exact: true }).click();
   await dwell(1200);
   // Glide to the dense software rows. The grid is virtualized (rows below the
   // fold aren't in the DOM yet), so use the same row offset as
   // capture-group-readme.mjs: 38px header + 14 industry rows of 190px.
   await page.getByRole('region', { name: /^Stock matrix grid/ })
-    .evaluate((grid) => grid.scrollTo({ top: 38 + 14 * 190, behavior: 'smooth' })).catch(() => {});
+    .evaluate((grid) => grid.scrollTo({ top: 38 + 14 * 190, behavior: 'smooth' }));
   await dwell(3200);
 } finally {
   const videoHandle = page.video();

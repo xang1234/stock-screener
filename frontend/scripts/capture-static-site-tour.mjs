@@ -35,8 +35,9 @@ async function navTo(label, hashRoute) {
 }
 
 try {
-  // Storyboard mirrors the live-app tour (capture-scan-workflow.mjs):
-  // Daily Snapshot -> Scan (+ individual stock detail) -> Breadth -> Groups (RRG).
+  // Storyboard: Daily Snapshot -> Scan (+ individual stock detail) -> Breadth
+  // -> Groups (RRG). The static site keeps long breadth history, so Breadth stays
+  // here even though the live-app tour drops it.
 
   // 1. Daily Snapshot.
   console.log('→ Daily (#/)');
@@ -55,8 +56,8 @@ try {
     if (await btn.count()) { await btn.hover(); await dwell(250); await btn.click().catch(() => {}); await dwell(1000); }
   }
   const firstRowExpand = page.locator('table tbody button').first();
-  await firstRowExpand.click().catch(() => {});
-  await page.waitForSelector('text=Space: Next Stock', { timeout: 10000 }).catch(() => {});
+  await firstRowExpand.click();
+  await page.waitForSelector('text=Space: Next Stock', { timeout: 10000 });
   await dwell(2200);
   for (let i = 0; i < 2; i++) { await page.keyboard.press('Space'); await dwell(1400); }
   await page.keyboard.press('Escape');
@@ -73,9 +74,9 @@ try {
   await navTo('Groups', '/groups');
   await page.getByRole('heading', { name: 'Current Rankings' }).waitFor({ timeout: 15000 }).catch(() => {});
   await dwell(2000);
-  await page.getByRole('tab', { name: 'RRG', exact: true }).click().catch(() => {});
+  await page.getByRole('tab', { name: 'RRG', exact: true }).click();
   await dwell(2400);
-  await page.getByRole('button', { name: 'Sectors', exact: true }).first().click().catch(() => {});
+  await page.getByRole('button', { name: 'Sectors', exact: true }).first().click();
   await dwell(1400);
   const labels = page.getByRole('checkbox', { name: /Labels/i }).first();
   if (await labels.count().catch(() => 0)) { await labels.check().catch(() => labels.click()); }

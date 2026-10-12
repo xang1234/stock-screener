@@ -306,7 +306,7 @@ The table-focused `breadth-history.jpg` is currently captured separately using t
 
 **Breadth needs history.** Backfilled breadth only covers dates with a recorded point-in-time universe, so a freshly installed stack shows only a few sessions however wide the range. When that is the case, take `breadth-chart.jpg` and `breadth-history.jpg` from the static site (same page, long history) instead. The hero tour leaves Breadth out for the same reason.
 
-**Capture `scan-results` on an Asian market (e.g. Japan).** The Themes chip-cluster column is only populated for the Asia universes in the reference deployment; a US scan leaves it blank.
+**Capture `scan-results` on an Asian market when the stack has one.** The Themes chip-cluster column is only populated for the Asia universes in the reference deployment; a US scan leaves it blank. Set `SCAN_RESULTS_MARKET` to the market's label in the picker (e.g. `SCAN_RESULTS_MARKET=Japan`); the step switches back to United States afterwards. A stack with only US data keeps the default.
 
 **Assets kept from prior captures** (regenerate them only when the live instance has the relevant data/state):
 

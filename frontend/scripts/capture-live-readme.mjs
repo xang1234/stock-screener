@@ -51,9 +51,18 @@ async function goto(route, settle = 4500) {
   await dwell(settle);
 }
 
+// A failed step keeps going (so one bad page doesn't cost the rest) but the
+// run exits nonzero, so a missing image can't pass for a complete refresh.
+let failed = 0;
 async function step(name, fn) {
   try { await fn(); console.log(`✓ ${name}`); }
-  catch (e) { console.error(`✗ ${name}:`, e.message); }
+  catch (e) { failed += 1; console.error(`✗ ${name}:`, e.message); }
+}
+
+async function pickMarket(label) {
+  await page.getByRole('combobox', { name: 'Market selector' }).click();
+  await page.getByRole('option', { name: new RegExp(label) }).click();
+  await dwell(4000);
 }
 
 // 1. Daily Snapshot dashboard (NEW hero)
@@ -72,17 +81,25 @@ await step('health-exposure', async () => {
 
 // 2. Scan results — the default sort is already Composite descending (clicking
 // the header would flip it to ascending and lead with the weakest names).
+// Theme chips are only populated for the Asian universes in the reference
+// deployment: set SCAN_RESULTS_MARKET to the option label (e.g. Japan) there.
+const SCAN_MARKET = process.env.SCAN_RESULTS_MARKET;
 await step('scan-results', async () => {
   await goto('/scan', 5000);
-  await dwell(1500);
-  await png('scan-results');
+  if (SCAN_MARKET) await pickMarket(SCAN_MARKET);
+  try {
+    await dwell(1500);
+    await png('scan-results');
+  } finally {
+    // The market choice persists; later steps (Options) need US.
+    if (SCAN_MARKET) await pickMarket('United States');
+  }
 });
 
 // 3. Market selector — open the header market dropdown (5 markets)
 await step('market-selector', async () => {
   await goto('/scan', 4000);
-  const marketBtn = page.getByRole('combobox').filter({ hasText: 'US' }).first();
-  await marketBtn.click();
+  await page.getByRole('combobox', { name: 'Market selector' }).click();
   await dwell(1100);
   await jpg('market-selector');
 });
@@ -134,3 +151,7 @@ await step('watchlist-table', async () => {
 await context.close();
 await browser.close();
 console.log('done ->', OUT);
+if (failed) {
+  console.error(`${failed} step(s) failed`);
+  process.exitCode = 1;
+}
