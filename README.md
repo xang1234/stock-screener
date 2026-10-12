@@ -5,7 +5,7 @@
 Scan and track **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-shares, Germany, Canada, Singapore, Malaysia, and Australia** markets. 
 
 ![Live app tour — Daily Snapshot, multi-screener Scan with stock detail, Group rankings, the Relative Rotation Graph, and the Stock Matrix](docs/gifs/scan-workflow.gif)
-*Daily Snapshot → Scans → Stock chart and details →  Breadth → Group Rankings*
+*Daily Snapshot → Scans → Stock chart and details → Group Rankings → RRG → Stock Matrix*
 
 ## Use it without installing
 

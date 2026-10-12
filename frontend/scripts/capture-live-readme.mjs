@@ -66,6 +66,7 @@ await step('daily-snapshot', async () => {
 await step('health-exposure', async () => {
   const card = page.getByText('Market Health & Exposure', { exact: true })
     .locator('xpath=ancestor::div[contains(@class,"MuiPaper-root")][1]');
+  if (await card.getByText(/No exposure data yet/).count()) throw new Error('no exposure data on this stack');
   await card.screenshot({ path: path.join(OUT, 'health-exposure.jpg'), type: 'jpeg', quality: 92 });
 });
 
@@ -117,6 +118,8 @@ await step('rrg', async () => {
 // 6b. Options Command Center (US only; the nav hides it for other markets)
 await step('options-command-center', async () => {
   await goto('/options', 6000);
+  // The route redirects to / when options are unavailable; don't save that as Options.
+  await page.getByRole('heading', { name: 'Options Command Center', level: 1 }).waitFor({ timeout: 5000 });
   await png('options-command-center');
 });
 

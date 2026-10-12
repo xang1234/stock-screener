@@ -278,7 +278,7 @@ When the UI changes significantly:
 
 ## Automated Live-App Capture (screenshots + hero GIF)
 
-The README screenshots and the hero `scan-workflow.gif` are regenerated from a **live full-app deployment** (not the static demo) via two Playwright scripts. They authenticate by reading `SERVER_AUTH_PASSWORD` from the repo-root `.env` and POSTing `/api/v1/auth/login`, so the server session cookie rides in the browser context — the password is never printed or passed on the command line.
+The README screenshots and the hero `scan-workflow.gif` are regenerated from a **live full-app deployment** (not the static demo) via three Playwright scripts (the breadth images are the exception; see the note below). They authenticate by reading `SERVER_AUTH_PASSWORD` from the repo-root `.env` and POSTing `/api/v1/auth/login`, so the server session cookie rides in the browser context — the password is never printed or passed on the command line.
 
 ```bash
 # one-time setup
@@ -296,7 +296,7 @@ bash frontend/scripts/capture-scan-workflow.sh
 
 > **GIF encoding note:** the tour GIF uses an ffmpeg flat-palette pass with `dither=none` followed by `gifsicle -O3 --lossy`, *not* gifski. The dark UI background is a near-black gradient, and error-diffusion dithering (gifski's default, with no opt-out) scatters it into patchy speckle. `dither=none` keeps the darks uniform; gifsicle recovers the file size. See `capture-scan-workflow.sh` for the exact pass.
 
-`capture-live-readme.mjs` captures the Daily Snapshot, the Market Health & Exposure card (element crop, kept at 2x), Scan results, Market selector, Breadth, Group rankings, RRG (sector scope, labels on), Options Command Center, and Watchlist at `deviceScaleFactor: 2`. For a local Docker stack, set `SITE_URL=http://localhost`. `capture-group-readme.mjs` (with `GROUPS_SCREENSHOT_URL=http://localhost`) writes `group-rs-table`, `group-matrix-grid` and `group-matrix-clusters` at their committed size. Review the output in `.tmp/readme-shots/`, then downscale the keepers to 1440px wide (matching the existing set) before copying into `docs/screenshots/`:
+`capture-live-readme.mjs` captures the Daily Snapshot, the Market Health & Exposure card (element crop, kept at 2x), Scan results, Market selector, Breadth, Group rankings, RRG (sector scope, labels on), Options Command Center, and Watchlist at `deviceScaleFactor: 2`. For a local Docker stack, set `SITE_URL=http://localhost`. `capture-group-readme.mjs` (with `GROUPS_SCREENSHOT_URL=http://localhost`) writes `group-rs-table`, `group-matrix-grid` and `group-matrix-clusters` to `.tmp/group-readme/` at their committed size (2400px wide); copy those as-is. Review the `capture-live-readme.mjs` output in `.tmp/readme-shots/`, then downscale the keepers to 1440px wide (matching the existing set) before copying into `docs/screenshots/`:
 
 ```bash
 ffmpeg -y -i .tmp/readme-shots/breadth-chart.png -vf "scale=1440:-1:flags=lanczos" -q:v 2 docs/screenshots/breadth-chart.jpg
@@ -330,7 +330,7 @@ bash frontend/scripts/capture-static-site-tour.sh
 ```
 
 What it does:
-1. `frontend/scripts/capture-static-site-tour.mjs` drives a headless Chromium with Playwright's `recordVideo` API against `https://xang1234.github.io/stock-screener/`. The storyboard mirrors the live-app tour: Daily Snapshot → Scan (preset filter chips + space-bar stock detail walk) → Breadth → Groups (ranked table → RRG rotation, sector scope with labels).
+1. `frontend/scripts/capture-static-site-tour.mjs` drives a headless Chromium with Playwright's `recordVideo` API against `https://xang1234.github.io/stock-screener/`. The storyboard: Daily Snapshot → Scan (preset filter chips + space-bar stock detail walk) → Breadth → Groups (ranked table → RRG rotation, sector scope with labels).
 2. `ffmpeg` trims the head spinner, applies a 1.5x speed-up, and extracts frames.
 3. `ffmpeg` builds a flat global palette and re-encodes with `paletteuse=dither=none` (uniform darks — see the GIF encoding note above), then `gifsicle -O3 --lossy=30` writes `docs/gifs/static-site-tour.gif` at width 960, near the 5 MB budget.
 

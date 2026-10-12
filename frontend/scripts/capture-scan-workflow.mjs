@@ -1,9 +1,9 @@
 // Record the hero product-tour video of the live full app, then (via the
-// companion shell script) convert WebM -> GIF with ffmpeg + gifski.
+// companion shell script) convert WebM -> GIF with ffmpeg (dither=none) + gifsicle.
 //
 // Storyboard: Daily Snapshot -> Scan (drill into an individual stock detail +
 // keyboard walk) -> Groups (ranked table + RRG rotation view + Stock Matrix grid).
-// ponytail: Breadth is left out because a fresh stack only has a few sessions of
+// Breadth is left out because a fresh stack only has a few sessions of
 // point-in-time universe history, so its chart is nearly empty.
 //
 // Auth: reads SERVER_AUTH_PASSWORD from repo-root .env, POSTs login so the
@@ -109,6 +109,9 @@ try {
   await page.getByRole('combobox', { name: /^Sector/ }).click().catch(() => {});
   await dwell(500);
   await page.getByRole('option', { name: 'Technology', exact: true }).click().catch(() => {});
+  // Drop the Unknown cap column so the five sized tiers fit 1440px, and so the
+  // row set matches capture-group-readme.mjs.
+  await page.getByRole('button', { name: 'Unknown cap', exact: true }).click().catch(() => {});
   await dwell(1200);
   // Glide to the dense software rows. The grid is virtualized (rows below the
   // fold aren't in the DOM yet), so use the same row offset as
