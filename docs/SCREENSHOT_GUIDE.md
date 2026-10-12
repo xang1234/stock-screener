@@ -337,7 +337,7 @@ What it does:
 2. `ffmpeg` trims the head spinner, applies a 1.5x speed-up, and extracts frames.
 3. `ffmpeg` builds a flat global palette and re-encodes with `paletteuse=dither=none` (uniform darks — see the GIF encoding note above), then `gifsicle -O3 --lossy=30` writes `docs/gifs/static-site-tour.gif` at width 960, near the 5 MB budget.
 
-With `TOUR=mobile`, step 1 runs `capture-static-mobile-tour.mjs` instead: Playwright's iPhone 13 profile (390x664 viewport, touch) navigates with the bottom tab bar through Daily Snapshot → Scan (stock cards, open one chart) → Breadth → Groups (RRG, sector scope with labels), and the GIF is written to `docs/gifs/static-site-mobile-tour.gif` at width 390. The README shows it next to the hero at `width="26%"` beside the hero's `72%`. Those widths give both GIFs the same height (390/664 versus 960/600), so change them together if either GIF's aspect ratio changes.
+With `TOUR=mobile`, step 1 runs `capture-static-mobile-tour.mjs` instead: Playwright's iPhone 13 profile (390x664 viewport, touch) opens the Daily Snapshot, then uses the bottom tab bar for Scan (stock cards, open one chart) → Breadth → Groups (RRG, sector scope with labels), and the GIF is written to `docs/gifs/static-site-mobile-tour.gif` at width 390. The README shows it at `width="26.4%"` beside the hero's `72%`, which gives both GIFs the same height (0.72 × 600/960 = 0.264 × 664/390 ≈ 0.45). Change the widths together if either GIF's aspect ratio changes.
 
 To target a different host (e.g. a PR preview), pass `SITE_URL`:
 

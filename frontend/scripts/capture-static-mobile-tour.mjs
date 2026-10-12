@@ -2,7 +2,7 @@
 // desktop hero GIF). Encoded by `TOUR=mobile bash capture-static-site-tour.sh`.
 //
 // Storyboard: Daily Snapshot -> Scan (stock cards, open one) -> Breadth ->
-// Groups (RRG), navigating with the bottom tab bar.
+// Groups (RRG, sector scope with labels); after Daily, the bottom tab bar navigates.
 import { chromium, devices } from 'playwright';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -25,7 +25,8 @@ const dwell = (ms) => page.waitForTimeout(ms);
 const settle = () => page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 // The bottom tab bar is the phone's navigation; a missing tab should fail the run.
 const tab = async (name) => { await page.getByRole('link', { name, exact: true }).last().click(); await settle(); };
-const scroll = async (dy) => { await page.mouse.wheel(0, dy); await dwell(900); };
+// Wheel over the content, not the fixed tab bar or header.
+const scroll = async (dy) => { await page.mouse.move(195, 330); await page.mouse.wheel(0, dy); await dwell(900); };
 
 try {
   // 1. Daily Snapshot.
@@ -58,8 +59,7 @@ try {
   await page.getByRole('tab', { name: 'RRG', exact: true }).click();
   await dwell(1600);
   await page.getByRole('button', { name: 'Sectors', exact: true }).first().click();
-  const labels = page.getByRole('checkbox', { name: /Labels/i }).first();
-  if (await labels.count().catch(() => 0)) await labels.check().catch(() => {});
+  await page.getByRole('checkbox', { name: /Labels/i }).first().check();
   await dwell(800);
   // On a phone the plot sits below the RRG controls.
   await scroll(380);

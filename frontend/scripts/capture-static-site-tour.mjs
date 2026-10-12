@@ -78,8 +78,7 @@ try {
   await dwell(2400);
   await page.getByRole('button', { name: 'Sectors', exact: true }).first().click();
   await dwell(1400);
-  const labels = page.getByRole('checkbox', { name: /Labels/i }).first();
-  if (await labels.count().catch(() => 0)) { await labels.check().catch(() => labels.click()); }
+  await page.getByRole('checkbox', { name: /Labels/i }).first().check();
   await dwell(2600);
 } finally {
   const videoHandle = page.video();

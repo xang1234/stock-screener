@@ -6,10 +6,10 @@ Scan and track **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-sh
 
 <p align="center">
   <img src="docs/gifs/scan-workflow.gif" width="72%" alt="Live app tour — Daily Snapshot, multi-screener Scan with stock detail, Group rankings, the Relative Rotation Graph, and the Stock Matrix">
-  <img src="docs/gifs/static-site-mobile-tour.gif" width="26%" alt="Phone tour of the static site — Daily Snapshot, Scan stock cards with a chart, Market Breadth, and the sector Relative Rotation Graph, using the bottom tab bar">
+  <img src="docs/gifs/static-site-mobile-tour.gif" width="26.4%" alt="Phone tour of the static site — Daily Snapshot, Scan stock cards with a chart, Market Breadth, and the sector Relative Rotation Graph, using the bottom tab bar">
 </p>
 
-*Desktop: Daily → Scan → stock detail → Groups → RRG → Stock Matrix · Phone: Daily → Scan cards → Breadth → RRG*
+*Live app: Daily → Scan → stock detail → Groups → RRG → Stock Matrix · Static site on a phone: Daily → Scan cards → Breadth → RRG*
 
 ## Use it without installing
 

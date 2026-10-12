@@ -21,15 +21,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TMP="$ROOT/.tmp/hero-capture"
-if [ "${TOUR:-desktop}" = mobile ]; then
-  RECORDER=capture-static-mobile-tour.mjs
-  OUT="$ROOT/docs/gifs/static-site-mobile-tour.gif"
-  WIDTH=390
-else
-  RECORDER=capture-static-site-tour.mjs
-  OUT="$ROOT/docs/gifs/static-site-tour.gif"
-  WIDTH=960
-fi
+case "${TOUR:-desktop}" in
+  desktop)
+    RECORDER=capture-static-site-tour.mjs
+    OUT="$ROOT/docs/gifs/static-site-tour.gif"
+    EXTRACT_WIDTH=1200 # 1440px recording; a lanczos step down before the final 960
+    WIDTH=960
+    ;;
+  mobile)
+    RECORDER=capture-static-mobile-tour.mjs
+    OUT="$ROOT/docs/gifs/static-site-mobile-tour.gif"
+    EXTRACT_WIDTH=390 # recorded at 390px already; don't upscale and back
+    WIDTH=390
+    ;;
+  *)
+    echo "unknown TOUR=$TOUR (use desktop or mobile)" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "$TMP/frames" "$ROOT/docs/gifs"
 rm -f "$TMP"/*.webm "$TMP"/frames/*.png 2>/dev/null || true
@@ -40,7 +49,7 @@ node "scripts/$RECORDER"
 
 echo "→ extracting frames (trim 2.6s head, 1.5x speed, 13 fps)"
 ffmpeg -y -loglevel warning -ss 2.6 -i "$TMP/video.webm" \
-  -vf "setpts=PTS/1.5,fps=13,scale=$((WIDTH * 5 / 4)):-1:flags=lanczos" \
+  -vf "setpts=PTS/1.5,fps=13,scale=$EXTRACT_WIDTH:-1:flags=lanczos" \
   "$TMP/frames/f_%04d.png"
 
 echo "→ building flat global palette (full stats, 256 colors)"
