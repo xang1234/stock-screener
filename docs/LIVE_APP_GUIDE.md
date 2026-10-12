@@ -2,7 +2,7 @@
 
 This guide covers the server-backed Stock Scanner application: the React UI, FastAPI backend, PostgreSQL database, Redis/Celery workers, and live runtime controls. It is a page-by-page tour with the methodology behind each feature. For deployment, see [Docker Deployment](INSTALL_DOCKER.md). For the read-only GitHub Pages build, see [Static Site Guide](STATIC_SITE.md).
 
-![Live app tour — Daily Snapshot, multi-screener Scan with stock detail, Market Breadth, and the Relative Rotation Graph](gifs/scan-workflow.gif)
+![Live app tour — Daily Snapshot, multi-screener Scan with stock detail, Group rankings, the Relative Rotation Graph, and the Stock Matrix](gifs/scan-workflow.gif)
 *Daily Snapshot → Scan → stock chart → Breadth → Group Rankings*
 
 Covers **12 markets** — US, mainland China A-shares, Hong Kong, Japan, Korea, Taiwan, India, Germany, Canada, Singapore, Malaysia, Australia — each with its own exchange calendar, data, and scans.

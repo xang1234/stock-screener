@@ -2,7 +2,9 @@
 // companion shell script) convert WebM -> GIF with ffmpeg + gifski.
 //
 // Storyboard: Daily Snapshot -> Scan (drill into an individual stock detail +
-// keyboard walk) -> Breadth -> Groups (ranked table + RRG rotation view).
+// keyboard walk) -> Groups (ranked table + RRG rotation view + Stock Matrix grid).
+// ponytail: Breadth is left out because a fresh stack only has a few sessions of
+// point-in-time universe history, so its chart is nearly empty.
 //
 // Auth: reads SERVER_AUTH_PASSWORD from repo-root .env, POSTs login so the
 // session cookie rides in the Playwright context. Override host with SITE_URL.
@@ -41,10 +43,13 @@ await context.request.post(`${BASE}/api/v1/auth/login`, {
 // cache on a throwaway page first (its own video file is discarded), so the
 // recorded tour renders content immediately instead of spinners.
 const warm = await context.newPage();
-for (const r of ['/', '/scan', '/breadth', '/groups']) {
+for (const r of ['/', '/scan', '/groups']) {
   await warm.goto(`${BASE}${r}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await warm.waitForTimeout(r === '/' ? 12000 : 5000);
 }
+// The matrix payload is the slowest load on the tour; fetch it once here too.
+await warm.getByRole('tab', { name: 'Matrix', exact: true }).click().catch(() => {});
+await warm.waitForSelector('[data-matrix-stock]', { timeout: 60000 }).catch(() => {});
 await warm.close();
 
 const page = await context.newPage();
@@ -85,23 +90,32 @@ try {
   await page.keyboard.press('Escape');
   await dwell(800);
 
-  // 3. Breadth — advance/decline with SPY overlay, 3M range.
-  await navTo('Breadth', '/breadth', 'text=Market Breadth');
-  await dwell(1600);
-  const threeM = page.getByRole('button', { name: '3M', exact: true });
-  if (await threeM.isVisible().catch(() => false)) { await threeM.click(); await dwell(2200); }
-  else { await dwell(1500); }
-
-  // 4. Groups — ranked industry groups, then the RRG rotation view.
+  // 3. Groups — ranked industry groups, then the RRG rotation view.
   await navTo('Groups', '/groups', 'table');
   await dwell(2000);
-  await page.getByRole('button', { name: 'RRG', exact: true }).click().catch(() => {});
+  await page.getByRole('tab', { name: 'RRG', exact: true }).click().catch(() => {});
   await dwell(2400);
   await page.getByRole('button', { name: 'Sectors', exact: true }).first().click().catch(() => {});
   await dwell(1400);
   const labels = page.getByRole('checkbox', { name: /Labels/i }).first();
   if (await labels.count().catch(() => 0)) { await labels.check().catch(() => labels.click()); }
   await dwell(2600);
+
+  // 4. Stock Matrix — sector x market-cap heat grid.
+  await page.getByRole('tab', { name: 'Matrix', exact: true }).click().catch(() => {});
+  await page.waitForSelector('[data-matrix-stock]', { timeout: 20000 }).catch(() => {});
+  await dwell(1200);
+  // Technology fills every market-cap column (unfiltered opens on sparse Basic Materials).
+  await page.getByRole('combobox', { name: /^Sector/ }).click().catch(() => {});
+  await dwell(500);
+  await page.getByRole('option', { name: 'Technology', exact: true }).click().catch(() => {});
+  await dwell(1200);
+  // Glide to the dense software rows. The grid is virtualized (rows below the
+  // fold aren't in the DOM yet), so use the same row offset as
+  // capture-group-readme.mjs: 38px header + 14 industry rows of 190px.
+  await page.getByRole('region', { name: /^Stock matrix grid/ })
+    .evaluate((grid) => grid.scrollTo({ top: 38 + 14 * 190, behavior: 'smooth' })).catch(() => {});
+  await dwell(3200);
 } finally {
   const videoHandle = page.video();
   await context.close();

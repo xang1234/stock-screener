@@ -73,7 +73,7 @@ try {
   await navTo('Groups', '/groups');
   await page.getByRole('heading', { name: 'Current Rankings' }).waitFor({ timeout: 15000 }).catch(() => {});
   await dwell(2000);
-  await page.getByRole('button', { name: 'RRG', exact: true }).click().catch(() => {});
+  await page.getByRole('tab', { name: 'RRG', exact: true }).click().catch(() => {});
   await dwell(2400);
   await page.getByRole('button', { name: 'Sectors', exact: true }).first().click().catch(() => {});
   await dwell(1400);

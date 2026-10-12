@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Capture the hero product-tour GIF (scan-workflow.gif) from the live full app.
-# Storyboard: Daily Snapshot → Scan (drill into a stock detail) → Breadth →
-# Groups (ranked table + RRG rotation).
+# Storyboard: Daily Snapshot → Scan (drill into a stock detail) → Groups
+# (ranked table + RRG rotation + Stock Matrix).
 # Pipeline: Playwright (record WebM, authenticated) → ffmpeg (trim + speed +
 #           frames) → ffmpeg palettegen/paletteuse (dither=none) → gifsicle.
 #
@@ -26,6 +26,8 @@ TMP="$ROOT/.tmp/scan-capture"
 OUT="$ROOT/docs/gifs/scan-workflow.gif"
 
 mkdir -p "$TMP/frames" "$ROOT/docs/gifs"
+# A shorter re-take must not inherit the previous take's tail frames.
+rm -f "$TMP"/frames/f_*.png
 
 echo "→ recording video via Playwright (authenticated)"
 cd "$ROOT/frontend"

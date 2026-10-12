@@ -195,19 +195,15 @@ This guide provides detailed instructions for capturing screenshots and GIFs for
 ## GIFs to Capture
 
 ### 1. scan-workflow.gif (Hero GIF)
-**Duration**: 8-10 seconds
-**What to capture**: Complete scan workflow:
-1. Start on `/scan` page with no results
-2. Select screeners (click Min, CAN chips)
-3. Click "Start Scan" button
-4. Show progress bar filling
-5. Results populating in table
-6. Optional: Quick scroll through results
+**What to capture** (automated by `capture-scan-workflow.sh`, see below):
+1. Daily Snapshot
+2. Scan results, then a stock's detail, walking to the next stocks with Space
+3. Group rankings table
+4. RRG (sector scope, labels on)
+5. Stock Matrix grid, Technology sector, scrolled to the software rows
 
 **Tips**:
-- Use "Test" universe (20 stocks) for faster demo
-- Optimize GIF size (target < 5MB)
-- Ensure smooth scrolling
+- Optimize GIF size (target ~5MB)
 
 ---
 
@@ -300,13 +296,15 @@ bash frontend/scripts/capture-scan-workflow.sh
 
 > **GIF encoding note:** the tour GIF uses an ffmpeg flat-palette pass with `dither=none` followed by `gifsicle -O3 --lossy`, *not* gifski. The dark UI background is a near-black gradient, and error-diffusion dithering (gifski's default, with no opt-out) scatters it into patchy speckle. `dither=none` keeps the darks uniform; gifsicle recovers the file size. See `capture-scan-workflow.sh` for the exact pass.
 
-`capture-live-readme.mjs` captures the Daily Snapshot, Scan results, Market selector, Breadth, Group rankings, RRG (sector scope, labels on), and Watchlist at `deviceScaleFactor: 2`. Review the output in `.tmp/readme-shots/`, then downscale the keepers to 1440px wide (matching the existing set) before copying into `docs/screenshots/`:
+`capture-live-readme.mjs` captures the Daily Snapshot, the Market Health & Exposure card (element crop, kept at 2x), Scan results, Market selector, Breadth, Group rankings, RRG (sector scope, labels on), Options Command Center, and Watchlist at `deviceScaleFactor: 2`. For a local Docker stack, set `SITE_URL=http://localhost`. `capture-group-readme.mjs` (with `GROUPS_SCREENSHOT_URL=http://localhost`) writes `group-rs-table`, `group-matrix-grid` and `group-matrix-clusters` at their committed size. Review the output in `.tmp/readme-shots/`, then downscale the keepers to 1440px wide (matching the existing set) before copying into `docs/screenshots/`:
 
 ```bash
 ffmpeg -y -i .tmp/readme-shots/breadth-chart.png -vf "scale=1440:-1:flags=lanczos" -q:v 2 docs/screenshots/breadth-chart.jpg
 ```
 
 The table-focused `breadth-history.jpg` is currently captured separately using the steps in **4b** so its group headers and newest rows remain the focus.
+
+**Breadth needs history.** Backfilled breadth only covers dates with a recorded point-in-time universe, so a freshly installed stack shows only a few sessions however wide the range. When that is the case, take `breadth-chart.jpg` and `breadth-history.jpg` from the static site (same page, long history) instead. The hero tour leaves Breadth out for the same reason.
 
 **Capture `scan-results` on an Asian market (e.g. Japan).** The Themes chip-cluster column is only populated for the Asia universes in the reference deployment; a US scan leaves it blank.
 

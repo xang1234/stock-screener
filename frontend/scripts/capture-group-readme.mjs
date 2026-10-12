@@ -42,6 +42,8 @@ try {
   console.log('Loading Groups page');
   await page.goto(`${frontend}/groups`);
   await expect(page.getByRole('columnheader', {name:'RS',exact:true})).toBeVisible({timeout:60000});
+  // Let the header status chip settle from "Checking activity".
+  await page.getByText('Markets ready').waitFor({timeout:15000}).catch(() => {});
   await shot('group-rs-table');
   console.log('Captured Group RS table');
   await page.getByRole('tab', {name:'Matrix',exact:true}).click();

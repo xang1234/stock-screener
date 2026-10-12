@@ -62,12 +62,17 @@ await step('daily-snapshot', async () => {
   await png('daily-snapshot');
 });
 
-// 2. Scan results — sort by Composite to surface classified names
+// 1b. Market Health & Exposure card — element crop from the same page
+await step('health-exposure', async () => {
+  const card = page.getByText('Market Health & Exposure', { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"MuiPaper-root")][1]');
+  await card.screenshot({ path: path.join(OUT, 'health-exposure.jpg'), type: 'jpeg', quality: 92 });
+});
+
+// 2. Scan results — the default sort is already Composite descending (clicking
+// the header would flip it to ascending and lead with the weakest names).
 await step('scan-results', async () => {
   await goto('/scan', 5000);
-  // Click the COMP column header to sort by composite score (desc).
-  const comp = page.getByRole('columnheader', { name: /COMP/i }).first();
-  if (await comp.count()) { await comp.click().catch(() => {}); await dwell(900); }
   await dwell(1500);
   await png('scan-results');
 });
@@ -98,11 +103,21 @@ await step('group-rankings', async () => {
 // 6. RRG — capture both GROUPS (default) and SECTORS scope for comparison
 await step('rrg', async () => {
   await goto('/groups', 4000);
-  await page.getByRole('button', { name: 'RRG', exact: true }).click();
+  await page.getByRole('tab', { name: 'RRG', exact: true }).click();
   await dwell(4500);
   await png('rrg-groups');
   const sectors = page.getByRole('button', { name: 'Sectors', exact: true }).first();
-  if (await sectors.count()) { await sectors.click(); await dwell(4000); await png('rrg-sectors'); }
+  if (await sectors.count()) {
+    await sectors.click(); await dwell(3000);
+    await page.getByRole('checkbox', { name: /Labels/i }).first().check().catch(() => {});
+    await dwell(1500); await png('rrg-sectors');
+  }
+});
+
+// 6b. Options Command Center (US only; the nav hides it for other markets)
+await step('options-command-center', async () => {
+  await goto('/options', 6000);
+  await png('options-command-center');
 });
 
 // 7. Watchlist table
