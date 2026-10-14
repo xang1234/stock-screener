@@ -24,7 +24,7 @@ export default function InactiveMarkets({ markets, children }) {
       </Button>
       <Collapse in={open} unmountOnExit id={regionId}>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-          Not enabled, and no worker or activity seen for them on this page.
+          Not enabled, and no market worker or activity seen for them on this page.
         </Typography>
         {children}
       </Collapse>

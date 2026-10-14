@@ -22,7 +22,7 @@ describe('findActiveMarkets', () => {
     const active = findActiveMarkets({
       enabledMarkets: ['US', 'JP'],
       supportedMarkets: SUPPORTED,
-      jobsPayload: { workers: [{ queues: ['data_fetch_shared', 'data_fetch_cn'] }] },
+      jobsPayload: { workers: [{ queues: ['data_fetch_shared', 'market_jobs_cn'] }] },
     });
 
     expect([...active].sort()).toEqual(['CN', 'JP', 'US']);
@@ -41,6 +41,27 @@ describe('findActiveMarkets', () => {
     });
 
     expect([...active].sort()).toEqual(['HK', 'IN', 'KR', 'TW', 'US']);
+  });
+
+  it('ignores the shared data-fetch worker, which start_celery.sh subscribes to every market', () => {
+    const active = findActiveMarkets({
+      enabledMarkets: ['US'],
+      supportedMarkets: SUPPORTED,
+      jobsPayload: {
+        workers: [
+          { queues: ['data_fetch_us', 'data_fetch_hk', 'data_fetch_de', 'data_fetch_in'] },
+          { queues: ['market_jobs_cn'] },
+          { queues: ['user_scans_kr'] },
+        ],
+        queues: [
+          { queue: 'data_fetch_de', depth: 0, consumers: 1 },
+          { queue: 'data_fetch_in', depth: 2, consumers: 1 },
+        ],
+      },
+    });
+
+    // IN has queued work (live state); DE only has the global subscriber.
+    expect([...active].sort()).toEqual(['CN', 'IN', 'KR', 'US']);
   });
 
   it('counts only live jobs, not cancelled or failed ones', () => {
