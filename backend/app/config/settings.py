@@ -494,9 +494,9 @@ class Settings(BaseSettings):
     cache_warm_hour_au: int = 7
     cache_warm_minute_au: int = 0
 
-    # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
-    # entirely (beat schedule skips it; its worker can be stopped).
-    enabled_markets: str = "US"  # legacy env fallback; runtime preferences own the local-default market set
+    # The markets this deployment runs: Beat schedules and workers follow it,
+    # and the app's enabled markets (runtime preferences) must stay within it.
+    enabled_markets: str = "US"
 
     @field_validator("enabled_markets", mode="before")
     @classmethod

@@ -89,6 +89,7 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
     monkeypatch.setattr(
         module, "get_runtime_bootstrap_status", lambda _db: _FakeBootstrapStatus()
     )
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,CN,HK")
     app.dependency_overrides[get_db] = lambda: _FakeDb()
 
     try:
@@ -98,6 +99,7 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
 
     assert response.status_code == 200
     data = response.json()
+    assert data["deployment_markets"] == ["US", "CN", "HK"]
     assert data["scan_defaults"] == get_default_scan_profile("US")
     assert data["ui_snapshots"] == _FakeUISnapshotService().ui_snapshot_flags()
     assert data["features"] == {
@@ -344,6 +346,7 @@ async def test_runtime_bootstrap_status_endpoint_returns_persisted_state(
             return {"cot": "ready", "options": "missing", "social": "disabled"}
 
     monkeypatch.setattr(module, "get_bootstrap_readiness_service", _Readiness)
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,HK")
     app.dependency_overrides[get_db] = lambda: _FakeDb()
 
     try:
@@ -357,6 +360,7 @@ async def test_runtime_bootstrap_status_endpoint_returns_persisted_state(
     assert payload["empty_system"] is True
     assert payload["primary_market"] == "US"
     assert payload["enabled_markets"] == ["US", "HK"]
+    assert payload["deployment_markets"] == ["US", "HK"]
     assert payload["bootstrap_state"] == "running"
     assert payload["market_stages"] == {"US": {"breadth": "missing"}, "HK": {}}
     assert payload["features"] == {"cot": "ready", "options": "missing", "social": "disabled"}
@@ -488,6 +492,8 @@ async def test_runtime_bootstrap_start_delegates_atomic_claim_to_orchestration(
     )
     app.dependency_overrides[get_db] = lambda: db
 
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,HK")
+
     try:
         response = await client.post(
             "/api/v1/runtime/bootstrap",
@@ -502,6 +508,7 @@ async def test_runtime_bootstrap_start_delegates_atomic_claim_to_orchestration(
     assert payload["task_id"] == "task-bootstrap-123"
     assert payload["primary_market"] == "HK"
     assert payload["enabled_markets"] == ["HK", "US"]
+    assert payload["deployment_markets"] == ["US", "HK"]
     assert payload["bootstrap_state"] == "running"
     assert db.expire_all_calls == 1
 
@@ -658,6 +665,8 @@ async def test_runtime_bootstrap_start_restores_state_when_no_task_was_dispatche
     monkeypatch.setattr(module, "queue_local_runtime_bootstrap", _queue)
     app.dependency_overrides[get_db] = lambda: _FakeDb()
 
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,HK")
+
     try:
         with pytest.raises(BootstrapDispatchError, match="queue unavailable"):
             await client.post(
@@ -735,6 +744,8 @@ async def test_runtime_bootstrap_start_keeps_running_state_after_partial_dispatc
     monkeypatch.setattr(module, "queue_local_runtime_bootstrap", _queue)
     db = _FakeDb()
     app.dependency_overrides[get_db] = lambda: db
+
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,HK")
 
     try:
         response = await client.post(
@@ -850,3 +861,145 @@ async def test_runtime_bootstrap_start_rejects_duplicate_running_bootstrap(
     assert response.json()["detail"]["code"] == "bootstrap_already_running"
     assert queue_calls == [{"primary_market": "US", "enabled_markets": ["US"]}]
     assert db.expire_all_calls == 1
+
+
+def _ready_status(primary_market="US", enabled_markets=("US",)):
+    return SimpleNamespace(
+        bootstrap_required=False,
+        empty_system=False,
+        primary_market=primary_market,
+        enabled_markets=list(enabled_markets),
+        bootstrap_state="ready",
+        supported_markets=get_market_catalog().supported_market_codes(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_bootstrap_rejects_markets_outside_the_deployment(
+    client, monkeypatch
+):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,CN,HK")
+    queue = MagicMock(return_value="unexpected-task")
+    save = MagicMock()
+    monkeypatch.setattr(module, "queue_local_runtime_bootstrap", queue)
+    monkeypatch.setattr(module, "save_runtime_preferences", save)
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _ready_status())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        response = await client.post(
+            "/api/v1/runtime/bootstrap",
+            json={"primary_market": "jp", "enabled_markets": ["JP", "hk", "KR"]},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "JP, KR are not in this deployment's ENABLED_MARKETS (US, CN, HK). "
+        "Add them to ENABLED_MARKETS and recreate the containers, "
+        "or choose from US, CN, HK."
+    )
+    queue.assert_not_called()
+    save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_runtime_markets_update_rejects_a_market_outside_the_deployment(
+    client, monkeypatch
+):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(module.settings, "enabled_markets", "HK")
+    save = MagicMock()
+    monkeypatch.setattr(module, "save_runtime_preferences", save)
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _ready_status())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        # An empty list means the service's default (US), so US must be named.
+        response = await client.patch(
+            "/api/v1/runtime/markets",
+            json={"primary_market": "HK", "enabled_markets": []},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "US is not in this deployment's ENABLED_MARKETS (HK). "
+        "Add it to ENABLED_MARKETS and recreate the containers, "
+        "or choose from HK."
+    )
+    save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_runtime_markets_update_accepts_lowercase_deployment_markets(
+    client, monkeypatch
+):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(module.settings, "enabled_markets", "US,HK")
+    saved = []
+
+    def _save(_db, **kwargs):
+        saved.append(kwargs)
+        return SimpleNamespace(primary_market="HK", enabled_markets=["HK", "US"])
+
+    monkeypatch.setattr(module, "save_runtime_preferences", _save)
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _ready_status())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        response = await client.patch(
+            "/api/v1/runtime/markets",
+            json={"primary_market": "hk", "enabled_markets": ["hk", "us"]},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    assert saved == [
+        {
+            "primary_market": "hk",
+            "enabled_markets": ["hk", "us"],
+            "bootstrap_state": "ready",
+        }
+    ]
+    payload = response.json()
+    assert payload["primary_market"] == "HK"
+    assert payload["enabled_markets"] == ["HK", "US"]
+    assert payload["deployment_markets"] == ["US", "HK"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_markets_update_rejects_an_unknown_market_code(client, monkeypatch):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    save = MagicMock()
+    monkeypatch.setattr(module, "save_runtime_preferences", save)
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _ready_status())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        response = await client.patch(
+            "/api/v1/runtime/markets",
+            json={"primary_market": "US", "enabled_markets": ["US", "xx"]},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("Unsupported market(s): XX. Supported markets: US,")
+    save.assert_not_called()

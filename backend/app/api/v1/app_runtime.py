@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from ...config import settings
 from ...database import get_db
+from ...deployment.enabled_markets import markets_outside_deployment_message
+from ...domain.markets import UnsupportedMarketError
 from ...domain.markets.catalog import get_market_catalog
 from ...domain.scanning.defaults import get_default_scan_profile
 from ...infra.db.models.social_signals import SocialSourceRegistry
@@ -30,6 +32,7 @@ from ...services.bootstrap_run_manifest import (
 from ...services.market_activity_service import get_runtime_activity_status
 from ...services.runtime_activity_contract import bootstrap_stage_metadata
 from ...services.runtime_preferences_service import (
+    DEFAULT_ENABLED_MARKETS,
     RuntimeBootstrapStatus,
     get_bootstrap_readiness_service,
     get_runtime_bootstrap_status,
@@ -55,8 +58,25 @@ def _bootstrap_status_payload(status: object) -> dict[str, object]:
         "enabled_markets": list(getattr(status, "enabled_markets")),
         "bootstrap_state": str(getattr(status, "bootstrap_state")),
         "supported_markets": list(getattr(status, "supported_markets")),
+        "deployment_markets": settings.enabled_markets_list,
         "bootstrap_stages": bootstrap_stage_metadata(),
     }
+
+
+def _reject_markets_outside_deployment(
+    primary_market: str,
+    enabled_markets: list[str],
+) -> None:
+    # An empty list is saved as the service default, so check that instead.
+    requested = [primary_market, *(enabled_markets or DEFAULT_ENABLED_MARKETS)]
+    try:
+        message = markets_outside_deployment_message(
+            requested, settings.enabled_markets_list
+        )
+    except UnsupportedMarketError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if message is not None:
+        raise HTTPException(status_code=422, detail=message)
 
 
 def _refresh_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
@@ -121,6 +141,7 @@ def get_app_capabilities(
         enabled_markets=bootstrap_status.enabled_markets,
         bootstrap_state=bootstrap_status.bootstrap_state,
         supported_markets=market_catalog.supported_market_codes(),
+        deployment_markets=settings.enabled_markets_list,
         bootstrap_stages=bootstrap_stage_metadata(),
         market_catalog=market_catalog.as_runtime_payload(),
         universe_options=build_runtime_universe_options_payload(
@@ -165,6 +186,7 @@ def start_runtime_bootstrap(
     db: Session = Depends(get_db),
 ) -> RuntimeBootstrapStartResponse:
     """Persist local bootstrap choices and queue the primary-market sync."""
+    _reject_markets_outside_deployment(request.primary_market, request.enabled_markets)
     previous_status = get_runtime_bootstrap_status(db)
     if _has_unfenced_running_bootstrap(db, previous_status):
         raise _bootstrap_already_running_error(previous_status)
@@ -219,6 +241,7 @@ def update_runtime_markets(
     db: Session = Depends(get_db),
 ) -> RuntimeBootstrapStatusResponse:
     """Update persisted local market preferences without re-running bootstrap."""
+    _reject_markets_outside_deployment(request.primary_market, request.enabled_markets)
     current_status = get_runtime_bootstrap_status(db)
     prefs = save_runtime_preferences(
         db,

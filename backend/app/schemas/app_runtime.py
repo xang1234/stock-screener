@@ -177,6 +177,12 @@ class AppCapabilitiesResponse(BaseModel):
     enabled_markets: list[str] = Field(default_factory=lambda: ["US"])
     bootstrap_state: str = "not_started"
     supported_markets: list[str] = Field(default_factory=_supported_market_codes)
+    deployment_markets: list[str] = Field(
+        description=(
+            "Markets this deployment runs (ENABLED_MARKETS). The app's enabled "
+            "markets must be a subset; supported_markets is the whole catalog."
+        )
+    )
     bootstrap_stages: list[BootstrapStageResponse] = Field(default_factory=list)
     market_catalog: MarketCatalogResponse
     universe_options: RuntimeUniverseOptionsResponse
@@ -193,6 +199,12 @@ class RuntimeBootstrapStatusResponse(BaseModel):
     enabled_markets: list[str]
     bootstrap_state: str
     supported_markets: list[str] = Field(default_factory=_supported_market_codes)
+    deployment_markets: list[str] = Field(
+        description=(
+            "Markets this deployment runs (ENABLED_MARKETS). The app's enabled "
+            "markets must be a subset; supported_markets is the whole catalog."
+        )
+    )
     bootstrap_stages: list[BootstrapStageResponse] = Field(default_factory=list)
     market_stages: dict[str, dict[str, str]] = Field(
         default_factory=dict,
