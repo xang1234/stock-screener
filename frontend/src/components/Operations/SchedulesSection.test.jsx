@@ -53,6 +53,43 @@ describe('SchedulesSection', () => {
     triggerTask.mockReset();
   });
 
+  it('puts jobs of inactive markets behind a disclosure, keeping any that need attention', async () => {
+    getScheduledTasks.mockResolvedValue(payload([
+      { ...task('daily-market-pipeline-us', 'Daily Market Pipeline (US)', null), market: 'US' },
+      { ...task('daily-market-pipeline-de', 'Daily Market Pipeline (DE)', null), market: 'DE' },
+      { ...task('daily-market-pipeline-in', 'Daily Market Pipeline (IN)', null), market: 'IN' },
+      { ...task('weekly-universe-refresh-tw', 'Weekly Universe Refresh (TW)', lastRun('failed', { error_message: 'boom' })), market: 'TW' },
+      task('weekly-global-maintenance', 'Weekly Cache & Telemetry Cleanup', null),
+    ]));
+
+    renderWithProviders(<SchedulesSection activeMarkets={new Set(['US'])} />);
+
+    expect(await screen.findByText('Daily Market Pipeline (US)')).toBeVisible();
+    expect(screen.getByText('Weekly Cache & Telemetry Cleanup')).toBeVisible();
+    // A failed run is live state: never tucked away with its market.
+    expect(screen.getByText('Weekly Universe Refresh (TW)')).toBeVisible();
+    expect(screen.queryByText('Daily Market Pipeline (DE)')).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole('button', { name: 'Inactive markets (2): DE, IN' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Daily Market Pipeline (DE)')).toBeVisible();
+    expect(within(rowFor('Daily Market Pipeline (IN)')).getByRole('button', { name: 'Run Daily Market Pipeline (IN) now' })).toBeEnabled();
+  });
+
+  it('shows every job while the active markets are unknown', async () => {
+    getScheduledTasks.mockResolvedValue(payload([
+      { ...task('daily-market-pipeline-de', 'Daily Market Pipeline (DE)', null), market: 'DE' },
+    ]));
+
+    renderSection();
+
+    expect(await screen.findByText('Daily Market Pipeline (DE)')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Inactive markets/ })).not.toBeInTheDocument();
+  });
+
   it('shows each task with its server-reported last run', async () => {
     getScheduledTasks.mockResolvedValue(payload([
       task('cleanup', 'Weekly Scan Cleanup', lastRun('completed', { duration_seconds: 42 })),

@@ -614,6 +614,7 @@ class TaskRegistryService:
                 'description': task_info['description'],
                 'schedule_description': task_info['schedule_description'],
                 'is_enabled': is_enabled,
+                'market': task_info.get('manual_dispatch_kwargs', {}).get('market'),
                 'last_run': None,
             }
             if include_run_blockers:

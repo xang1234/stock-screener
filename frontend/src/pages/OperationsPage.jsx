@@ -42,6 +42,8 @@ import { useRuntime } from '../contexts/RuntimeContext';
 import SocialSignalHealthPanel from '../features/socialSignals/SocialSignalHealthPanel';
 import ExposureResearchWorkspace from '../features/companyExposure/ExposureResearchWorkspace';
 import SchedulesSection from '../components/Operations/SchedulesSection';
+import InactiveMarkets from '../components/Operations/InactiveMarkets';
+import { findActiveMarkets, queueMarket, splitByMarket } from '../components/Operations/activeMarkets';
 
 const POLL_MS = 30000;
 const ACTIVE_JOB_STATES = new Set(['queued', 'waiting', 'reserved', 'running', 'stale', 'stuck']);
@@ -322,9 +324,22 @@ function AlertsTable({ alerts, onAcknowledge }) {
   );
 }
 
-function LeaseSummary({ leases, onReleaseChain, releasingToken }) {
+function MarketLease({ market, holder }) {
+  return (
+    <Box>
+      <Typography variant="body2">
+        <strong>{market}:</strong> {holder?.task_name || 'idle'}
+      </Typography>
+      <Typography variant="caption" color="text.secondary">
+        {holder?.task_id ? `Task ID: ${holder.task_id}` : 'No active workload lease'}
+      </Typography>
+    </Box>
+  );
+}
+
+function LeaseSummary({ leases, onReleaseChain, releasingToken, activeMarkets }) {
   const externalHolder = leases?.external_fetch_global;
-  const marketHolders = leases?.market_workload || {};
+  const marketLeases = splitByMarket(Object.entries(leases?.market_workload || {}), ([market]) => market, activeMarkets);
   const chainClaims = Object.entries(leases?.pipeline_chain || {});
 
   return (
@@ -357,17 +372,17 @@ function LeaseSummary({ leases, onReleaseChain, releasingToken }) {
             Market Workload Leases
           </Typography>
           <Stack spacing={1}>
-            {Object.entries(marketHolders).map(([market, holder]) => (
-              <Box key={market}>
-                <Typography variant="body2">
-                  <strong>{market}:</strong> {holder?.task_name || 'idle'}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {holder?.task_id ? `Task ID: ${holder.task_id}` : 'No active workload lease'}
-                </Typography>
-              </Box>
+            {marketLeases.shown.map(([market, holder]) => (
+              <MarketLease key={market} market={market} holder={holder} />
             ))}
           </Stack>
+          <InactiveMarkets markets={marketLeases.hiddenMarkets}>
+            <Stack spacing={1}>
+              {marketLeases.hidden.map(([market, holder]) => (
+                <MarketLease key={market} market={market} holder={holder} />
+              ))}
+            </Stack>
+          </InactiveMarkets>
         </CardContent>
       </Card>
       <Card variant="outlined" sx={{ minWidth: 260, flex: '1 1 320px' }}>
@@ -640,7 +655,7 @@ export default function OperationsPage() {
   const [taskSearch, setTaskSearch] = useState('');
   const activityQuery = useRuntimeActivity();
   // Exposure routes are registered only with the themes feature.
-  const { features } = useRuntime();
+  const { features, enabledMarkets, supportedMarkets } = useRuntime();
 
   const alertsQuery = useQuery({
     queryKey: ['telemetry', 'alerts'],
@@ -712,6 +727,11 @@ export default function OperationsPage() {
   const queues = jobsPayload?.queues ?? EMPTY_ARRAY;
   const workers = jobsPayload?.workers ?? EMPTY_ARRAY;
   const leases = jobsPayload?.leases ?? EMPTY_LEASES;
+  // Until the jobs data loads this is the enabled markets alone, so rows
+  // only ever appear (e.g. CN, served by a worker), never vanish.
+  const activeMarkets = findActiveMarkets({ enabledMarkets, supportedMarkets, jobsPayload, alerts });
+  const queueSplit = splitByMarket(queues, (queue) => queueMarket(queue.queue, supportedMarkets), activeMarkets);
+  const summarySplit = splitByMarket(summaries, (summary) => summary.market, activeMarkets);
 
   const queueOptions = useMemo(
     () => Array.from(new Set(jobs.map((job) => job.queue).filter(Boolean))).sort(),
@@ -890,7 +910,7 @@ export default function OperationsPage() {
         </DialogActions>
       </Dialog>
 
-      {features.tasks && <SchedulesSection />}
+      {features.tasks && <SchedulesSection activeMarkets={activeMarkets} />}
 
       {/* Anchor for "See its claim in Lease status" (Scheduled jobs); the
           heading renders even while the jobs data loads or fails. */}
@@ -902,6 +922,7 @@ export default function OperationsPage() {
           leases={leases}
           onReleaseChain={setConfirmChain}
           releasingToken={releaseChainMutation.isPending ? releaseChainMutation.variables?.token : null}
+          activeMarkets={activeMarkets}
         />
       </JobsData>
       <Dialog open={Boolean(confirmChain)} onClose={() => setConfirmChain(null)}>
@@ -934,7 +955,10 @@ export default function OperationsPage() {
             Queues
           </Typography>
           <JobsData query={jobsQuery}>
-            <QueueSummaryTable queues={queues} />
+            <QueueSummaryTable queues={queueSplit.shown} />
+            <InactiveMarkets markets={queueSplit.hiddenMarkets}>
+              <QueueSummaryTable queues={queueSplit.hidden} />
+            </InactiveMarkets>
           </JobsData>
         </Box>
         <Box sx={{ flex: 1 }}>
@@ -955,11 +979,20 @@ export default function OperationsPage() {
             Failed to load telemetry summaries. Check backend connectivity.
           </Typography>
         ) : (
-          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-            {summaries.map((s) => (
-              <MarketSummaryCard key={s.market} summary={s} />
-            ))}
-          </Stack>
+          <>
+            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+              {summarySplit.shown.map((s) => (
+                <MarketSummaryCard key={s.market} summary={s} />
+              ))}
+            </Stack>
+            <InactiveMarkets markets={summarySplit.hiddenMarkets}>
+              <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+                {summarySplit.hidden.map((s) => (
+                  <MarketSummaryCard key={s.market} summary={s} />
+                ))}
+              </Stack>
+            </InactiveMarkets>
+          </>
         )}
       </Box>
 

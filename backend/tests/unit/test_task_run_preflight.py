@@ -163,6 +163,21 @@ def test_the_task_list_carries_each_pipelines_blocker(db_session):
     assert len(calls) == 1 and "US" in calls[0] and "HK" in calls[0]
 
 
+def test_the_task_list_names_each_jobs_market(db_session):
+    # The Operations page groups jobs of inactive markets by this field.
+    from app.schemas.task import ScheduledTaskResponse
+
+    tasks = {
+        t["name"]: ScheduledTaskResponse(**t)
+        for t in TaskRegistryService().get_all_scheduled_tasks(db_session)
+    }
+
+    assert tasks["daily-market-pipeline-hk"].market == "HK"
+    assert tasks["weekly-universe-refresh-de"].market == "DE"
+    assert tasks["daily-us-options-analytics"].market == "US"
+    assert tasks["weekly-global-maintenance"].market is None
+
+
 @pytest_asyncio.fixture
 async def client():
     transport = httpx.ASGITransport(app=app)

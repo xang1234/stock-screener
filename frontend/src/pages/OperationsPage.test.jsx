@@ -133,6 +133,8 @@ const OPERATIONS_PAYLOAD = {
 describe('OperationsPage', () => {
   beforeEach(() => {
     runtimeState.features = { themes: true };
+    delete runtimeState.enabledMarkets;
+    delete runtimeState.supportedMarkets;
     vi.clearAllMocks();
     fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US], alerts: [ALERT_US] });
     fetchOperationsJobs.mockResolvedValue(OPERATIONS_PAYLOAD);
@@ -485,6 +487,40 @@ describe('OperationsPage', () => {
     expect(await screen.findByText(/60%/)).toBeInTheDocument();
     expect(screen.getByText(/600\/1000/)).toBeInTheDocument();
     expect(screen.getByText(/Batch 3\/5 · refreshing prices/)).toBeInTheDocument();
+  });
+
+  it('puts queues, idle leases and telemetry of inactive markets behind disclosures', async () => {
+    runtimeState.enabledMarkets = ['US'];
+    runtimeState.supportedMarkets = ['US', 'HK', 'DE'];
+    fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US, { ...SUMMARY_US, market: 'DE' }], alerts: [] });
+    fetchOperationsJobs.mockResolvedValue({
+      ...OPERATIONS_PAYLOAD,
+      queues: [
+        ...OPERATIONS_PAYLOAD.queues,
+        { queue: 'data_fetch_de', depth: 0, oldest_age_seconds: null, consumers: 0 },
+      ],
+      leases: {
+        ...OPERATIONS_PAYLOAD.leases,
+        market_workload: { US: OPERATIONS_PAYLOAD.leases.market_workload.US, HK: null, DE: null },
+      },
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    // HK has a queued job, so it stays; DE has nothing, so it waits behind
+    // one disclosure per section.
+    const toggles = await screen.findAllByRole('button', { name: 'Inactive markets (1): DE' });
+    expect(toggles).toHaveLength(3);
+    expect(screen.getAllByText('data_fetch_hk').length).toBeGreaterThan(0);
+    expect(screen.queryByText('data_fetch_de')).not.toBeInTheDocument();
+    expect(screen.getByText('HK:')).toBeInTheDocument();
+    expect(screen.queryByText('DE:')).not.toBeInTheDocument();
+
+    toggles.forEach((toggle) => fireEvent.click(toggle));
+
+    expect(screen.getByText('data_fetch_de')).toBeVisible();
+    expect(screen.getByText('DE:')).toBeVisible();
+    expect(screen.getByText('DE')).toBeVisible();
   });
 
   it('says when a queued job sits on a queue no worker reads', async () => {

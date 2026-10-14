@@ -37,6 +37,7 @@ class ScheduledTaskResponse(BaseModel):
     description: str = Field(..., description="Description of what the task does")
     schedule_description: str = Field(..., description="Human-readable schedule")
     is_enabled: bool = Field(..., description="Whether scheduling is enabled")
+    market: Optional[str] = Field(None, description="Market the job runs for; None for shared jobs")
     last_run: Optional[LastRunInfo] = Field(None, description="Last execution details")
     run_blocker: Optional[Dict[str, Any]] = Field(
         None,

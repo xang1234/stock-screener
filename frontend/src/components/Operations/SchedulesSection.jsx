@@ -25,8 +25,12 @@ import {
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { getScheduledTasks, triggerTask } from '../../api/tasks';
 import { useIsMobileShell } from '../Layout/shellNav';
+import InactiveMarkets from './InactiveMarkets';
+import { splitByMarket } from './activeMarkets';
 
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
+// Last runs that need a look: never tucked away with an inactive market.
+const ATTENTION_STATUSES = new Set(['queued', 'running', 'failed', 'lost']);
 // A run still queued after this has likely lost its message or has no worker
 // on its queue. Run stays blocked (its message may still be in the broker, so
 // queueing another would run the job twice); the note points to the cancel.
@@ -337,7 +341,8 @@ function markQueued(data, taskName, taskId) {
   };
 }
 
-export default function SchedulesSection() {
+// activeMarkets: markets shown up front (activeMarkets.js); undefined shows all.
+export default function SchedulesSection({ activeMarkets }) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobileShell();
   const [error, setError] = useState(null);
@@ -378,6 +383,13 @@ export default function SchedulesSection() {
   });
   const tasks = tasksQuery.data?.tasks ?? [];
   const Jobs = isMobile ? JobCards : JobsTable;
+  const { shown, hidden, hiddenMarkets } = splitByMarket(
+    tasks,
+    (task) => task.market,
+    activeMarkets,
+    (task) => ATTENTION_STATUSES.has(task.last_run?.status),
+  );
+  const onRun = (taskName) => runMutation.mutate(taskName);
 
   return (
     <Box sx={{ mt: 3 }}>
@@ -404,7 +416,12 @@ export default function SchedulesSection() {
       ) : tasks.length === 0 ? (
         <Typography variant="body2" color="text.secondary">No scheduled tasks configured.</Typography>
       ) : (
-        <Jobs tasks={tasks} pendingNames={pendingNames} onRun={(taskName) => runMutation.mutate(taskName)} />
+        <>
+          <Jobs tasks={shown} pendingNames={pendingNames} onRun={onRun} />
+          <InactiveMarkets markets={hiddenMarkets}>
+            <Jobs tasks={hidden} pendingNames={pendingNames} onRun={onRun} />
+          </InactiveMarkets>
+        </>
       )}
     </Box>
   );
