@@ -23,7 +23,8 @@ const DAY_MS = 24 * 3600 * 1000;
 
 // queues: the jobs payload's queue summaries (consumers null when unknown).
 // pipelineTask: the market's daily-market-pipeline task row, if known.
-// deploymentMarkets: the deployment's ENABLED_MARKETS; undefined when unknown.
+// deploymentMarkets: the deployment's ENABLED_MARKETS. RuntimeContext falls back
+// to every supported market for an older backend, which never raises a problem.
 export function marketCoverage({ market, enabled, deploymentMarkets, queues = [], pipelineTask, now = Date.now() }) {
   const consumersOf = new Map(queues.map((queue) => [queue.queue, queue.consumers]));
   const workers = {};

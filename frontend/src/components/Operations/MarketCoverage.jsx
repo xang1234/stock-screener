@@ -79,7 +79,7 @@ function uncheckedOf(row, tracked) {
 // markets: active markets in catalog order. queues: the jobs payload's queue
 // summaries. tasks: scheduled tasks; undefined while loading, null when the
 // tasks feature is off (pipeline runs are then left out). deploymentMarkets:
-// the deployment's ENABLED_MARKETS, undefined when unknown.
+// the deployment's ENABLED_MARKETS (see coverageProblems.js).
 export default function MarketCoverage({ markets, enabledMarkets = [], deploymentMarkets, queues = [], tasks }) {
   const tracked = tasks !== null;
   const enabled = new Set(enabledMarkets);

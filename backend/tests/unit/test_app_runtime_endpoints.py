@@ -901,7 +901,8 @@ async def test_runtime_bootstrap_rejects_markets_outside_the_deployment(
     assert response.status_code == 422
     assert response.json()["detail"] == (
         "JP, KR are not in this deployment's ENABLED_MARKETS (US, CN, HK). "
-        "Add them to ENABLED_MARKETS and recreate the containers, "
+        "Add them to ENABLED_MARKETS and restart the API, Beat and workers "
+        "(on Docker, recreate the containers), "
         "or choose from US, CN, HK."
     )
     queue.assert_not_called()
@@ -934,14 +935,15 @@ async def test_runtime_markets_update_rejects_a_market_outside_the_deployment(
     assert response.status_code == 422
     assert response.json()["detail"] == (
         "US is not in this deployment's ENABLED_MARKETS (HK). "
-        "Add it to ENABLED_MARKETS and recreate the containers, "
+        "Add it to ENABLED_MARKETS and restart the API, Beat and workers "
+        "(on Docker, recreate the containers), "
         "or choose from HK."
     )
     save.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_runtime_markets_update_accepts_lowercase_deployment_markets(
+async def test_runtime_markets_update_accepts_lowercase_requested_markets(
     client, monkeypatch
 ):
     from app.api.v1 import app_runtime as module

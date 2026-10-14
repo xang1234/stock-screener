@@ -72,7 +72,7 @@ def test_docker_compose_forwards_options_analytics_flag_to_app_env():
     )
 
 
-def test_local_celery_script_consumes_every_supported_market_queue():
+def test_local_celery_script_data_fetch_worker_reads_every_market_queue():
     script = (ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8")
 
     assert "from app.tasks.market_queues import SUPPORTED_MARKETS" in script
@@ -133,6 +133,17 @@ def test_local_celery_script_defaults_to_us_like_the_backend(tmp_path):
 
 def test_local_celery_script_reads_enabled_markets_from_backend_env(tmp_path):
     workers = _started_workers(tmp_path, dotenv_markets="US,HK")
+
+    assert [name for name in workers if name.startswith("marketjobs-")] == [
+        "marketjobs-hk@%h",
+        "marketjobs-us@%h",
+    ]
+
+
+def test_local_celery_script_treats_an_empty_export_as_unset(tmp_path):
+    # Pydantic prefers an empty env var over backend/.env, so the script must
+    # drop it before reading the setting.
+    workers = _started_workers(tmp_path, env_markets="", dotenv_markets="US,HK")
 
     assert [name for name in workers if name.startswith("marketjobs-")] == [
         "marketjobs-hk@%h",

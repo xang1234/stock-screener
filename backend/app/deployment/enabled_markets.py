@@ -56,6 +56,7 @@ def markets_outside_deployment_message(
     verb, pronoun = ("is", "it") if len(outside) == 1 else ("are", "them")
     return (
         f"{', '.join(outside)} {verb} not in this deployment's ENABLED_MARKETS ({allowed}). "
-        f"Add {pronoun} to ENABLED_MARKETS and recreate the containers, "
+        f"Add {pronoun} to ENABLED_MARKETS and restart the API, Beat and workers "
+        f"(on Docker, recreate the containers), "
         f"or choose from {allowed}."
     )

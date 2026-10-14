@@ -30,12 +30,8 @@ export TOKENIZERS_PARALLELISM=false
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 export CELERY_POOL="${CELERY_POOL:-solo}"
 
-SUPPORTED_MARKETS="$(./venv/bin/python - <<'PY'
-from app.tasks.market_queues import SUPPORTED_MARKETS
-print(",".join(SUPPORTED_MARKETS))
-PY
-)"
-export ENABLED_MARKETS="${ENABLED_MARKETS:-$SUPPORTED_MARKETS}"
+# Same markets as the API and Beat: backend/.env, else US.
+export ENABLED_MARKETS="${ENABLED_MARKETS:-$(./venv/bin/python -c 'from app.config import settings; print(settings.enabled_markets)')}"
 
 DATA_FETCH_QUEUES="$(./venv/bin/python - <<'PY'
 from app.tasks.market_queues import all_data_fetch_queues
