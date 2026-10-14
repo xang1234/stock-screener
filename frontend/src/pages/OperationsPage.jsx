@@ -790,7 +790,7 @@ export default function OperationsPage() {
         markets={(supportedMarkets ?? []).filter((market) => activeMarkets.has(market))}
         enabledMarkets={enabledMarkets}
         queues={queues}
-        tasks={features.tasks ? tasksQuery.data?.tasks : undefined}
+        tasks={features.tasks ? tasksQuery.data?.tasks : null}
       />
 
       <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>

@@ -3,7 +3,7 @@
  * disagree: the app's enabled markets (chosen at setup), the workers started
  * for each market's queues, and Beat's schedule (both from ENABLED_MARKETS in
  * the deployment env). This turns the page's data into plain-language
- * problems per market.
+ * problems per market, and raises none it cannot back up.
  */
 
 // Each market's queues and what stops without a worker on them.
@@ -12,17 +12,22 @@ const QUEUE_ROLES = [
   ['data_fetch', 'fetches its prices'],
   ['user_scans', 'runs its manual scans'],
 ];
+// Workers that serve one market only. The shared datafetch-global worker reads
+// every market's data_fetch queue under start_celery.sh, so it proves nothing.
+const MARKET_WORKER_FAMILIES = ['market_jobs', 'user_scans'];
 
-// Beat runs each daily pipeline Mon-Fri and records even a holiday run as
-// Skipped, so a gap beyond a long weekend means Beat is not running it.
+// Beat starts each daily pipeline Mon-Fri, and a worker records even a
+// holiday run as Skipped, so a gap beyond a long weekend means it stopped.
 const PIPELINE_SILENT_MS = 4 * 24 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
 
 // queues: the jobs payload's queue summaries (consumers null when unknown).
-// pipelineTask: the market's daily-market-pipeline task row, if loaded.
+// pipelineTask: the market's daily-market-pipeline task row, if known.
 export function marketCoverage({ market, enabled, queues = [], pipelineTask, now = Date.now() }) {
   const consumersOf = new Map(queues.map((queue) => [queue.queue, queue.consumers]));
   const workers = {};
   const problems = [];
+  const notes = [];
   QUEUE_ROLES.forEach(([family, role]) => {
     const queueName = `${family}_${market.toLowerCase()}`;
     const consumers = consumersOf.get(queueName) ?? null;
@@ -30,17 +35,22 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
     if (enabled && consumers === 0) problems.push(`No worker ${role} (${queueName}).`);
   });
 
+  // Never run is not an alarm: a fresh install or a newly enabled market has
+  // no run until its first weekday after the warm-up time.
+  let pipelineNeverRan = false;
   if (enabled && pipelineTask) {
     const startedAt = Date.parse(pipelineTask.last_run?.started_at ?? '');
-    if (Number.isNaN(startedAt)) {
-      problems.push('No daily pipeline run recorded; Beat may not schedule it.');
+    if (pipelineTask.is_enabled === false) {
+      notes.push('Scheduled pipeline runs are off (CACHE_WARMUP_ENABLED).');
+    } else if (Number.isNaN(startedAt)) {
+      pipelineNeverRan = true;
     } else if (now - startedAt > PIPELINE_SILENT_MS) {
-      const days = Math.floor((now - startedAt) / (24 * 3600 * 1000));
-      problems.push(`No daily pipeline run in ${days} days; Beat may not schedule it.`);
+      const days = Math.floor((now - startedAt) / DAY_MS);
+      problems.push(`No daily pipeline run has started in ${days} days; check Beat and the market's pipeline worker.`);
     }
   }
 
-  if (!enabled && Object.values(workers).some((count) => count > 0)) {
+  if (!enabled && MARKET_WORKER_FAMILIES.some((family) => workers[family] > 0)) {
     problems.push('Workers serve it, but it is not enabled in the app.');
   }
 
@@ -52,6 +62,8 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
     workers,
     pipelineKnown: Boolean(pipelineTask),
     pipelineRun: pipelineTask?.last_run ?? null,
+    pipelineNeverRan,
     problems,
+    notes,
   };
 }

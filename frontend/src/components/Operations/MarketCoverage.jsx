@@ -45,35 +45,40 @@ function Workers({ workers }) {
   );
 }
 
-function Status({ row }) {
-  if (row.problems.length) {
-    return (
-      <Box>
-        {row.problems.map((problem) => (
-          <Typography key={problem} variant="body2" color="warning.main">{problem}</Typography>
-        ))}
-      </Box>
-    );
+// Problems first (warning), then what is unknown or merely notable; OK only
+// when there is nothing at all to say.
+function Status({ row, tracked }) {
+  const unchecked = uncheckedOf(row, tracked);
+  if (!row.problems.length && !unchecked.length && !row.notes.length) {
+    return <Typography variant="body2" color="success.main">OK</Typography>;
   }
-  const unchecked = uncheckedOf(row);
   return (
-    <Typography variant="body2" color={unchecked.length ? 'text.secondary' : 'success.main'}>
-      {unchecked.length ? unchecked.join('; ') : 'OK'}
-    </Typography>
+    <Box>
+      {row.problems.map((problem) => (
+        <Typography key={problem} variant="body2" color="warning.main">{problem}</Typography>
+      ))}
+      {[...unchecked, ...row.notes].map((line) => (
+        <Typography key={line} variant="body2" color="text.secondary">{line}</Typography>
+      ))}
+    </Box>
   );
 }
 
-// What could not be checked for a row with no problems: never read as OK.
-function uncheckedOf(row) {
+// What could not be checked: never read as OK, and keeps the summary from
+// calling the market wired up. tracked false: pipeline runs are not shown here.
+function uncheckedOf(row, tracked) {
   const unchecked = [];
   if (Object.values(row.workers).some((count) => count === null)) unchecked.push('Worker counts unknown');
-  if (row.enabled && !row.pipelineKnown) unchecked.push('Pipeline runs unknown');
+  if (tracked && row.enabled && !row.pipelineKnown) unchecked.push('Pipeline runs unknown');
+  if (tracked && row.pipelineNeverRan) unchecked.push('No daily pipeline run recorded yet');
   return unchecked;
 }
 
 // markets: active markets in catalog order. queues: the jobs payload's queue
-// summaries. tasks: scheduled tasks, or undefined while not loaded.
+// summaries. tasks: scheduled tasks; undefined while loading, null when the
+// tasks feature is off (pipeline runs are then left out).
 export default function MarketCoverage({ markets, enabledMarkets = [], queues = [], tasks }) {
+  const tracked = tasks !== null;
   const enabled = new Set(enabledMarkets);
   const rows = [...markets]
     .sort((a, b) => Number(enabled.has(b)) - Number(enabled.has(a)))
@@ -84,7 +89,7 @@ export default function MarketCoverage({ markets, enabledMarkets = [], queues = 
       pipelineTask: tasks?.find((task) => task.market === market && task.name.startsWith('daily-market-pipeline-')),
     }));
   const needAttention = rows.filter((row) => row.problems.length).map((row) => row.market);
-  const allChecked = rows.every((row) => uncheckedOf(row).length === 0);
+  const allChecked = rows.length > 0 && rows.every((row) => uncheckedOf(row, tracked).length === 0);
 
   return (
     <Box sx={{ mt: 3 }}>
@@ -100,7 +105,7 @@ export default function MarketCoverage({ markets, enabledMarkets = [], queues = 
         </Alert>
       ) : allChecked ? (
         <Typography variant="body2" color="success.main" sx={{ mb: 1 }}>Every market shown is wired up.</Typography>
-      ) : (
+      ) : rows.length > 0 && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Some checks are not available yet.</Typography>
       )}
       <Table size="small">
@@ -131,7 +136,7 @@ export default function MarketCoverage({ markets, enabledMarkets = [], queues = 
                   {!row.pipelineKnown ? '—' : row.pipelineRun?.started_at ? ageLabel(row.pipelineRun.started_at) : 'Never'}
                 </Typography>
               </TableCell>
-              <TableCell><Status row={row} /></TableCell>
+              <TableCell><Status row={row} tracked={tracked} /></TableCell>
             </TableRow>
           ))}
         </TableBody>

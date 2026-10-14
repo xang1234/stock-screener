@@ -41,7 +41,7 @@ describe('MarketCoverage', () => {
     expect(within(rowFor('US')).getByText(/16h ago/)).toBeInTheDocument();
 
     expect(within(rowFor('JP')).getByText('No worker fetches its prices (data_fetch_jp).')).toBeInTheDocument();
-    expect(within(rowFor('JP')).getByText('No daily pipeline run recorded; Beat may not schedule it.')).toBeInTheDocument();
+    expect(within(rowFor('JP')).getByText('No daily pipeline run recorded yet')).toBeInTheDocument();
     expect(within(rowFor('JP')).getByText('Never')).toBeInTheDocument();
 
     expect(within(rowFor('CN')).getByText('Not enabled')).toBeInTheDocument();
@@ -81,12 +81,53 @@ describe('MarketCoverage', () => {
     ['Pipeline: —', 'Prices: —', 'Scans: —'].forEach((label) => {
       expect(within(rowFor('JP')).getByText(label)).toBeInTheDocument();
     });
-    expect(within(rowFor('JP')).getByText('Worker counts unknown; Pipeline runs unknown')).toBeInTheDocument();
+    expect(within(rowFor('JP')).getByText('Worker counts unknown')).toBeInTheDocument();
+    expect(within(rowFor('JP')).getByText('Pipeline runs unknown')).toBeInTheDocument();
     expect(within(rowFor('JP')).queryByText('OK')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     // Nothing was checked, so the summary must not call it wired up.
     expect(screen.queryByText('Every market shown is wired up.')).not.toBeInTheDocument();
     expect(screen.getByText('Some checks are not available yet.')).toBeInTheDocument();
+  });
+
+  it('waits, without an alert, for a new market to record its first pipeline run', () => {
+    renderWithProviders(
+      <MarketCoverage markets={['HK']} enabledMarkets={['HK']} queues={queues('HK', [1, 1, 1])} tasks={[pipeline('HK', null)]} />,
+    );
+
+    expect(within(rowFor('HK')).getByText('No daily pipeline run recorded yet')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Some checks are not available yet.')).toBeInTheDocument();
+  });
+
+  it('shows a note, not a problem, when scheduled pipeline runs are turned off', () => {
+    renderWithProviders(
+      <MarketCoverage
+        markets={['US']}
+        enabledMarkets={['US']}
+        queues={queues('US', [1, 1, 1])}
+        tasks={[{ ...pipeline('US', { started_at: hoursAgo(20 * 24) }), is_enabled: false }]}
+      />,
+    );
+
+    expect(within(rowFor('US')).getByText('Scheduled pipeline runs are off (CACHE_WARMUP_ENABLED).')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Every market shown is wired up.')).toBeInTheDocument();
+  });
+
+  it('leaves pipeline runs out when scheduled tasks are not tracked here', () => {
+    renderWithProviders(
+      <MarketCoverage markets={['US']} enabledMarkets={['US']} queues={queues('US', [1, 1, 1])} tasks={null} />,
+    );
+
+    expect(within(rowFor('US')).getByText('OK')).toBeInTheDocument();
+    expect(screen.getByText('Every market shown is wired up.')).toBeInTheDocument();
+  });
+
+  it('claims nothing over an empty table', () => {
+    renderWithProviders(<MarketCoverage markets={[]} enabledMarkets={[]} />);
+
+    expect(screen.queryByText('Every market shown is wired up.')).not.toBeInTheDocument();
   });
 
   it('shows a dash, not Never, when the market has no pipeline job in the list', () => {
