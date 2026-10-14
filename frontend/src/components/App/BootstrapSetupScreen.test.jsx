@@ -55,7 +55,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US', 'HK']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -105,7 +105,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -146,7 +146,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -194,7 +194,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -240,7 +240,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -284,7 +284,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -329,7 +329,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -373,7 +373,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -417,7 +417,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -474,7 +474,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US', 'JP']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -507,7 +507,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US', 'HK']}
-        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        deploymentMarkets={['US', 'HK', 'JP', 'TW']}
         bootstrapState="running"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -542,7 +542,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US']}
+        deploymentMarkets={['US']}
         bootstrapState="not_started"
         isStartingBootstrap={false}
         bootstrapError={null}
@@ -563,7 +563,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="HK"
         enabledMarkets={['HK', 'US']}
-        supportedMarkets={['US', 'HK']}
+        deploymentMarkets={['US', 'HK']}
         marketCatalog={{
           version: 'test.v1',
           markets: [
@@ -615,7 +615,7 @@ describe('BootstrapSetupScreen', () => {
       <BootstrapSetupScreen
         primaryMarket="US"
         enabledMarkets={['US']}
-        supportedMarkets={['US']}
+        deploymentMarkets={['US']}
         marketCatalog={{
           version: 'partial.v1',
           markets: [
@@ -639,5 +639,58 @@ describe('BootstrapSetupScreen', () => {
     );
 
     expect(screen.getByText('US (primary)')).toBeInTheDocument();
+  });
+
+  it("offers only the deployment's markets, in catalog order", () => {
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+    const catalogMarket = (code, label) => ({
+      code, label, currency: 'X', timezone: 'UTC', calendar_id: code, exchanges: [], indexes: [], capabilities: {},
+    });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        deploymentMarkets={['HK', 'US']}
+        marketCatalog={{
+          version: 'test.v1',
+          markets: [catalogMarket('US', 'United States'), catalogMarket('HK', 'Hong Kong'), catalogMarket('JP', 'Japan')],
+        }}
+        bootstrapState="not_started"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByRole('checkbox').map((box) => box.closest('label').textContent))
+      .toEqual(['United States (primary)', 'Hong Kong']);
+    expect(screen.queryByText('Japan')).not.toBeInTheDocument();
+    expect(screen.getByText("This deployment's ENABLED_MARKETS decides which markets are listed."))
+      .toBeInTheDocument();
+  });
+
+  it('starts from markets the deployment runs when the saved choice is outside it', () => {
+    useRuntimeActivityMock.mockReturnValue({ data: null });
+    const onStartBootstrap = vi.fn().mockResolvedValue();
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US', 'JP', 'HK']}
+        deploymentMarkets={['HK', 'TW']}
+        bootstrapState="not_started"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={onStartBootstrap}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
+
+    expect(onStartBootstrap).toHaveBeenCalledWith({
+      primaryMarket: 'HK',
+      enabledMarkets: ['HK'],
+    });
   });
 });

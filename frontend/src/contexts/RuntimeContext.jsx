@@ -255,6 +255,7 @@ export function mergeBootstrapCapabilities(previous, data) {
       ?? supportedMarketsFromCatalog(data.market_catalog)
       ?? supportedMarketsFromCatalog(previous?.market_catalog)
       ?? DEFAULT_CAPABILITIES.supported_markets,
+    deployment_markets: data.deployment_markets ?? previous?.deployment_markets,
   };
 }
 
@@ -389,6 +390,9 @@ export function RuntimeProvider({ children }) {
     const supportedMarkets = capabilities.supported_markets
       ?? supportedMarketsFromCatalog(marketCatalog)
       ?? supportedMarketsFromCatalog(DEFAULT_MARKET_CATALOG);
+    // A backend without deployment_markets predates the check, so any
+    // supported market is accepted there.
+    const deploymentMarkets = capabilities.deployment_markets ?? supportedMarkets;
 
     return {
       capabilities,
@@ -404,6 +408,7 @@ export function RuntimeProvider({ children }) {
       enabledMarkets: capabilities.enabled_markets ?? ['US'],
       bootstrapState: capabilities.bootstrap_state ?? 'not_started',
       supportedMarkets,
+      deploymentMarkets,
       login: (password) => loginAsync({ password }),
       logout: () => logoutAsync(),
       startBootstrap: ({ primaryMarket, enabledMarkets }) => (

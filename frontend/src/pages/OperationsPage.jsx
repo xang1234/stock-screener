@@ -661,7 +661,7 @@ export default function OperationsPage() {
   const [taskSearch, setTaskSearch] = useState('');
   const activityQuery = useRuntimeActivity();
   // Exposure routes are registered only with the themes feature.
-  const { features, enabledMarkets, supportedMarkets } = useRuntime();
+  const { features, enabledMarkets, supportedMarkets, deploymentMarkets } = useRuntime();
 
   const alertsQuery = useQuery({
     queryKey: ['telemetry', 'alerts'],
@@ -789,6 +789,7 @@ export default function OperationsPage() {
       <MarketCoverage
         markets={(supportedMarkets ?? []).filter((market) => activeMarkets.has(market))}
         enabledMarkets={enabledMarkets}
+        deploymentMarkets={deploymentMarkets}
         queues={queues}
         tasks={features.tasks ? tasksQuery.data?.tasks : null}
       />

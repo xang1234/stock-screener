@@ -223,7 +223,7 @@ function AppShell() {
     loginError,
     runtimeReady,
     startBootstrap,
-    supportedMarkets,
+    deploymentMarkets,
     bootstrapError,
   } = useRuntime();
 
@@ -250,7 +250,7 @@ function AppShell() {
         <BootstrapSetupScreen
           primaryMarket={primaryMarket}
           enabledMarkets={enabledMarkets}
-          supportedMarkets={supportedMarkets}
+          deploymentMarkets={deploymentMarkets}
           marketCatalog={marketCatalog}
           bootstrapState={bootstrapState}
           isStartingBootstrap={isStartingBootstrap}

@@ -159,4 +159,25 @@ describe('MarketCoverage', () => {
     expect(within(rowFor('US')).queryByText('Never')).not.toBeInTheDocument();
     expect(within(rowFor('US')).getByText('—')).toBeInTheDocument();
   });
+
+  it('shows only the deployment problem for an app market the deployment does not run', () => {
+    renderWithProviders(
+      <MarketCoverage
+        markets={['US', 'JP']}
+        enabledMarkets={['US', 'JP']}
+        deploymentMarkets={['US']}
+        queues={queues('US', [1, 1, 1])}
+        tasks={[
+          pipeline('US', { status: 'completed', started_at: hoursAgo(10) }),
+          pipeline('JP', null),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('1 market needs attention: JP.')).toBeInTheDocument();
+    const status = within(rowFor('JP')).getAllByRole('cell').at(-1);
+    expect(status.textContent).toBe(
+      "Enabled in the app, but not in this deployment's ENABLED_MARKETS, so nothing runs it.",
+    );
+  });
 });

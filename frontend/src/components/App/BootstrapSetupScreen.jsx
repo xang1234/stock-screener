@@ -59,6 +59,14 @@ function normalizeEnabled(primaryMarket, enabledMarkets) {
   return Array.from(new Set(next));
 }
 
+// The saved choice can name markets this deployment does not run (stored
+// before the deployment changed); start from the ones it does.
+function initialSelection(primaryMarket, enabledMarkets, offeredCodes) {
+  const primary = offeredCodes.includes(primaryMarket) ? primaryMarket : (offeredCodes[0] ?? primaryMarket);
+  const enabled = (enabledMarkets ?? []).filter((market) => offeredCodes.includes(market));
+  return { primary, enabled: normalizeEnabled(primary, enabled) };
+}
+
 function normalizeStages(stages) {
   if (!Array.isArray(stages) || stages.length === 0) {
     return FALLBACK_BOOTSTRAP_STAGES;
@@ -75,43 +83,48 @@ function normalizeStages(stages) {
 export default function BootstrapSetupScreen({
   primaryMarket,
   enabledMarkets,
-  supportedMarkets,
+  deploymentMarkets,
   marketCatalog,
   bootstrapState,
   isStartingBootstrap,
   bootstrapError,
   onStartBootstrap,
 }) {
-  const [selectedPrimary, setSelectedPrimary] = useState(primaryMarket || 'US');
-  const [selectedMarkets, setSelectedMarkets] = useState(() => (
-    normalizeEnabled(primaryMarket || 'US', enabledMarkets?.length ? enabledMarkets : ['US'])
-  ));
+  const marketOptions = useMemo(() => {
+    const deployable = deploymentMarkets ?? [];
+    const catalogMarkets = marketCatalog?.markets;
+    if (Array.isArray(catalogMarkets) && catalogMarkets.length > 0) {
+      return catalogMarkets
+        .filter((market) => deployable.includes(market.code))
+        .map((market) => ({
+          code: market.code,
+          label: market.label || market.code,
+        }));
+    }
+    return deployable.map((market) => ({
+      code: market,
+      label: market,
+    }));
+  }, [deploymentMarkets, marketCatalog?.markets]);
+  const offeredCodes = useMemo(() => marketOptions.map((market) => market.code), [marketOptions]);
+
+  const [selectedPrimary, setSelectedPrimary] = useState(
+    () => initialSelection(primaryMarket || 'US', enabledMarkets, offeredCodes).primary
+  );
+  const [selectedMarkets, setSelectedMarkets] = useState(
+    () => initialSelection(primaryMarket || 'US', enabledMarkets, offeredCodes).enabled
+  );
 
   useEffect(() => {
-    const nextPrimary = primaryMarket || 'US';
-    setSelectedPrimary(nextPrimary);
-    setSelectedMarkets(
-      normalizeEnabled(nextPrimary, enabledMarkets?.length ? enabledMarkets : [nextPrimary])
-    );
-  }, [enabledMarkets, primaryMarket]);
+    const next = initialSelection(primaryMarket || 'US', enabledMarkets, offeredCodes);
+    setSelectedPrimary(next.primary);
+    setSelectedMarkets(next.enabled);
+  }, [enabledMarkets, offeredCodes, primaryMarket]);
 
   const normalizedSelection = useMemo(
     () => normalizeEnabled(selectedPrimary, selectedMarkets),
     [selectedMarkets, selectedPrimary]
   );
-  const marketOptions = useMemo(() => {
-    const catalogMarkets = marketCatalog?.markets;
-    if (Array.isArray(catalogMarkets) && catalogMarkets.length > 0) {
-      return catalogMarkets.map((market) => ({
-        code: market.code,
-        label: market.label || market.code,
-      }));
-    }
-    return (supportedMarkets ?? []).map((market) => ({
-      code: market,
-      label: market,
-    }));
-  }, [marketCatalog?.markets, supportedMarkets]);
   const running = bootstrapState === 'running';
   const activityQuery = useRuntimeActivity({ enabled: running || isStartingBootstrap });
   const bootstrap = activityQuery.data?.bootstrap ?? null;
@@ -316,8 +329,11 @@ export default function BootstrapSetupScreen({
             </FormControl>
 
             <Box>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              <Typography variant="subtitle2">
                 Enabled markets
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                This deployment&apos;s ENABLED_MARKETS decides which markets are listed.
               </Typography>
               <FormGroup>
                 {marketOptions.map((market) => (

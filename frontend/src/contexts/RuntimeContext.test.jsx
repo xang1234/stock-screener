@@ -50,6 +50,7 @@ function RuntimeProbe() {
     enabledMarkets,
     marketCatalog,
     supportedMarkets,
+    deploymentMarkets,
     startBootstrap,
   } = useRuntime();
 
@@ -65,6 +66,7 @@ function RuntimeProbe() {
         {marketCatalog.markets.map((market) => market.label).join(',')}
       </div>
       <div data-testid="supported-markets">{supportedMarkets.join(',')}</div>
+      <div data-testid="deployment-markets">{deploymentMarkets.join(',')}</div>
       <button
         type="button"
         onClick={() => startBootstrap({ primaryMarket: 'HK', enabledMarkets: ['HK', 'US'] })}
@@ -192,6 +194,7 @@ describe('RuntimeProvider', () => {
       },
       bootstrap_state: 'running',
       supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE', 'SG', 'AU', 'MY'],
+      deployment_markets: ['US', 'HK'],
       api_base_path: '/api',
     });
 
@@ -205,6 +208,21 @@ describe('RuntimeProvider', () => {
     expect(screen.getByTestId('primary-market')).toHaveTextContent('HK');
     expect(screen.getByTestId('enabled-markets')).toHaveTextContent('HK,US');
     expect(screen.getByTestId('market-catalog-labels')).toHaveTextContent('United States,Hong Kong');
+    expect(screen.getByTestId('deployment-markets')).toHaveTextContent(/^US,HK$/);
+  });
+
+  it('treats every supported market as deployable when an older backend omits deployment markets', async () => {
+    getAppCapabilities.mockResolvedValue({
+      ...DEFAULT_CAPABILITIES,
+      supported_markets: ['US', 'HK', 'JP'],
+    });
+
+    renderRuntime();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('runtime-ready')).toHaveTextContent('true');
+    });
+    expect(screen.getByTestId('deployment-markets')).toHaveTextContent(/^US,HK,JP$/);
   });
 
   it('updates cached bootstrap state immediately after bootstrap starts', async () => {
@@ -338,5 +356,14 @@ describe('mergeBootstrapCapabilities', () => {
     });
 
     expect(merged.supported_markets).toEqual(DEFAULT_CAPABILITIES.supported_markets);
+  });
+
+  it('takes deployment markets from the bootstrap response, else keeps the known ones', () => {
+    const previous = { ...DEFAULT_CAPABILITIES, deployment_markets: ['US', 'HK'] };
+    const data = { bootstrap_required: true, primary_market: 'HK', enabled_markets: ['HK'], bootstrap_state: 'running' };
+
+    expect(mergeBootstrapCapabilities(previous, { ...data, deployment_markets: ['HK'] }).deployment_markets)
+      .toEqual(['HK']);
+    expect(mergeBootstrapCapabilities(previous, data).deployment_markets).toEqual(['US', 'HK']);
   });
 });

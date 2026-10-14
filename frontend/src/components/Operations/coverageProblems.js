@@ -23,7 +23,8 @@ const DAY_MS = 24 * 3600 * 1000;
 
 // queues: the jobs payload's queue summaries (consumers null when unknown).
 // pipelineTask: the market's daily-market-pipeline task row, if known.
-export function marketCoverage({ market, enabled, queues = [], pipelineTask, now = Date.now() }) {
+// deploymentMarkets: the deployment's ENABLED_MARKETS; undefined when unknown.
+export function marketCoverage({ market, enabled, deploymentMarkets, queues = [], pipelineTask, now = Date.now() }) {
   const consumersOf = new Map(queues.map((queue) => [queue.queue, queue.consumers]));
   const workers = {};
   const problems = [];
@@ -61,9 +62,10 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
 
   // pipelineKnown false: the task list is not loaded or has no pipeline job
   // for this market, so its last run is unknown rather than Never.
-  return {
+  const row = {
     market,
     enabled,
+    outsideDeployment: false,
     workers,
     pipelineKnown: Boolean(pipelineTask),
     pipelineRun: pipelineTask?.last_run ?? null,
@@ -71,5 +73,16 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
     pipelineScheduleUnconfirmed,
     problems,
     notes,
+  };
+  if (!enabled || !deploymentMarkets || deploymentMarkets.includes(market)) return row;
+  // Nothing starts its workers or pipeline, so those findings are only
+  // consequences of this one.
+  return {
+    ...row,
+    outsideDeployment: true,
+    pipelineNeverRan: false,
+    pipelineScheduleUnconfirmed: false,
+    problems: ["Enabled in the app, but not in this deployment's ENABLED_MARKETS, so nothing runs it."],
+    notes: [],
   };
 }

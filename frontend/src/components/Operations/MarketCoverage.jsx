@@ -67,6 +67,7 @@ function Status({ row, tracked }) {
 // What could not be checked: never read as OK, and keeps the summary from
 // calling the market wired up. tracked false: pipeline runs are not shown here.
 function uncheckedOf(row, tracked) {
+  if (row.outsideDeployment) return [];
   const unchecked = [];
   if (Object.values(row.workers).some((count) => count === null)) unchecked.push('Worker counts unknown');
   if (tracked && row.enabled && !row.pipelineKnown) unchecked.push('Pipeline runs unknown');
@@ -77,8 +78,9 @@ function uncheckedOf(row, tracked) {
 
 // markets: active markets in catalog order. queues: the jobs payload's queue
 // summaries. tasks: scheduled tasks; undefined while loading, null when the
-// tasks feature is off (pipeline runs are then left out).
-export default function MarketCoverage({ markets, enabledMarkets = [], queues = [], tasks }) {
+// tasks feature is off (pipeline runs are then left out). deploymentMarkets:
+// the deployment's ENABLED_MARKETS, undefined when unknown.
+export default function MarketCoverage({ markets, enabledMarkets = [], deploymentMarkets, queues = [], tasks }) {
   const tracked = tasks !== null;
   const enabled = new Set(enabledMarkets);
   const rows = [...markets]
@@ -86,6 +88,7 @@ export default function MarketCoverage({ markets, enabledMarkets = [], queues = 
     .map((market) => marketCoverage({
       market,
       enabled: enabled.has(market),
+      deploymentMarkets,
       queues,
       pipelineTask: tasks?.find((task) => task.market === market && task.name.startsWith('daily-market-pipeline-')),
     }));

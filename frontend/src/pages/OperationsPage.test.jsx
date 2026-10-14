@@ -136,6 +136,7 @@ describe('OperationsPage', () => {
     runtimeState.features = { themes: true };
     delete runtimeState.enabledMarkets;
     delete runtimeState.supportedMarkets;
+    delete runtimeState.deploymentMarkets;
     getScheduledTasks.mockResolvedValue({ tasks: [], total_tasks: 0 });
     vi.clearAllMocks();
     fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US], alerts: [ALERT_US] });
@@ -508,6 +509,26 @@ describe('OperationsPage', () => {
     expect(screen.getByText('No worker fetches its prices (data_fetch_jp).')).toBeInTheDocument();
     // HK has a queued job, so it is active and gets a coverage row too.
     expect(screen.getAllByRole('rowheader').map((cell) => cell.textContent)).toEqual(['US', 'JP', 'HK']);
+  });
+
+  it("blames the deployment's ENABLED_MARKETS for an app market it does not run", async () => {
+    runtimeState.enabledMarkets = ['US', 'JP'];
+    runtimeState.supportedMarkets = ['US', 'HK', 'JP'];
+    runtimeState.deploymentMarkets = ['US', 'HK'];
+    fetchOperationsJobs.mockResolvedValue({
+      ...OPERATIONS_PAYLOAD,
+      queues: [
+        { queue: 'user_scans_us', depth: 0, oldest_age_seconds: null, consumers: 1 },
+        { queue: 'data_fetch_jp', depth: 0, oldest_age_seconds: null, consumers: 0 },
+      ],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    expect(await screen.findByText('1 market needs attention: JP.')).toBeInTheDocument();
+    expect(screen.getByText("Enabled in the app, but not in this deployment's ENABLED_MARKETS, so nothing runs it."))
+      .toBeInTheDocument();
+    expect(screen.queryByText('No worker fetches its prices (data_fetch_jp).')).not.toBeInTheDocument();
   });
 
   it('feeds each market its daily pipeline run from the scheduled task list', async () => {

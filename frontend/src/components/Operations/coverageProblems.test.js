@@ -141,4 +141,45 @@ describe('marketCoverage', () => {
     expect(row.workers).toEqual({ market_jobs: null, data_fetch: null, user_scans: null });
     expect(row.problems).toEqual([]);
   });
+
+  it('names the deployment as the only problem for an app market it does not run', () => {
+    const row = marketCoverage({
+      market: 'JP',
+      enabled: true,
+      deploymentMarkets: ['US', 'HK'],
+      queues: queues('JP', { market_jobs: 0, data_fetch: 0, user_scans: 0 }),
+      pipelineTask: pipeline('JP', { status: 'completed', started_at: hoursAgo(10 * 24) }),
+      now: NOW,
+    });
+
+    expect(row.problems).toEqual([
+      "Enabled in the app, but not in this deployment's ENABLED_MARKETS, so nothing runs it.",
+    ]);
+    expect(row.notes).toEqual([]);
+    expect(row.pipelineNeverRan).toBe(false);
+  });
+
+  it('checks workers as usual for a market the deployment runs', () => {
+    const row = marketCoverage({
+      market: 'HK',
+      enabled: true,
+      deploymentMarkets: ['US', 'HK'],
+      queues: queues('HK', { market_jobs: 0, data_fetch: 1, user_scans: 1 }),
+      now: NOW,
+    });
+
+    expect(row.problems).toEqual(['No worker runs its pipeline stages (market_jobs_hk).']);
+  });
+
+  it('does not blame the deployment for a market the app has not enabled', () => {
+    const row = marketCoverage({
+      market: 'JP',
+      enabled: false,
+      deploymentMarkets: ['US'],
+      queues: queues('JP', { market_jobs: 0, data_fetch: 0, user_scans: 0 }),
+      now: NOW,
+    });
+
+    expect(row.problems).toEqual([]);
+  });
 });
