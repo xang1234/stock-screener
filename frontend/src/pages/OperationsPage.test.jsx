@@ -518,6 +518,8 @@ describe('OperationsPage', () => {
 
     expect(await screen.findAllByText('data_fetch_hk', { selector: 'td' })).toHaveLength(2);
     expect(screen.queryByText('No worker')).not.toBeInTheDocument();
+    const queueRow = screen.getByRole('row', { name: /^data_fetch_hk 1 45s/ });
+    expect(within(queueRow).getAllByRole('cell').at(-1)).toHaveTextContent(/^—$/);
   });
 
   it('falls back to the pending state when determinate jobs have unusable totals', async () => {

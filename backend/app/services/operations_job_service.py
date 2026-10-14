@@ -24,6 +24,7 @@ from app.config import settings
 from app.models.app_settings import AppSetting
 from app.models.scan_result import Scan
 from app.services.job_backend import CeleryJobBackend
+from app.services.redis_pool import get_redis_client
 from app.services.market_activity_service import (
     MARKET_ACTIVITY_KEY_PREFIX,
     RUNTIME_ACTIVITY_CATEGORY,
@@ -53,6 +54,12 @@ HEARTBEAT_STUCK_AFTER_SECONDS = 30 * 60
 LEASE_STUCK_TTL_SECONDS = 10 * 60
 # A queued message whose queue no responding worker reads: it never runs.
 NO_WORKER_WAIT_REASON = "no_worker_for_queue"
+# Each worker's queues as it last answered inspect, so a worker silent this
+# poll (a solo-pool worker busy with a task answers nothing) still counts.
+WORKER_QUEUES_KEY = "operations:worker_queues"
+# ponytail: a dead worker still counts this long, so its queue flags up to a
+# day late; a busy solo-pool worker can stay silent for hours of fetching.
+WORKER_QUEUES_MEMORY = timedelta(hours=24)
 
 SCAN_TASK_NAME = "app.tasks.scan_tasks.run_bulk_scan"
 RELEASE_PIPELINE_CLAIM_TASK = "app.tasks.daily_market_pipeline_tasks.release_daily_market_pipeline_claim"
@@ -777,12 +784,52 @@ class OperationsJobService:
 
     @staticmethod
     def _queue_consumers(workers: list[dict[str, Any]]) -> dict[str, int] | None:
-        """Responding workers per queue, or None when no worker answered
-        (an inspect timeout, or every solo-pool worker busy): unknown, which
-        must not read as "nobody serves this queue"."""
-        if not any(worker["queues"] for worker in workers):
+        """Workers per queue, counting a worker silent this poll by the queues
+        it last answered with. None (unknown, which must not read as "nobody
+        serves this queue") when no worker answered, the cache Redis holding
+        those queues is unavailable, or a worker answered without its queues
+        and none are remembered."""
+        answered = {worker["worker"]: worker["queues"] for worker in workers if worker["queues"]}
+        client = get_redis_client()
+        if not answered or client is None:
             return None
-        return Counter(queue for worker in workers for queue in worker["queues"])
+        now = _utcnow()
+        try:
+            client.hset(
+                WORKER_QUEUES_KEY,
+                mapping={
+                    name: json.dumps({"queues": queues, "seen_at": now.isoformat()})
+                    for name, queues in answered.items()
+                },
+            )
+            stored = client.hgetall(WORKER_QUEUES_KEY)
+        except redis.RedisError:
+            logger.warning("Could not read remembered worker queues", exc_info=True)
+            return None
+
+        queue_lists: dict[str, list[str]] = {}
+        expired: list[bytes] = []
+        for raw_name, raw_entry in stored.items():
+            try:
+                entry = json.loads(raw_entry)
+                queues, seen_at = entry["queues"], _parse_iso(entry["seen_at"])
+            except (ValueError, TypeError, KeyError):
+                expired.append(raw_name)
+                continue
+            if not isinstance(queues, list) or seen_at is None or now - seen_at > WORKER_QUEUES_MEMORY:
+                expired.append(raw_name)
+                continue
+            queue_lists[raw_name.decode()] = queues
+        if expired:
+            # Worker names carry the container hostname, new on each restart.
+            try:
+                client.hdel(WORKER_QUEUES_KEY, *expired)
+            except redis.RedisError:
+                logger.warning("Could not prune remembered worker queues", exc_info=True)
+
+        if any(worker["worker"] not in queue_lists for worker in workers):
+            return None
+        return Counter(queue for queues in queue_lists.values() for queue in queues)
 
     def _queue_summaries(
         self, queued_jobs: Iterable[_JobRecord], consumers: dict[str, int] | None
