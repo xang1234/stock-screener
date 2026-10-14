@@ -875,6 +875,75 @@ def _ready_status(primary_market="US", enabled_markets=("US",)):
 
 
 @pytest.mark.asyncio
+async def test_runtime_bootstrap_accepts_a_primary_only_request_on_a_non_us_deployment(
+    client, monkeypatch
+):
+    # The bootstrap plan turns an empty list into the primary market alone,
+    # so the US default PATCH applies must not be checked here.
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(module.settings, "enabled_markets", "HK")
+    queue = MagicMock(return_value="task-hk")
+    monkeypatch.setattr(module, "queue_local_runtime_bootstrap", queue)
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _ready_status())
+    monkeypatch.setattr(module, "_refresh_runtime_bootstrap_status", lambda _db: _ready_status())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        response = await client.post(
+            "/api/v1/runtime/bootstrap",
+            json={"primary_market": "HK", "enabled_markets": []},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    queue.assert_called_once_with(primary_market="HK", enabled_markets=[])
+
+
+@pytest.mark.asyncio
+async def test_runtime_bootstrap_failure_saves_the_markets_its_plan_had(
+    client, monkeypatch
+):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+    from app.tasks.runtime_bootstrap_tasks import BootstrapDispatchError
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(module.settings, "enabled_markets", "HK")
+    saved = []
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _ready_status())
+    monkeypatch.setattr(module, "save_runtime_preferences", lambda _db, **kwargs: saved.append(kwargs))
+
+    def _queue(**_kwargs):
+        raise BootstrapDispatchError(
+            "queue unavailable",
+            primary_market="HK",
+            enabled_markets=["HK"],
+            primary_task_id=None,
+            market_task_ids={},
+        )
+
+    monkeypatch.setattr(module, "queue_local_runtime_bootstrap", _queue)
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        with pytest.raises(BootstrapDispatchError, match="queue unavailable"):
+            await client.post(
+                "/api/v1/runtime/bootstrap",
+                json={"primary_market": "HK", "enabled_markets": []},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    # An empty list saved as-is would become the service default and add US,
+    # which this deployment does not run.
+    assert [call["enabled_markets"] for call in saved] == [["HK"]]
+
+
+@pytest.mark.asyncio
 async def test_runtime_bootstrap_rejects_markets_outside_the_deployment(
     client, monkeypatch
 ):

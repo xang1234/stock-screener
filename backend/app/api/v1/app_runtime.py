@@ -63,12 +63,8 @@ def _bootstrap_status_payload(status: object) -> dict[str, object]:
     }
 
 
-def _reject_markets_outside_deployment(
-    primary_market: str,
-    enabled_markets: list[str],
-) -> None:
-    # An empty list is saved as the service default, so check that instead.
-    requested = [primary_market, *(enabled_markets or DEFAULT_ENABLED_MARKETS)]
+def _reject_markets_outside_deployment(requested: list[str]) -> None:
+    """422 unless every market the request will actually use is deployed."""
     try:
         message = markets_outside_deployment_message(
             requested, settings.enabled_markets_list
@@ -186,7 +182,9 @@ def start_runtime_bootstrap(
     db: Session = Depends(get_db),
 ) -> RuntimeBootstrapStartResponse:
     """Persist local bootstrap choices and queue the primary-market sync."""
-    _reject_markets_outside_deployment(request.primary_market, request.enabled_markets)
+    # The bootstrap plan reads an empty list as the primary market alone.
+    planned_markets = request.enabled_markets or [request.primary_market]
+    _reject_markets_outside_deployment([request.primary_market, *planned_markets])
     previous_status = get_runtime_bootstrap_status(db)
     if _has_unfenced_running_bootstrap(db, previous_status):
         raise _bootstrap_already_running_error(previous_status)
@@ -203,7 +201,7 @@ def start_runtime_bootstrap(
             save_runtime_preferences(
                 db,
                 primary_market=request.primary_market,
-                enabled_markets=request.enabled_markets,
+                enabled_markets=planned_markets,
                 bootstrap_state=previous_status.bootstrap_state,
             )
             raise
@@ -241,7 +239,10 @@ def update_runtime_markets(
     db: Session = Depends(get_db),
 ) -> RuntimeBootstrapStatusResponse:
     """Update persisted local market preferences without re-running bootstrap."""
-    _reject_markets_outside_deployment(request.primary_market, request.enabled_markets)
+    # The service saves an empty list as its default markets.
+    _reject_markets_outside_deployment(
+        [request.primary_market, *(request.enabled_markets or DEFAULT_ENABLED_MARKETS)]
+    )
     current_status = get_runtime_bootstrap_status(db)
     prefs = save_runtime_preferences(
         db,
