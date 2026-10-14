@@ -387,7 +387,9 @@ export default function SchedulesSection({ activeMarkets }) {
     tasks,
     (task) => task.market,
     activeMarkets,
-    (task) => ATTENTION_STATUSES.has(task.last_run?.status),
+    // A mid-chain pipeline reads Handed off; its claim is live state. Other
+    // blockers (not a trading day) would keep every idle market up front.
+    (task) => ATTENTION_STATUSES.has(task.last_run?.status) || task.run_blocker?.reason === PIPELINE_ACTIVE,
   );
   const onRun = (taskName) => runMutation.mutate(taskName);
 

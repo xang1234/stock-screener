@@ -727,8 +727,9 @@ export default function OperationsPage() {
   const queues = jobsPayload?.queues ?? EMPTY_ARRAY;
   const workers = jobsPayload?.workers ?? EMPTY_ARRAY;
   const leases = jobsPayload?.leases ?? EMPTY_LEASES;
-  // Until the jobs data loads this is the enabled markets alone, so rows
-  // only ever appear (e.g. CN, served by a worker), never vanish.
+  // Until the jobs data loads (or while it fails) this is the enabled markets
+  // and open alerts alone, so a worker-served market such as CN waits behind
+  // the disclosure until it does.
   const activeMarkets = findActiveMarkets({ enabledMarkets, supportedMarkets, jobsPayload, alerts });
   const queueSplit = splitByMarket(queues, (queue) => queueMarket(queue.queue, supportedMarkets), activeMarkets);
   const summarySplit = splitByMarket(summaries, (summary) => summary.market, activeMarkets);

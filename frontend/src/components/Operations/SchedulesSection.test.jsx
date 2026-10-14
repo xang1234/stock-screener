@@ -79,6 +79,26 @@ describe('SchedulesSection', () => {
     expect(within(rowFor('Daily Market Pipeline (IN)')).getByRole('button', { name: 'Run Daily Market Pipeline (IN) now' })).toBeEnabled();
   });
 
+  it('keeps a pipeline that is mid-chain visible, but not one blocked by a holiday', async () => {
+    getScheduledTasks.mockResolvedValue(payload([
+      {
+        ...task('daily-market-pipeline-de', 'Daily Market Pipeline (DE)', lastRun('dispatched')),
+        market: 'DE',
+        run_blocker: { reason: 'market_pipeline_already_active', active_since: '2026-10-14T08:00:00Z' },
+      },
+      {
+        ...task('daily-market-pipeline-in', 'Daily Market Pipeline (IN)', null),
+        market: 'IN',
+        run_blocker: { reason: 'not_trading_day', message: 'Not a trading day' },
+      },
+    ]));
+
+    renderWithProviders(<SchedulesSection activeMarkets={new Set(['US'])} />);
+
+    expect(await screen.findByText('Daily Market Pipeline (DE)')).toBeVisible();
+    expect(screen.queryByText('Daily Market Pipeline (IN)')).not.toBeInTheDocument();
+  });
+
   it('shows every job while the active markets are unknown', async () => {
     getScheduledTasks.mockResolvedValue(payload([
       { ...task('daily-market-pipeline-de', 'Daily Market Pipeline (DE)', null), market: 'DE' },

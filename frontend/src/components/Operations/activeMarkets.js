@@ -19,8 +19,10 @@ export function findActiveMarkets({ enabledMarkets = [], supportedMarkets = [], 
     if (market) active.add(market);
   };
   jobsPayload?.workers?.forEach((worker) => worker.queues?.forEach(addQueue));
+  // consumers also counts a worker that missed this inspect poll (busy solo
+  // pool) by its heartbeat, which workers[] alone would drop.
   jobsPayload?.queues?.forEach((queue) => {
-    if (queue.depth > 0) addQueue(queue.queue);
+    if (queue.depth > 0 || queue.consumers > 0) addQueue(queue.queue);
   });
   jobsPayload?.jobs?.forEach((job) => {
     if (job.market) active.add(job.market);

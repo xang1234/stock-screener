@@ -43,6 +43,20 @@ describe('findActiveMarkets', () => {
     expect([...active].sort()).toEqual(['HK', 'IN', 'KR', 'TW', 'US']);
   });
 
+  it('counts a market whose queue a silent worker serves', () => {
+    // A busy solo-pool worker misses the inspect poll, so it is absent from
+    // workers; the backend still counts it from its heartbeat (consumers).
+    const active = findActiveMarkets({
+      supportedMarkets: SUPPORTED,
+      jobsPayload: {
+        workers: [],
+        queues: [{ queue: 'market_jobs_cn', depth: 0, consumers: 1 }, { queue: 'data_fetch_de', depth: 0, consumers: 0 }],
+      },
+    });
+
+    expect([...active]).toEqual(['CN']);
+  });
+
   it('copes with data that has not loaded yet', () => {
     expect([...findActiveMarkets({})]).toEqual([]);
   });
