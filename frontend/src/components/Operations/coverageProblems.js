@@ -38,6 +38,7 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
   // Never run is not an alarm: a fresh install or a newly enabled market has
   // no run until its first weekday after the warm-up time.
   let pipelineNeverRan = false;
+  let pipelineScheduleUnconfirmed = false;
   if (enabled && pipelineTask) {
     const startedAt = Date.parse(pipelineTask.last_run?.started_at ?? '');
     if (pipelineTask.is_enabled === false) {
@@ -45,8 +46,12 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
     } else if (Number.isNaN(startedAt)) {
       pipelineNeverRan = true;
     } else if (now - startedAt > PIPELINE_SILENT_MS) {
+      // last_run is the latest of any trigger, so no run at all since.
       const days = Math.floor((now - startedAt) / DAY_MS);
       problems.push(`No daily pipeline run has started in ${days} days; check Beat and the market's pipeline worker.`);
+    } else if (pipelineTask.last_run.triggered_by === 'manual') {
+      // A recent Run click says nothing about Beat; the next scheduled run will.
+      pipelineScheduleUnconfirmed = true;
     }
   }
 
@@ -63,6 +68,7 @@ export function marketCoverage({ market, enabled, queues = [], pipelineTask, now
     pipelineKnown: Boolean(pipelineTask),
     pipelineRun: pipelineTask?.last_run ?? null,
     pipelineNeverRan,
+    pipelineScheduleUnconfirmed,
     problems,
     notes,
   };

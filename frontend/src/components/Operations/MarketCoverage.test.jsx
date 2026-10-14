@@ -100,6 +100,21 @@ describe('MarketCoverage', () => {
     expect(screen.getByText('Some checks are not available yet.')).toBeInTheDocument();
   });
 
+  it('does not call a market wired up on the strength of a manual run', () => {
+    renderWithProviders(
+      <MarketCoverage
+        markets={['US']}
+        enabledMarkets={['US']}
+        queues={queues('US', [1, 1, 1])}
+        tasks={[pipeline('US', { status: 'dispatched', started_at: hoursAgo(1), triggered_by: 'manual' })]}
+      />,
+    );
+
+    expect(within(rowFor('US')).getByText("Last run was manual, so Beat's schedule is not confirmed")).toBeInTheDocument();
+    expect(within(rowFor('US')).queryByText('OK')).not.toBeInTheDocument();
+    expect(screen.getByText('Some checks are not available yet.')).toBeInTheDocument();
+  });
+
   it('shows a note, not a problem, when scheduled pipeline runs are turned off', () => {
     renderWithProviders(
       <MarketCoverage

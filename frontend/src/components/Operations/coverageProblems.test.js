@@ -75,6 +75,24 @@ describe('marketCoverage', () => {
       .toEqual(["No daily pipeline run has started in 5 days; check Beat and the market's pipeline worker."]);
   });
 
+  it('does not let a recent manual run vouch for Beat', () => {
+    const base = { market: 'HK', enabled: true, queues: queues('HK', ALL_SERVED), now: NOW };
+
+    const manual = marketCoverage({
+      ...base,
+      pipelineTask: pipeline('HK', { status: 'dispatched', started_at: hoursAgo(2), triggered_by: 'manual' }),
+    });
+    expect(manual.problems).toEqual([]);
+    expect(manual.pipelineScheduleUnconfirmed).toBe(true);
+
+    // last_run is the latest of any trigger: an old manual run means no run at all since.
+    const stale = marketCoverage({
+      ...base,
+      pipelineTask: pipeline('HK', { status: 'completed', started_at: hoursAgo(6 * 24), triggered_by: 'manual' }),
+    });
+    expect(stale.problems).toEqual(["No daily pipeline run has started in 6 days; check Beat and the market's pipeline worker."]);
+  });
+
   it('notes, without alarming, that scheduled runs are turned off', () => {
     const row = marketCoverage({
       market: 'US',

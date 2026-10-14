@@ -71,6 +71,7 @@ function uncheckedOf(row, tracked) {
   if (Object.values(row.workers).some((count) => count === null)) unchecked.push('Worker counts unknown');
   if (tracked && row.enabled && !row.pipelineKnown) unchecked.push('Pipeline runs unknown');
   if (tracked && row.pipelineNeverRan) unchecked.push('No daily pipeline run recorded yet');
+  if (tracked && row.pipelineScheduleUnconfirmed) unchecked.push("Last run was manual, so Beat's schedule is not confirmed");
   return unchecked;
 }
 
