@@ -41,7 +41,9 @@ import { useRuntimeActivity } from '../hooks/useRuntimeActivity';
 import { useRuntime } from '../contexts/RuntimeContext';
 import SocialSignalHealthPanel from '../features/socialSignals/SocialSignalHealthPanel';
 import ExposureResearchWorkspace from '../features/companyExposure/ExposureResearchWorkspace';
+import { getScheduledTasks } from '../api/tasks';
 import SchedulesSection from '../components/Operations/SchedulesSection';
+import MarketCoverage from '../components/Operations/MarketCoverage';
 import InactiveMarkets from '../components/Operations/InactiveMarkets';
 import {
   ACTIVE_JOB_STATES,
@@ -683,6 +685,14 @@ export default function OperationsPage() {
     retry: 1,
   });
 
+  // The same cached list SchedulesSection polls; coverage reads each market's
+  // daily pipeline run from it.
+  const tasksQuery = useQuery({
+    queryKey: ['scheduledTasks'],
+    queryFn: getScheduledTasks,
+    enabled: Boolean(features.tasks),
+  });
+
   const ackMutation = useMutation({
     mutationFn: (alertId) => acknowledgeAlert(alertId, 'operator'),
     onSuccess: () => {
@@ -775,6 +785,13 @@ export default function OperationsPage() {
       <Typography variant="body2" color="text.secondary" gutterBottom>
         Per-market telemetry, live queue inventory, and safe background-job controls.
       </Typography>
+
+      <MarketCoverage
+        markets={(supportedMarkets ?? []).filter((market) => activeMarkets.has(market))}
+        enabledMarkets={enabledMarkets}
+        queues={queues}
+        tasks={features.tasks ? tasksQuery.data?.tasks : undefined}
+      />
 
       <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>
         Market activity

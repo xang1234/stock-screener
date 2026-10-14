@@ -489,6 +489,25 @@ describe('OperationsPage', () => {
     expect(screen.getByText(/Batch 3\/5 · refreshing prices/)).toBeInTheDocument();
   });
 
+  it('opens with market coverage that names a market enabled without workers', async () => {
+    runtimeState.enabledMarkets = ['US', 'JP'];
+    runtimeState.supportedMarkets = ['US', 'HK', 'JP'];
+    fetchOperationsJobs.mockResolvedValue({
+      ...OPERATIONS_PAYLOAD,
+      queues: [
+        { queue: 'user_scans_us', depth: 0, oldest_age_seconds: null, consumers: 1 },
+        { queue: 'data_fetch_jp', depth: 0, oldest_age_seconds: null, consumers: 0 },
+      ],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    expect(await screen.findByText('1 market needs attention: JP.')).toBeInTheDocument();
+    expect(screen.getByText('No worker fetches its prices (data_fetch_jp).')).toBeInTheDocument();
+    // HK has a queued job, so it is active and gets a coverage row too.
+    expect(screen.getAllByRole('rowheader').map((cell) => cell.textContent)).toEqual(['US', 'JP', 'HK']);
+  });
+
   it('puts queues, idle leases and telemetry of inactive markets behind disclosures', async () => {
     runtimeState.enabledMarkets = ['US'];
     runtimeState.supportedMarkets = ['US', 'HK', 'DE'];
