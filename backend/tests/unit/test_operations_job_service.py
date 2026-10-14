@@ -1216,6 +1216,66 @@ def test_without_the_cache_redis_counts_are_unknown():
     assert payload["jobs"][0]["wait_reason"] is None
 
 
+def test_a_worker_registered_at_startup_counts_before_any_poll_saw_it():
+    # It took a task right after starting (solo pool: silent), so no poll
+    # ever recorded its queues; its startup registration did.
+    from app.celery_app import _register_worker_queues
+
+    memory = _FakeHashRedis()
+    sender = SimpleNamespace(
+        hostname="datafetch-global@h",
+        app=SimpleNamespace(
+            amqp=SimpleNamespace(queues=SimpleNamespace(consume_from={"data_fetch_jp": object(), "data_fetch_us": object()}))
+        ),
+    )
+    with patch("app.services.operations_job_service.get_redis_client", return_value=memory):
+        _register_worker_queues(sender)
+
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"general@h": [{"name": "celery"}]},
+        memory=memory,
+    )
+
+    assert payload["jobs"][0]["wait_reason"] is None
+    queues = {queue["queue"]: queue for queue in payload["queues"]}
+    assert queues["data_fetch_jp"]["consumers"] == 1
+
+
+def test_startup_registration_never_blocks_worker_start():
+    from app.celery_app import _register_worker_queues
+
+    with patch("app.services.operations_job_service.get_redis_client", return_value=None):
+        _register_worker_queues(SimpleNamespace(hostname="w@h"))  # no app attribute
+
+
+def test_a_worker_answering_with_no_queues_reads_none():
+    # An explicit empty list is a known zero, not a missing reply.
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"datafetch-global@h": []},
+    )
+
+    assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
+
+
+def test_a_remembered_entry_with_non_string_queues_is_ignored():
+    memory = _FakeHashRedis()
+    fresh = datetime.now(timezone.utc).isoformat()
+    memory.hset(
+        "operations:worker_queues",
+        {"datafetch-global@h": json.dumps({"queues": [{}], "seen_at": fresh})},
+    )
+
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"general@h": [{"name": "celery"}]},
+        memory=memory,
+    )
+
+    assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
+
+
 def test_a_corrupt_remembered_entry_is_ignored():
     memory = _FakeHashRedis()
     memory.hset("operations:worker_queues", {"datafetch-global@h": "not json"})

@@ -115,6 +115,29 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def remember_worker_queues(worker_queues: dict[str, list[str]], *, client: Any = None) -> bool:
+    """Record each worker's queues with the time seen. A worker registers at
+    startup too, so one silent from its first task is still known. False when
+    the cache Redis is unavailable."""
+    if client is None:
+        client = get_redis_client()
+    if client is None:
+        return False
+    seen_at = _utcnow().isoformat()
+    try:
+        client.hset(
+            WORKER_QUEUES_KEY,
+            mapping={
+                name: json.dumps({"queues": queues, "seen_at": seen_at})
+                for name, queues in worker_queues.items()
+            },
+        )
+    except redis.RedisError:
+        logger.warning("Could not record worker queues", exc_info=True)
+        return False
+    return True
+
+
 def _parse_iso(value: Any) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
@@ -478,7 +501,9 @@ class OperationsJobService:
         record.cancel_strategy = _cancel_strategy_for(record)
         return record
 
-    def _inspect_jobs(self) -> tuple[list[_JobRecord], list[dict[str, Any]]]:
+    def _inspect_jobs(self) -> tuple[list[_JobRecord], list[dict[str, Any]], set[str]]:
+        """Live jobs, the worker roster, and the workers that answered
+        active_queues (an empty queue list there is a known zero)."""
         inspect = self._inspect()
         stats = inspect.stats() or {}
         active = inspect.active() or {}
@@ -520,7 +545,7 @@ class OperationsJobService:
                     jobs.append(record)
 
         jobs.extend(self._scheduled_records(scheduled, queue_map))
-        return jobs, workers
+        return jobs, workers, set(queue_map)
 
     def _scheduled_records(
         self, scheduled: dict[str, Any], queue_map: dict[str, list[str]]
@@ -783,25 +808,23 @@ class OperationsJobService:
             records[task_id] = record
 
     @staticmethod
-    def _queue_consumers(workers: list[dict[str, Any]]) -> dict[str, int] | None:
+    def _queue_consumers(
+        workers: list[dict[str, Any]], queue_repliers: set[str]
+    ) -> dict[str, int] | None:
         """Workers per queue, counting a worker silent this poll by the queues
-        it last answered with. None (unknown, which must not read as "nobody
-        serves this queue") when no worker answered, the cache Redis holding
-        those queues is unavailable, or a worker answered without its queues
-        and none are remembered."""
-        answered = {worker["worker"]: worker["queues"] for worker in workers if worker["queues"]}
+        it last recorded (here or at startup). None (unknown, which must not
+        read as "nobody serves this queue") when no worker answered
+        active_queues, the cache Redis holding those queues is unavailable, or
+        a worker answered without its queues and none are remembered.
+
+        ponytail: a worker never recorded (cache Redis flushed while it is
+        silent) still reads as missing until it answers or restarts."""
+        answered = {worker["worker"]: worker["queues"] for worker in workers if worker["worker"] in queue_repliers}
         client = get_redis_client()
-        if not answered or client is None:
+        if not answered or client is None or not remember_worker_queues(answered, client=client):
             return None
         now = _utcnow()
         try:
-            client.hset(
-                WORKER_QUEUES_KEY,
-                mapping={
-                    name: json.dumps({"queues": queues, "seen_at": now.isoformat()})
-                    for name, queues in answered.items()
-                },
-            )
             stored = client.hgetall(WORKER_QUEUES_KEY)
         except redis.RedisError:
             logger.warning("Could not read remembered worker queues", exc_info=True)
@@ -816,7 +839,12 @@ class OperationsJobService:
             except (ValueError, TypeError, KeyError):
                 expired.append(raw_name)
                 continue
-            if not isinstance(queues, list) or seen_at is None or now - seen_at > WORKER_QUEUES_MEMORY:
+            if (
+                not isinstance(queues, list)
+                or not all(isinstance(queue, str) for queue in queues)
+                or seen_at is None
+                or now - seen_at > WORKER_QUEUES_MEMORY
+            ):
                 expired.append(raw_name)
                 continue
             queue_lists[raw_name.decode()] = queues
@@ -929,11 +957,11 @@ class OperationsJobService:
     def list_jobs(self, db: Session) -> dict[str, Any]:
         lease_snapshot = self._lease_snapshot()
         queued_jobs = self._queued_jobs(lease_snapshot)
-        inspect_jobs, workers = self._inspect_jobs()
+        inspect_jobs, workers, queue_repliers = self._inspect_jobs()
 
         records = self._merge_live_jobs([*queued_jobs, *inspect_jobs])
         self._augment_with_runtime_activity(db, records, lease_snapshot)
-        consumers = self._queue_consumers(workers)
+        consumers = self._queue_consumers(workers, queue_repliers)
         cancel_requests = self._cancel_requests(db)
         for record in records.values():
             # Only a message still sitting in a broker list: its queue is known
