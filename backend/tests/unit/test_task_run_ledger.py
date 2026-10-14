@@ -903,8 +903,16 @@ def test_scheduled_tasks_group_into_one_job_per_type(db_session):
     from app.tasks.market_queues import SUPPORTED_MARKETS
 
     groups = defaultdict(list)
+    descriptions = defaultdict(set)
     for task in TaskRegistryService().get_all_scheduled_tasks(db_session):
         groups[(task["job_type"], task["job_name"], task["advanced"])].append(task["market"])
+        descriptions[task["job_type"]].add(task["job_description"])
+
+    # The row describes the job once, so no market's own wording may stand in.
+    assert descriptions["weekly-universe-refresh"] == {
+        "Refreshes each market's stock list: adds new listings, deactivates removed ones, updates metadata"
+    }
+    assert all(len(texts) == 1 for texts in descriptions.values())
 
     per_market = sorted(SUPPORTED_MARKETS)
     assert {key: sorted(markets, key=str) for key, markets in groups.items()} == {

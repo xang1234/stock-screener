@@ -49,6 +49,10 @@ def _weekly_universe_task_definitions() -> Dict[str, Dict]:
             ),
             'job_type': 'weekly-universe-refresh',
             'job_name': 'Weekly Universe Refresh',
+            'job_description': (
+                "Refreshes each market's stock list: adds new listings, "
+                'deactivates removed ones, updates metadata'
+            ),
             'display_name': f'Weekly Universe Refresh ({market})',
             'description': (
                 'Adds new US stocks, deactivates removed, updates metadata'
@@ -628,6 +632,7 @@ class TaskRegistryService:
                 # Per-market entries share a job_type; a shared job is its own.
                 'job_type': task_info.get('job_type', task_name),
                 'job_name': task_info.get('job_name', task_info['display_name']),
+                'job_description': task_info.get('job_description', task_info['description']),
                 'advanced': bool(task_info.get('advanced')),
                 'last_run': None,
             }

@@ -40,6 +40,7 @@ class ScheduledTaskResponse(BaseModel):
     market: Optional[str] = Field(None, description="Market the job runs for; None for shared jobs")
     job_type: str = Field(..., description="Groups a job's per-market entries; a shared job's own name")
     job_name: str = Field(..., description="The job's name without its market")
+    job_description: str = Field(..., description="What the job does in every market it runs for")
     advanced: bool = Field(False, description="Manual-only or destructive; listed apart from routine jobs")
     last_run: Optional[LastRunInfo] = Field(None, description="Last execution details")
     run_blocker: Optional[Dict[str, Any]] = Field(
