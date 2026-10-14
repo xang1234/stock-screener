@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timedelta, timezone
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
@@ -1038,11 +1039,19 @@ def test_lease_snapshot_lists_only_held_chain_claims():
     assert snapshot["pipeline_chain"] == {"US": holder}
 
 
+ROSTER = "operations:worker_queues"
+ROSTER_SINCE = "operations:worker_queues_since"
+
+
 class _FakeHashRedis:
     """Bytes in, bytes out, like the binary-mode cache client."""
 
-    def __init__(self):
+    def __init__(self, *, warm=True):
         self.hashes: dict[bytes, dict[bytes, bytes]] = {}
+        self.values: dict[bytes, bytes] = {}
+        if warm:
+            # Kept long enough that every live worker has beaten since.
+            self.set(ROSTER_SINCE, (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
 
     @staticmethod
     def _b(value):
@@ -1060,13 +1069,22 @@ class _FakeHashRedis:
         for key in keys:
             self.hashes.get(self._b(name), {}).pop(self._b(key), None)
 
+    def set(self, name, value, nx=False):
+        if nx and self._b(name) in self.values:
+            return None
+        self.values[self._b(name)] = self._b(value)
+        return True
+
+    def get(self, name):
+        return self.values.get(self._b(name))
+
 
 _NO_REDIS = object()
 
 
 def _list_with_workers(messages_by_queue, active_queues, market_holders=None, *, stats=None, memory=None):
     """list_jobs with the given queued messages and worker replies. memory is
-    the cache Redis that remembers worker queues (_NO_REDIS: unavailable)."""
+    the cache Redis holding the worker roster (_NO_REDIS: unavailable)."""
     service = OperationsJobService()
     service._broker = lambda: _FakeBroker(messages_by_queue)
 
@@ -1101,6 +1119,24 @@ def _jp_refresh():
     )
 
 
+def _beat_once(memory, worker, queues):
+    """One heartbeat from a worker, as its background thread sends it."""
+    from app.services.operations_job_service import run_worker_queue_heartbeat
+
+    stop = threading.Event()
+    stop.set()
+    with patch("app.services.operations_job_service.get_redis_client", return_value=memory):
+        run_worker_queue_heartbeat(worker, queues, stop)
+
+
+def _entry(seen_at, queues=("data_fetch_jp",)):
+    return json.dumps({"queues": list(queues), "seen_at": seen_at.isoformat()})
+
+
+def _consumers(payload):
+    return {queue["queue"]: queue["consumers"] for queue in payload["queues"]}
+
+
 def test_queued_job_on_a_queue_no_responding_worker_reads_says_so():
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
@@ -1110,9 +1146,8 @@ def test_queued_job_on_a_queue_no_responding_worker_reads_says_so():
     job = payload["jobs"][0]
     assert job["task_id"] == "fetch-jp-1"
     assert job["wait_reason"] == "no_worker_for_queue"
-    queues = {queue["queue"]: queue for queue in payload["queues"]}
-    assert queues["data_fetch_jp"]["consumers"] == 0
-    assert queues["data_fetch_us"]["consumers"] == 1
+    assert _consumers(payload)["data_fetch_jp"] == 0
+    assert _consumers(payload)["data_fetch_us"] == 1
 
 
 def test_no_worker_outranks_waiting_for_the_market_lease():
@@ -1143,22 +1178,14 @@ def test_no_inspect_reply_is_unknown_not_unserved():
     payload = _list_with_workers({"data_fetch_jp": [_jp_refresh()]}, {})
 
     assert payload["jobs"][0]["wait_reason"] is None
-    queues = {queue["queue"]: queue for queue in payload["queues"]}
-    assert queues["data_fetch_jp"]["consumers"] is None
+    assert _consumers(payload)["data_fetch_jp"] is None
 
 
-def test_a_busy_silent_worker_still_counts_by_its_remembered_queues():
+def test_a_busy_silent_worker_counts_by_its_heartbeat():
     # Local solo pool: one datafetch worker reads every data_fetch queue and
-    # answers nothing while it fetches; the other workers do answer.
+    # answers no inspect while it fetches; its heartbeat thread still runs.
     memory = _FakeHashRedis()
-    _list_with_workers(
-        {},
-        {
-            "datafetch-global@h": [{"name": "data_fetch_us"}, {"name": "data_fetch_jp"}],
-            "general@h": [{"name": "celery"}],
-        },
-        memory=memory,
-    )
+    _beat_once(memory, "datafetch-global@h", ["data_fetch_jp", "data_fetch_us"])
 
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
@@ -1167,17 +1194,12 @@ def test_a_busy_silent_worker_still_counts_by_its_remembered_queues():
     )
 
     assert payload["jobs"][0]["wait_reason"] is None
-    queues = {queue["queue"]: queue for queue in payload["queues"]}
-    assert queues["data_fetch_jp"]["consumers"] == 1
+    assert _consumers(payload)["data_fetch_jp"] == 1
 
 
-def test_a_long_silent_worker_is_forgotten():
+def test_a_worker_that_stopped_beating_drops_out_within_minutes():
     memory = _FakeHashRedis()
-    stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    memory.hset(
-        "operations:worker_queues",
-        {"datafetch-global@h": json.dumps({"queues": ["data_fetch_jp"], "seen_at": stale})},
-    )
+    memory.hset(ROSTER, {"datafetch-global@h": _entry(datetime.now(timezone.utc) - timedelta(minutes=6))})
 
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
@@ -1187,13 +1209,37 @@ def test_a_long_silent_worker_is_forgotten():
 
     assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
     # Pruned, not just skipped: Docker worker names change on every restart.
-    assert b"datafetch-global@h" not in memory.hgetall("operations:worker_queues")
-    assert b"general@h" in memory.hgetall("operations:worker_queues")
+    assert b"datafetch-global@h" not in memory.hgetall(ROSTER)
+
+
+def test_a_lost_roster_reads_unknown_until_every_worker_could_beat():
+    # The cache Redis was flushed while the solo datafetch worker is busy:
+    # its entry is gone until its next beat, so zero cannot be asserted yet.
+    memory = _FakeHashRedis(warm=False)
+
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"general@h": [{"name": "celery"}]},
+        memory=memory,
+    )
+
+    assert payload["jobs"][0]["wait_reason"] is None
+    assert _consumers(payload)["data_fetch_jp"] is None
+    assert memory.get(ROSTER_SINCE) is not None
+
+    # Two beats later every live worker has re-entered; JP has none.
+    memory.set(ROSTER_SINCE, (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat())
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"general@h": [{"name": "celery"}]},
+        memory=memory,
+    )
+    assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
 
 
 def test_a_worker_whose_queues_did_not_answer_makes_counts_unknown():
-    # It answered stats but missed the active_queues broadcast, and nothing
-    # remembers its queues: it may read data_fetch_jp.
+    # It answered stats but missed the active_queues broadcast, and has no
+    # roster entry: it may read data_fetch_jp.
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
         {"general@h": [{"name": "celery"}]},
@@ -1201,12 +1247,11 @@ def test_a_worker_whose_queues_did_not_answer_makes_counts_unknown():
     )
 
     assert payload["jobs"][0]["wait_reason"] is None
-    queues = {queue["queue"]: queue for queue in payload["queues"]}
-    assert queues["data_fetch_jp"]["consumers"] is None
+    assert _consumers(payload)["data_fetch_jp"] is None
 
 
 def test_without_the_cache_redis_counts_are_unknown():
-    # No memory means a busy silent worker cannot be ruled out.
+    # No roster means a busy silent worker cannot be ruled out.
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
         {"general@h": [{"name": "celery"}]},
@@ -1216,37 +1261,36 @@ def test_without_the_cache_redis_counts_are_unknown():
     assert payload["jobs"][0]["wait_reason"] is None
 
 
-def test_a_worker_registered_at_startup_counts_before_any_poll_saw_it():
-    # It took a task right after starting (solo pool: silent), so no poll
-    # ever recorded its queues; its startup registration did.
+def test_worker_ready_starts_the_heartbeat_with_its_queues():
     from app.celery_app import _register_worker_queues
 
-    memory = _FakeHashRedis()
     sender = SimpleNamespace(
         hostname="datafetch-global@h",
         app=SimpleNamespace(
-            amqp=SimpleNamespace(queues=SimpleNamespace(consume_from={"data_fetch_jp": object(), "data_fetch_us": object()}))
+            amqp=SimpleNamespace(queues=SimpleNamespace(consume_from={"data_fetch_us": object(), "data_fetch_jp": object()}))
         ),
     )
-    with patch("app.services.operations_job_service.get_redis_client", return_value=memory):
+    with patch("app.services.operations_job_service.start_worker_queue_heartbeat") as start:
         _register_worker_queues(sender)
 
-    payload = _list_with_workers(
-        {"data_fetch_jp": [_jp_refresh()]},
-        {"general@h": [{"name": "celery"}]},
-        memory=memory,
-    )
-
-    assert payload["jobs"][0]["wait_reason"] is None
-    queues = {queue["queue"]: queue for queue in payload["queues"]}
-    assert queues["data_fetch_jp"]["consumers"] == 1
+    start.assert_called_once_with("datafetch-global@h", ["data_fetch_jp", "data_fetch_us"])
 
 
-def test_startup_registration_never_blocks_worker_start():
+def test_worker_ready_registration_never_blocks_worker_start():
     from app.celery_app import _register_worker_queues
 
-    with patch("app.services.operations_job_service.get_redis_client", return_value=None):
+    with patch("app.services.operations_job_service.start_worker_queue_heartbeat") as start:
         _register_worker_queues(SimpleNamespace(hostname="w@h"))  # no app attribute
+
+    start.assert_not_called()
+
+
+def test_a_redis_error_does_not_stop_the_heartbeat():
+    import redis
+
+    failing = MagicMock()
+    failing.hset.side_effect = redis.ConnectionError("down")
+    _beat_once(failing, "datafetch-global@h", ["data_fetch_jp"])  # no raise
 
 
 def test_a_worker_answering_with_no_queues_reads_none():
@@ -1259,13 +1303,9 @@ def test_a_worker_answering_with_no_queues_reads_none():
     assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
 
 
-def test_a_remembered_entry_with_non_string_queues_is_ignored():
+def test_a_roster_entry_with_non_string_queues_is_ignored():
     memory = _FakeHashRedis()
-    fresh = datetime.now(timezone.utc).isoformat()
-    memory.hset(
-        "operations:worker_queues",
-        {"datafetch-global@h": json.dumps({"queues": [{}], "seen_at": fresh})},
-    )
+    memory.hset(ROSTER, {"datafetch-global@h": json.dumps({"queues": [{}], "seen_at": datetime.now(timezone.utc).isoformat()})})
 
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
@@ -1276,9 +1316,9 @@ def test_a_remembered_entry_with_non_string_queues_is_ignored():
     assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
 
 
-def test_a_corrupt_remembered_entry_is_ignored():
+def test_a_corrupt_roster_entry_is_ignored():
     memory = _FakeHashRedis()
-    memory.hset("operations:worker_queues", {"datafetch-global@h": "not json"})
+    memory.hset(ROSTER, {"datafetch-global@h": "not json"})
 
     payload = _list_with_workers(
         {"data_fetch_jp": [_jp_refresh()]},
@@ -1287,3 +1327,5 @@ def test_a_corrupt_remembered_entry_is_ignored():
     )
 
     assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
+
+

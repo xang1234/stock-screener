@@ -301,17 +301,17 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
 
 @worker_ready.connect
 def _register_worker_queues(sender, **kwargs):
-    """Record this worker's queues for the Operations console. A solo-pool
-    worker busy from its first task answers no inspect, so without this no
-    poll would ever learn it serves its queues."""
-    from .services.operations_job_service import remember_worker_queues
+    """Keep this worker's queues on the Operations roster with a heartbeat
+    thread. A solo-pool worker busy with a task answers no inspect, so the
+    roster is how the console knows it still serves its queues."""
+    from .services import operations_job_service
 
     try:
         queues = sorted(sender.app.amqp.queues.consume_from)
     except AttributeError:
         _logger.warning("Could not read this worker's queues to register them", exc_info=True)
         return
-    remember_worker_queues({sender.hostname: queues})
+    operations_job_service.start_worker_queue_heartbeat(sender.hostname, queues)
 
 
 @worker_process_init.connect

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import threading
 from uuid import uuid4
 from typing import Any, Callable, Iterable, Optional
 
@@ -54,12 +55,18 @@ HEARTBEAT_STUCK_AFTER_SECONDS = 30 * 60
 LEASE_STUCK_TTL_SECONDS = 10 * 60
 # A queued message whose queue no responding worker reads: it never runs.
 NO_WORKER_WAIT_REASON = "no_worker_for_queue"
-# Each worker's queues as it last answered inspect, so a worker silent this
-# poll (a solo-pool worker busy with a task answers nothing) still counts.
+# Worker roster: each worker's queues, rewritten by a heartbeat thread in the
+# worker, so one silent to inspect (a solo-pool worker busy with a task
+# answers nothing) still counts.
 WORKER_QUEUES_KEY = "operations:worker_queues"
-# ponytail: a dead worker still counts this long, so its queue flags up to a
-# day late; a busy solo-pool worker can stay silent for hours of fetching.
-WORKER_QUEUES_MEMORY = timedelta(hours=24)
+# When the roster began to be kept; gone with it if the cache Redis is flushed.
+WORKER_QUEUES_SINCE_KEY = "operations:worker_queues_since"
+WORKER_QUEUES_HEARTBEAT_SECONDS = 60
+# ponytail: a worker that misses five beats reads as gone; a task holding the
+# GIL that long would drop a live worker. Raise this if that shows up.
+WORKER_QUEUES_MEMORY = timedelta(minutes=5)
+# Every live worker has beaten at least once by then, so the roster is whole.
+WORKER_QUEUES_COMPLETE_AFTER = timedelta(seconds=2 * WORKER_QUEUES_HEARTBEAT_SECONDS)
 
 SCAN_TASK_NAME = "app.tasks.scan_tasks.run_bulk_scan"
 RELEASE_PIPELINE_CLAIM_TASK = "app.tasks.daily_market_pipeline_tasks.release_daily_market_pipeline_claim"
@@ -115,27 +122,31 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def remember_worker_queues(worker_queues: dict[str, list[str]], *, client: Any = None) -> bool:
-    """Record each worker's queues with the time seen. A worker registers at
-    startup too, so one silent from its first task is still known. False when
-    the cache Redis is unavailable."""
-    if client is None:
+def run_worker_queue_heartbeat(worker: str, queues: list[str], stop: threading.Event) -> None:
+    """Write this worker's roster entry now and every heartbeat until stop.
+    A failed write is logged and retried next beat; the entry then ages out."""
+    while True:
         client = get_redis_client()
-    if client is None:
-        return False
-    seen_at = _utcnow().isoformat()
-    try:
-        client.hset(
-            WORKER_QUEUES_KEY,
-            mapping={
-                name: json.dumps({"queues": queues, "seen_at": seen_at})
-                for name, queues in worker_queues.items()
-            },
-        )
-    except redis.RedisError:
-        logger.warning("Could not record worker queues", exc_info=True)
-        return False
-    return True
+        if client is not None:
+            try:
+                client.hset(
+                    WORKER_QUEUES_KEY,
+                    mapping={worker: json.dumps({"queues": queues, "seen_at": _utcnow().isoformat()})},
+                )
+            except redis.RedisError:
+                logger.warning("Could not write the worker queue heartbeat", exc_info=True)
+        if stop.wait(WORKER_QUEUES_HEARTBEAT_SECONDS):
+            return
+
+
+def start_worker_queue_heartbeat(worker: str, queues: list[str]) -> None:
+    """Run the heartbeat in a daemon thread for the life of the worker."""
+    threading.Thread(
+        target=run_worker_queue_heartbeat,
+        args=(worker, queues, threading.Event()),
+        name="worker-queue-heartbeat",
+        daemon=True,
+    ).start()
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -811,23 +822,26 @@ class OperationsJobService:
     def _queue_consumers(
         workers: list[dict[str, Any]], queue_repliers: set[str]
     ) -> dict[str, int] | None:
-        """Workers per queue, counting a worker silent this poll by the queues
-        it last recorded (here or at startup). None (unknown, which must not
-        read as "nobody serves this queue") when no worker answered
-        active_queues, the cache Redis holding those queues is unavailable, or
-        a worker answered without its queues and none are remembered.
-
-        ponytail: a worker never recorded (cache Redis flushed while it is
-        silent) still reads as missing until it answers or restarts."""
+        """Workers per queue: this poll's active_queues replies plus the
+        roster, so a worker silent this poll counts by its heartbeat. None
+        (unknown, which must not read as "nobody serves this queue") when no
+        worker answered active_queues, the cache Redis is unavailable, the
+        roster is younger than one full round of heartbeats (just started, or
+        flushed), or a worker answered without its queues and has no entry."""
         answered = {worker["worker"]: worker["queues"] for worker in workers if worker["worker"] in queue_repliers}
         client = get_redis_client()
-        if not answered or client is None or not remember_worker_queues(answered, client=client):
+        if not answered or client is None:
             return None
         now = _utcnow()
         try:
+            client.set(WORKER_QUEUES_SINCE_KEY, now.isoformat(), nx=True)
+            since_raw = client.get(WORKER_QUEUES_SINCE_KEY)
             stored = client.hgetall(WORKER_QUEUES_KEY)
         except redis.RedisError:
-            logger.warning("Could not read remembered worker queues", exc_info=True)
+            logger.warning("Could not read the worker queue roster", exc_info=True)
+            return None
+        since = _parse_iso(since_raw.decode()) if since_raw else None
+        if since is None or now - since < WORKER_QUEUES_COMPLETE_AFTER:
             return None
 
         queue_lists: dict[str, list[str]] = {}
@@ -853,8 +867,9 @@ class OperationsJobService:
             try:
                 client.hdel(WORKER_QUEUES_KEY, *expired)
             except redis.RedisError:
-                logger.warning("Could not prune remembered worker queues", exc_info=True)
+                logger.warning("Could not prune the worker queue roster", exc_info=True)
 
+        queue_lists.update(answered)  # this poll's replies win over a beat
         if any(worker["worker"] not in queue_lists for worker in workers):
             return None
         return Counter(queue for queues in queue_lists.values() for queue in queues)
