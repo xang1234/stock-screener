@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, useQuery } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -557,6 +557,36 @@ describe('SchedulesSection', () => {
       expect(screen.queryByRole('button', { name: /^Daily Market Pipeline \(DE\):/ })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Inactive markets (1): DE' }));
       expect(screen.getByRole('button', { name: /^Daily Market Pipeline \(DE\):/ })).toBeVisible();
+    });
+
+    it('does not reopen a chip detail on its own after its market moves lists and back', async () => {
+      const tasks = (deRun) => payload([pipeline('US', null), pipeline('DE', deRun), pipeline('AU', null)]);
+      getScheduledTasks.mockReturnValue(new Promise(() => {}));
+      const { queryClient } = renderWithProviders(<SchedulesSection activeMarkets={new Set(['US'])} />);
+      act(() => queryClient.setQueryData(['scheduledTasks'], tasks(null)));
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Inactive markets (2): AU, DE' }));
+      fireEvent.click(screen.getByRole('button', { name: /^Daily Market Pipeline \(DE\):/ }));
+      expect(await screen.findByRole('dialog', { name: 'Daily Market Pipeline (DE)' })).toBeInTheDocument();
+
+      // Queued is live state, so DE moves up front; completed sends it back.
+      act(() => queryClient.setQueryData(['scheduledTasks'], tasks(lastRun('queued'))));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Inactive markets (1): AU' })).toBeInTheDocument());
+      act(() => queryClient.setQueryData(['scheduledTasks'], tasks(lastRun('completed'))));
+      await screen.findByRole('button', { name: 'Inactive markets (2): AU, DE' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /^Daily Market Pipeline \(DE\):/ })).toBeInTheDocument();
+    });
+
+    it('drops the age from a chip whose run has no start time', async () => {
+      getScheduledTasks.mockResolvedValue(payload([pipeline('US', lastRun('completed', { started_at: null }))]));
+
+      renderSection();
+
+      const chip = await screen.findByRole('button', { name: /^Daily Market Pipeline \(US\):/ });
+      expect(chip).toHaveTextContent(/^US ✓$/);
+      expect(chip).toHaveAccessibleName('Daily Market Pipeline (US): Completed');
     });
 
     it('lists manual-only and destructive jobs under Advanced', async () => {

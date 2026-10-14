@@ -5,7 +5,7 @@
  * (#588), so a run started here or by Beat shows up here whether or not this
  * page was open; there is no client-side tracking of triggered runs.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -282,7 +282,8 @@ function groupSchedule(group) {
   return schedules.size === 1 ? [...schedules][0] : 'Varies by market';
 }
 
-// Paired with the chip colour so the outcome reads without colour too.
+// Paired with the chip colour so a finished outcome reads without colour too;
+// queued and running show a spinner instead.
 const STATUS_GLYPH = {
   completed: '✓',
   failed: '✗',
@@ -295,7 +296,8 @@ const STATUS_GLYPH = {
 function MarketChip({ task, pending, onOpen }) {
   const run = task.last_run;
   const display = run ? STATUS_DISPLAY[run.status] || { color: 'default', label: run.status } : null;
-  const age = run ? ageMs(run.started_at) : NaN;
+  // new Date(null) is the epoch, not NaN, so a missing start needs its own check.
+  const age = run?.started_at ? ageMs(run.started_at) : NaN;
   const label = run
     ? [task.market, STATUS_GLYPH[run.status], Number.isNaN(age) ? null : ageLabel(age)].filter(Boolean).join(' ')
     : `${task.market} — never`;
@@ -307,7 +309,8 @@ function MarketChip({ task, pending, onOpen }) {
       variant={display ? display.variant || 'filled' : 'outlined'}
       label={label}
       icon={busy ? <CircularProgress size={12} color="inherit" /> : undefined}
-      aria-label={`${task.display_name}: ${display ? `${display.label}, ${formatRelativeTime(run.started_at)}` : 'never run'}`}
+      aria-label={`${task.display_name}: ${!display ? 'never run'
+        : run.started_at ? `${display.label}, ${formatRelativeTime(run.started_at)}` : display.label}`}
       aria-haspopup="dialog"
       onClick={(event) => onOpen(task.name, event.currentTarget)}
     />
@@ -335,11 +338,16 @@ function MarketDetail({ task, groupDescription, pending, onRun }) {
   );
 }
 
-// One chip per market; a chip opens that market's status and Run.
 function MarketChips({ group, pendingNames, onRun }) {
   const [open, setOpen] = useState(null);
   // Looked up each render so a refetch updates an open popover.
   const task = open && group.find((item) => item.name === open.name);
+  // A refetch can move the market to another list (a run puts an inactive
+  // market up front); forget it, or its return would reopen the popover on
+  // the old, detached chip.
+  useEffect(() => {
+    if (open && !task) setOpen(null);
+  }, [open, task]);
   return (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
       {group.map((item) => (
@@ -355,7 +363,12 @@ function MarketChips({ group, pendingNames, onRun }) {
         anchorEl={open?.anchorEl}
         onClose={() => setOpen(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        PaperProps={{ role: 'dialog', 'aria-label': task?.display_name, sx: { p: 1.5, maxWidth: 360 } }}
+        PaperProps={{
+          role: 'dialog',
+          'aria-modal': true,
+          'aria-label': task?.display_name,
+          sx: { p: 1.5, maxWidth: 360 },
+        }}
       >
         {task && (
           <MarketDetail
