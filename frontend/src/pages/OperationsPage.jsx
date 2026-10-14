@@ -123,6 +123,19 @@ const CANCEL_ACTIONS = {
   },
 };
 
+// Set by the server when no responding worker reads the job's queue. A
+// solo-pool worker busy with a task does not answer, hence "responding".
+const NO_WORKER_WAIT_REASON = 'no_worker_for_queue';
+
+function Blocker({ job }) {
+  if (job.wait_reason !== NO_WORKER_WAIT_REASON) return job.wait_reason || '—';
+  return (
+    <Typography variant="caption" color="error">
+      No responding worker reads {job.queue}. Start one, or cancel this job.
+    </Typography>
+  );
+}
+
 function formatCancelLabel(strategy) {
   return CANCEL_ACTIONS[strategy]?.label || 'Unavailable';
 }
@@ -417,6 +430,7 @@ function QueueSummaryTable({ queues }) {
           <TableCell>Queue</TableCell>
           <TableCell>Depth</TableCell>
           <TableCell>Oldest</TableCell>
+          <TableCell>Workers</TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
@@ -425,6 +439,14 @@ function QueueSummaryTable({ queues }) {
             <TableCell>{queue.queue}</TableCell>
             <TableCell>{queue.depth}</TableCell>
             <TableCell>{formatLagSeconds(queue.oldest_age_seconds)}</TableCell>
+            <TableCell>
+              {/* null: no worker answered, so unknown rather than unserved. */}
+              {queue.consumers === 0 && queue.depth > 0 ? (
+                <Chip label="No worker" size="small" color="error" />
+              ) : (
+                queue.consumers ?? '—'
+              )}
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -577,7 +599,7 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
                 )}
               </TableCell>
               <TableCell>{formatLagSeconds(job.age_seconds)}</TableCell>
-              <TableCell>{job.wait_reason || '—'}</TableCell>
+              <TableCell><Blocker job={job} /></TableCell>
               <TableCell>{formatLagSeconds(job.heartbeat_lag_seconds)}</TableCell>
               <TableCell>
                 {cancelRequested ? (

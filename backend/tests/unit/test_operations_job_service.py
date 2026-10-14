@@ -1036,3 +1036,81 @@ def test_lease_snapshot_lists_only_held_chain_claims():
         snapshot = OperationsJobService()._lease_snapshot()
 
     assert snapshot["pipeline_chain"] == {"US": holder}
+
+
+def _list_with_workers(messages_by_queue, active_queues, market_holders=None):
+    """list_jobs with the given queued messages and worker queue replies."""
+    service = OperationsJobService()
+    service._broker = lambda: _FakeBroker(messages_by_queue)
+
+    class _Inspect(_FakeInspect):
+        def active_queues(self):
+            return active_queues
+
+    service._inspect = lambda: _Inspect()
+    service._runtime_activity_records = lambda _db: []
+    service._job_backend.get_status = MagicMock(return_value=None)
+    lock = MagicMock()
+    lock.get_current_task.return_value = None
+    with patch("app.services.operations_job_service.get_workload_coordination") as coordination, patch(
+        "app.services.operations_job_service.get_data_fetch_lock",
+        return_value=lock,
+    ):
+        coordination.return_value.get_external_fetch_holder.return_value = None
+        coordination.return_value.get_market_workload_holders.return_value = market_holders or {}
+        coordination.return_value.get_pipeline_chain_holders.return_value = {}
+        return service.list_jobs(MagicMock())
+
+
+def _jp_refresh():
+    return _queued_message(
+        task_id="fetch-jp-1",
+        task_name="app.tasks.cache_tasks.smart_refresh_cache",
+        kwargs={"market": "JP"},
+    )
+
+
+def test_queued_job_on_a_queue_no_responding_worker_reads_says_so():
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"datafetch-global@h": [{"name": "data_fetch_us"}, {"name": "data_fetch_hk"}]},
+    )
+
+    job = payload["jobs"][0]
+    assert job["task_id"] == "fetch-jp-1"
+    assert job["wait_reason"] == "no_worker_for_queue"
+    queues = {queue["queue"]: queue for queue in payload["queues"]}
+    assert queues["data_fetch_jp"]["consumers"] == 0
+    assert queues["data_fetch_us"]["consumers"] == 1
+
+
+def test_no_worker_outranks_waiting_for_the_market_lease():
+    # The lease frees eventually; with no worker the job still never runs.
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"datafetch-global@h": [{"name": "data_fetch_us"}]},
+        market_holders={"JP": {"task_id": "other", "task_name": "x"}},
+    )
+
+    jobs = {job["task_id"]: job for job in payload["jobs"]}
+    assert jobs["fetch-jp-1"]["state"] == "waiting"
+    assert jobs["fetch-jp-1"]["wait_reason"] == "no_worker_for_queue"
+
+
+def test_served_queue_keeps_no_wait_reason():
+    payload = _list_with_workers(
+        {"data_fetch_jp": [_jp_refresh()]},
+        {"datafetch-jp@h": [{"name": "data_fetch_jp"}]},
+    )
+
+    assert payload["jobs"][0]["wait_reason"] is None
+
+
+def test_no_inspect_reply_is_unknown_not_unserved():
+    # A timed-out inspect (or a busy solo-pool worker) answers nothing; that
+    # must not read as "no worker".
+    payload = _list_with_workers({"data_fetch_jp": [_jp_refresh()]}, {})
+
+    assert payload["jobs"][0]["wait_reason"] is None
+    queues = {queue["queue"]: queue for queue in payload["queues"]}
+    assert queues["data_fetch_jp"]["consumers"] is None

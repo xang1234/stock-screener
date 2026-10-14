@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import base64
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -50,6 +51,8 @@ RUNNING_STALE_AFTER_SECONDS = 30 * 60
 QUEUED_STALE_AFTER_SECONDS = 20 * 60
 HEARTBEAT_STUCK_AFTER_SECONDS = 30 * 60
 LEASE_STUCK_TTL_SECONDS = 10 * 60
+# A queued message whose queue no responding worker reads: it never runs.
+NO_WORKER_WAIT_REASON = "no_worker_for_queue"
 
 SCAN_TASK_NAME = "app.tasks.scan_tasks.run_bulk_scan"
 RELEASE_PIPELINE_CLAIM_TASK = "app.tasks.daily_market_pipeline_tasks.release_daily_market_pipeline_claim"
@@ -772,22 +775,33 @@ class OperationsJobService:
             record.cancel_strategy = _cancel_strategy_for(record)
             records[task_id] = record
 
-    def _queue_summaries(self, queued_jobs: Iterable[_JobRecord]) -> list[dict[str, Any]]:
-        depths: dict[str, dict[str, Any]] = {
-            queue_name: {
+    @staticmethod
+    def _queue_consumers(workers: list[dict[str, Any]]) -> dict[str, int] | None:
+        """Responding workers per queue, or None when no worker answered
+        (an inspect timeout, or every solo-pool worker busy): unknown, which
+        must not read as "nobody serves this queue"."""
+        if not any(worker["queues"] for worker in workers):
+            return None
+        return Counter(queue for worker in workers for queue in worker["queues"])
+
+    def _queue_summaries(
+        self, queued_jobs: Iterable[_JobRecord], consumers: dict[str, int] | None
+    ) -> list[dict[str, Any]]:
+        def _summary(queue_name: str) -> dict[str, Any]:
+            return {
                 "queue": queue_name,
                 "depth": 0,
                 "oldest_age_seconds": None,
+                "consumers": None if consumers is None else consumers.get(queue_name, 0),
             }
-            for queue_name in self.broker_queue_names()
+
+        depths: dict[str, dict[str, Any]] = {
+            queue_name: _summary(queue_name) for queue_name in self.broker_queue_names()
         }
         for job in queued_jobs:
             if not job.queue:
                 continue
-            summary = depths.setdefault(
-                job.queue,
-                {"queue": job.queue, "depth": 0, "oldest_age_seconds": None},
-            )
+            summary = depths.setdefault(job.queue, _summary(job.queue))
             summary["depth"] += 1
             if job.age_seconds is not None:
                 current_oldest = summary["oldest_age_seconds"]
@@ -872,8 +886,13 @@ class OperationsJobService:
 
         records = self._merge_live_jobs([*queued_jobs, *inspect_jobs])
         self._augment_with_runtime_activity(db, records, lease_snapshot)
+        consumers = self._queue_consumers(workers)
         cancel_requests = self._cancel_requests(db)
         for record in records.values():
+            # Only a message still sitting in a broker list: its queue is known
+            # for sure. Outranks a lease wait, which ends; this one never does.
+            if consumers is not None and record.source == "broker" and not consumers.get(record.queue):
+                record.wait_reason = NO_WORKER_WAIT_REASON
             if record.progress_mode == "indeterminate" or not record.message:
                 self._apply_job_backend_progress(record)
             self._apply_heartbeat_progress(record)
@@ -891,7 +910,7 @@ class OperationsJobService:
 
         return {
             "jobs": jobs,
-            "queues": self._queue_summaries(queued_jobs),
+            "queues": self._queue_summaries(queued_jobs, consumers),
             "workers": workers,
             "leases": lease_snapshot,
             "generated_at": _utcnow().isoformat(),

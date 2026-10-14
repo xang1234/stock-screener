@@ -187,7 +187,7 @@ describe('OperationsPage', () => {
     expect(screen.getByText(/600\/1000/)).toBeInTheDocument();
     expect(screen.getByText(/Batch 3\/5 · refreshing prices/)).toBeInTheDocument();
     expect(screen.getByText('External Fetch Lease')).toBeInTheDocument();
-    expect(screen.getByText('Workers')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Workers' })).toBeInTheDocument();
     expect(screen.getAllByText('Queues').length).toBeGreaterThan(0);
 
     await waitFor(() => {
@@ -485,6 +485,39 @@ describe('OperationsPage', () => {
     expect(await screen.findByText(/60%/)).toBeInTheDocument();
     expect(screen.getByText(/600\/1000/)).toBeInTheDocument();
     expect(screen.getByText(/Batch 3\/5 · refreshing prices/)).toBeInTheDocument();
+  });
+
+  it('says when a queued job sits on a queue no worker reads', async () => {
+    fetchOperationsJobs.mockResolvedValue({
+      ...OPERATIONS_PAYLOAD,
+      jobs: [{ ...OPERATIONS_PAYLOAD.jobs[0], queue: 'data_fetch_jp', market: 'JP', wait_reason: 'no_worker_for_queue' }],
+      queues: [
+        { queue: 'data_fetch_jp', depth: 1, oldest_age_seconds: null, consumers: 0 },
+        { queue: 'data_fetch_kr', depth: 0, oldest_age_seconds: null, consumers: 0 },
+        { queue: 'user_scans_us', depth: 0, oldest_age_seconds: null, consumers: 1 },
+      ],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    expect(await screen.findByText(/No responding worker reads data_fetch_jp\. Start one, or cancel this job\./)).toBeInTheDocument();
+    expect(screen.queryByText('no_worker_for_queue')).not.toBeInTheDocument();
+    // Only a queue holding work is flagged; an idle unserved queue is just 0.
+    const jpRow = screen.getAllByRole('row').find((row) => within(row).queryByText('data_fetch_jp', { exact: true }) && within(row).queryByText('No worker'));
+    expect(jpRow).toBeTruthy();
+    expect(screen.getAllByText('No worker')).toHaveLength(1);
+  });
+
+  it('shows an unknown worker count as a dash, not as unserved', async () => {
+    fetchOperationsJobs.mockResolvedValue({
+      ...OPERATIONS_PAYLOAD,
+      queues: [{ queue: 'data_fetch_hk', depth: 1, oldest_age_seconds: 45, consumers: null }],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    expect(await screen.findAllByText('data_fetch_hk', { selector: 'td' })).toHaveLength(2);
+    expect(screen.queryByText('No worker')).not.toBeInTheDocument();
   });
 
   it('falls back to the pending state when determinate jobs have unusable totals', async () => {

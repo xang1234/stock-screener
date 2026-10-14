@@ -31,6 +31,8 @@ class OperationsQueueSummary(BaseModel):
     queue: str
     depth: int = 0
     oldest_age_seconds: float | None = None
+    # Responding workers that read this queue; None when no worker answered.
+    consumers: int | None = None
 
 
 class OperationsWorkerStatus(BaseModel):
