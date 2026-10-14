@@ -77,9 +77,75 @@ def test_local_celery_script_consumes_every_supported_market_queue():
 
     assert "from app.tasks.market_queues import SUPPORTED_MARKETS" in script
     assert "from app.tasks.market_queues import all_data_fetch_queues" in script
-    assert 'ENABLED_MARKETS="${ENABLED_MARKETS:-$SUPPORTED_MARKETS}"' in script
     assert '-Q "$DATA_FETCH_QUEUES"' in script
     assert "case \"$MARKET_UPPER\"" not in script
+
+
+def _started_workers(tmp_path, *, env_markets=None, dotenv_markets=None):
+    """Run start_celery.sh against a stub celery and return the -n worker names."""
+    script = tmp_path / "start_celery.sh"
+    script.write_text(
+        (ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (tmp_path / "app").symlink_to(ROOT / "backend" / "app")
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").write_text(
+        f'#!/bin/bash\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8"
+    )
+    log = tmp_path / "celery.log"
+    (bin_dir / "celery").write_text(
+        f'#!/bin/bash\necho "$*" >> {shlex.quote(str(log))}\n', encoding="utf-8"
+    )
+    for path in (script, bin_dir / "python", bin_dir / "celery"):
+        path.chmod(0o755)
+    if dotenv_markets is not None:
+        (tmp_path / ".env").write_text(
+            f"ENABLED_MARKETS={dotenv_markets}\n", encoding="utf-8"
+        )
+
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"ENABLED_MARKETS", "EXPOSURE_WORKER_ENABLED"}
+    }
+    if env_markets is not None:
+        env["ENABLED_MARKETS"] = env_markets
+    subprocess.run(
+        ["bash", str(script)], env=env, check=True, capture_output=True, timeout=120
+    )
+    return sorted(
+        line.split(" -n ", 1)[1].strip()
+        for line in log.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_local_celery_script_defaults_to_us_like_the_backend(tmp_path):
+    assert _started_workers(tmp_path) == [
+        "datafetch-global@%h",
+        "general@%h",
+        "marketjobs-us@%h",
+        "userscans-shared@%h",
+        "userscans-us@%h",
+    ]
+
+
+def test_local_celery_script_reads_enabled_markets_from_backend_env(tmp_path):
+    workers = _started_workers(tmp_path, dotenv_markets="US,HK")
+
+    assert [name for name in workers if name.startswith("marketjobs-")] == [
+        "marketjobs-hk@%h",
+        "marketjobs-us@%h",
+    ]
+
+
+def test_local_celery_script_prefers_the_exported_enabled_markets(tmp_path):
+    workers = _started_workers(tmp_path, env_markets="JP", dotenv_markets="US,HK")
+
+    assert [name for name in workers if name.startswith("marketjobs-")] == [
+        "marketjobs-jp@%h",
+    ]
 
 
 def test_windows_celery_script_uses_current_market_scoped_worker_topology():

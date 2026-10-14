@@ -197,7 +197,7 @@ The Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans` remains the sched
 
 **Per-Market Scan Queues**:
 - Manual user scans (`run_bulk_scan`) route to market-specific queues: `user_scans_us`, `user_scans_hk`, `user_scans_jp`, `user_scans_tw` (with `user_scans_shared` as fallback when no market is set)
-- `start_celery.sh` spawns one worker per market queue, so US and HK scans run in parallel on separate workers
+- `start_celery.sh` spawns one worker per market in `ENABLED_MARKETS` (env, else `backend/.env`, else `US`), so with `US,HK` the US and HK scans run in parallel on separate workers
 - `@serialized_market_workload` (see `tasks/workload_coordination.py`) holds a Redis lock keyed by market, so scans targeting the same market serialize while different markets remain independent
 - Manual scans run in **cache-only mode** — they do not fall back to yfinance/Finviz. The API boundary rejects scans with `409 market_data_stale` when cached prices haven't caught up to the last completed trading day for the market (see `services/market_data_freshness.py::check_symbol_freshness`). Inside the scan, `RunBulkScanCommand(cache_only=True)` reaches `PriceCacheService.get_many(cache_only=True)`, which serves per-stock prices from whatever the database holds (even under 50 bars, or stale) and never calls a provider. The market benchmark lookup is not cache-only (it fetches from Yahoo if no cached benchmark reaches the last completed session), so the gate also refuses a market whose cached benchmark candidates are all behind that session (`reason: benchmark_stale`, #455)
 

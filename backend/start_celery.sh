@@ -11,7 +11,8 @@
 #     worker for any scan task dispatched without an explicit market.
 #
 # Usage: ./start_celery.sh
-# Override enabled markets: ENABLED_MARKETS="US,HK" ./start_celery.sh
+# Markets come from ENABLED_MARKETS (env, else backend/.env, else US):
+#   ENABLED_MARKETS="US,HK" ./start_celery.sh
 #
 
 cd "$(dirname "$0")"
@@ -40,8 +41,14 @@ print(",".join(all_data_fetch_queues()))
 PY
 )"
 
-# Enabled markets (comma-separated). Override via env to skip markets locally.
-ENABLED_MARKETS="${ENABLED_MARKETS:-$SUPPORTED_MARKETS}"
+# Enabled markets (comma-separated). When unset, read the backend's own setting
+# (backend/.env, else US) so workers match the markets Beat schedules.
+if [[ -z "${ENABLED_MARKETS:-}" ]]; then
+    ENABLED_MARKETS="$(./venv/bin/python -c 'from app.config import settings; print(settings.enabled_markets)')" || {
+        echo "Unable to read ENABLED_MARKETS from the backend settings." >&2
+        exit 1
+    }
+fi
 
 echo "  Pool: $POOL"
 echo "  Enabled markets: $ENABLED_MARKETS"

@@ -286,6 +286,5 @@ def test_local_celery_startup_derives_market_workers_from_backend_topology():
 
     assert "from app.tasks.market_queues import SUPPORTED_MARKETS" in content
     assert "from app.tasks.market_queues import all_data_fetch_queues" in content
-    assert 'ENABLED_MARKETS="${ENABLED_MARKETS:-$SUPPORTED_MARKETS}"' in content
     assert '-Q "$DATA_FETCH_QUEUES"' in content
     assert "US|HK|IN|JP|KR|TW|CN|CA|DE|SG|MY" not in content
