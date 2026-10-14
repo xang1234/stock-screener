@@ -47,6 +47,8 @@ def _weekly_universe_task_definitions() -> Dict[str, Dict]:
                 if market == 'US'
                 else 'app.tasks.universe_tasks.refresh_official_market_universe'
             ),
+            'job_type': 'weekly-universe-refresh',
+            'job_name': 'Weekly Universe Refresh',
             'display_name': f'Weekly Universe Refresh ({market})',
             'description': (
                 'Adds new US stocks, deactivates removed, updates metadata'
@@ -82,6 +84,8 @@ def _weekly_refresh_task_definitions() -> Dict[str, Dict]:
         }
         entries[f'weekly-full-refresh-{market.lower()}'] = {
             'task_function': 'app.tasks.cache_tasks.weekly_full_refresh',
+            'job_type': 'weekly-full-refresh-market',
+            'job_name': 'Weekly Full Refresh',
             'display_name': f'Weekly Full Refresh ({market})',
             'description': 'Clears the market\'s Redis caches and re-fetches fresh data',
             'schedule_description': (
@@ -91,6 +95,8 @@ def _weekly_refresh_task_definitions() -> Dict[str, Dict]:
         }
         entries[f'weekly-fundamental-refresh-{market.lower()}'] = {
             'task_function': 'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
+            'job_type': 'weekly-fundamental-refresh',
+            'job_name': 'Weekly Fundamental Refresh',
             'display_name': f'Weekly Fundamental Refresh ({market})',
             'description': 'Fetches PE, EPS, revenue, margins for the market\'s stocks',
             'schedule_description': (
@@ -107,6 +113,8 @@ def _daily_market_pipeline_task_definitions() -> Dict[str, Dict]:
         warm_hour, warm_minute = settings.cache_warm_schedule_for(market)
         entries[f"daily-market-pipeline-{market.lower()}"] = {
             "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline",
+            "job_type": "daily-market-pipeline",
+            "job_name": "Daily Market Pipeline",
             "display_name": f"Daily Market Pipeline ({market})",
             "description": "Runs price refresh, breadth, group rankings, and market scan in order",
             "schedule_description": f"{warm_hour}:{warm_minute:02d} ET, Mon-Fri ({market})",
@@ -168,6 +176,7 @@ SCHEDULED_TASKS = {
             'expired telemetry events, which per-market runs skip'
         ),
         'schedule_description': 'Manual only',
+        'advanced': True,
     },
 
     'weekly-global-maintenance': {
@@ -188,6 +197,7 @@ SCHEDULED_TASKS = {
         'display_name': 'Monthly Price Data Cleanup',
         'description': 'Deletes price data older than 5 years',
         'schedule_description': '1st of month, 1:00 AM ET',
+        'advanced': True,
     },
     **_weekly_universe_task_definitions(),
 }
@@ -615,6 +625,10 @@ class TaskRegistryService:
                 'schedule_description': task_info['schedule_description'],
                 'is_enabled': is_enabled,
                 'market': (task_info.get('manual_dispatch_kwargs') or {}).get('market'),
+                # Per-market entries share a job_type; a shared job is its own.
+                'job_type': task_info.get('job_type', task_name),
+                'job_name': task_info.get('job_name', task_info['display_name']),
+                'advanced': bool(task_info.get('advanced')),
                 'last_run': None,
             }
             if include_run_blockers:

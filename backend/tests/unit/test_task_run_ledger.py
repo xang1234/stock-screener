@@ -894,3 +894,28 @@ def test_weekly_schedule_text_matches_the_beat_settings():
     assert entries["weekly-fundamental-refresh-us"]["schedule_description"] == "Saturday 8:00 AM ET (US)"
     assert entries["weekly-full-refresh-hk"]["schedule_description"] == "Sunday 2:00 PM ET (HK)"
     assert SCHEDULED_TASKS["weekly-full-refresh-us"]["display_name"] == "Weekly Full Refresh (US)"
+
+
+def test_scheduled_tasks_group_into_one_job_per_type(db_session):
+    from collections import defaultdict
+
+    from app.services.task_registry_service import TaskRegistryService
+    from app.tasks.market_queues import SUPPORTED_MARKETS
+
+    groups = defaultdict(list)
+    for task in TaskRegistryService().get_all_scheduled_tasks(db_session):
+        groups[(task["job_type"], task["job_name"], task["advanced"])].append(task["market"])
+
+    per_market = sorted(SUPPORTED_MARKETS)
+    assert {key: sorted(markets, key=str) for key, markets in groups.items()} == {
+        ("daily-market-pipeline", "Daily Market Pipeline", False): per_market,
+        ("weekly-full-refresh-market", "Weekly Full Refresh", False): per_market,
+        ("weekly-fundamental-refresh", "Weekly Fundamental Refresh", False): per_market,
+        ("weekly-universe-refresh", "Weekly Universe Refresh", False): per_market,
+        ("social-signal-refresh", "Refresh Social Signals", False): [None],
+        ("weekly-orphaned-scan-cleanup", "Weekly Scan Cleanup", False): [None],
+        ("daily-us-options-analytics", "Daily US Options Analytics", False): ["US"],
+        ("weekly-full-refresh", "Weekly Full Refresh (all markets)", True): [None],
+        ("weekly-global-maintenance", "Weekly Cache & Telemetry Cleanup", False): [None],
+        ("monthly-price-data-cleanup", "Monthly Price Data Cleanup", True): [None],
+    }

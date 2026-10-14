@@ -186,9 +186,12 @@
   "summary": "Published feature run 2 is available for 2026-03-29. Versus run 1, the latest run added 1 symbols, removed 1, and recorded 4 movers. Breadth data is available for 2026-03-29. 1 recent unread theme alerts are in scope. 0 scheduled tasks most recently failed.",
   "tasks": [
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (AU)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "AU",
       "name": "daily-market-pipeline-au",
@@ -196,9 +199,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (CA)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "CA",
       "name": "daily-market-pipeline-ca",
@@ -206,9 +212,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (CN)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "CN",
       "name": "daily-market-pipeline-cn",
@@ -216,9 +225,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (DE)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "DE",
       "name": "daily-market-pipeline-de",
@@ -226,9 +238,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (HK)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "HK",
       "name": "daily-market-pipeline-hk",
@@ -236,9 +251,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (IN)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "IN",
       "name": "daily-market-pipeline-in",
@@ -246,9 +264,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (JP)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "JP",
       "name": "daily-market-pipeline-jp",
@@ -256,9 +277,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (KR)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "KR",
       "name": "daily-market-pipeline-kr",
@@ -266,9 +290,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (MY)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "MY",
       "name": "daily-market-pipeline-my",
@@ -276,9 +303,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (SG)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "SG",
       "name": "daily-market-pipeline-sg",
@@ -286,9 +316,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (TW)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "TW",
       "name": "daily-market-pipeline-tw",
@@ -296,9 +329,12 @@
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
+      "advanced": false,
       "description": "Runs price refresh, breadth, group rankings, and market scan in order",
       "display_name": "Daily Market Pipeline (US)",
       "is_enabled": true,
+      "job_name": "Daily Market Pipeline",
+      "job_type": "daily-market-pipeline",
       "last_run": null,
       "market": "US",
       "name": "daily-market-pipeline-us",
