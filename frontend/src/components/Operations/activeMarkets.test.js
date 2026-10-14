@@ -33,7 +33,7 @@ describe('findActiveMarkets', () => {
       enabledMarkets: [],
       supportedMarkets: SUPPORTED,
       jobsPayload: {
-        jobs: [{ market: 'KR' }],
+        jobs: [{ market: 'KR', state: 'running' }],
         queues: [{ queue: 'data_fetch_in', depth: 1 }, { queue: 'data_fetch_de', depth: 0 }],
         leases: { market_workload: { TW: { task_id: 't' }, DE: null }, pipeline_chain: { HK: { task_id: 'c' } } },
       },
@@ -41,6 +41,17 @@ describe('findActiveMarkets', () => {
     });
 
     expect([...active].sort()).toEqual(['HK', 'IN', 'KR', 'TW', 'US']);
+  });
+
+  it('counts only live jobs, not cancelled or failed ones', () => {
+    const active = findActiveMarkets({
+      supportedMarkets: SUPPORTED,
+      jobsPayload: {
+        jobs: [{ market: 'KR', state: 'cancelled' }, { market: 'TW', state: 'failed' }, { market: 'IN', state: 'stale' }],
+      },
+    });
+
+    expect([...active]).toEqual(['IN']);
   });
 
   it('counts a market whose queue a silent worker serves', () => {

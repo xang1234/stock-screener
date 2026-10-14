@@ -190,6 +190,7 @@
       "display_name": "Daily Market Pipeline (AU)",
       "is_enabled": true,
       "last_run": null,
+      "market": "AU",
       "name": "daily-market-pipeline-au",
       "schedule_description": "7:00 ET, Mon-Fri (AU)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -199,6 +200,7 @@
       "display_name": "Daily Market Pipeline (CA)",
       "is_enabled": true,
       "last_run": null,
+      "market": "CA",
       "name": "daily-market-pipeline-ca",
       "schedule_description": "17:30 ET, Mon-Fri (CA)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -208,6 +210,7 @@
       "display_name": "Daily Market Pipeline (CN)",
       "is_enabled": true,
       "last_run": null,
+      "market": "CN",
       "name": "daily-market-pipeline-cn",
       "schedule_description": "3:30 ET, Mon-Fri (CN)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -217,6 +220,7 @@
       "display_name": "Daily Market Pipeline (DE)",
       "is_enabled": true,
       "last_run": null,
+      "market": "DE",
       "name": "daily-market-pipeline-de",
       "schedule_description": "18:00 ET, Mon-Fri (DE)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -226,6 +230,7 @@
       "display_name": "Daily Market Pipeline (HK)",
       "is_enabled": true,
       "last_run": null,
+      "market": "HK",
       "name": "daily-market-pipeline-hk",
       "schedule_description": "4:30 ET, Mon-Fri (HK)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -235,6 +240,7 @@
       "display_name": "Daily Market Pipeline (IN)",
       "is_enabled": true,
       "last_run": null,
+      "market": "IN",
       "name": "daily-market-pipeline-in",
       "schedule_description": "6:30 ET, Mon-Fri (IN)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -244,6 +250,7 @@
       "display_name": "Daily Market Pipeline (JP)",
       "is_enabled": true,
       "last_run": null,
+      "market": "JP",
       "name": "daily-market-pipeline-jp",
       "schedule_description": "2:30 ET, Mon-Fri (JP)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -253,6 +260,7 @@
       "display_name": "Daily Market Pipeline (KR)",
       "is_enabled": true,
       "last_run": null,
+      "market": "KR",
       "name": "daily-market-pipeline-kr",
       "schedule_description": "3:00 ET, Mon-Fri (KR)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -262,6 +270,7 @@
       "display_name": "Daily Market Pipeline (MY)",
       "is_enabled": true,
       "last_run": null,
+      "market": "MY",
       "name": "daily-market-pipeline-my",
       "schedule_description": "5:30 ET, Mon-Fri (MY)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -271,6 +280,7 @@
       "display_name": "Daily Market Pipeline (SG)",
       "is_enabled": true,
       "last_run": null,
+      "market": "SG",
       "name": "daily-market-pipeline-sg",
       "schedule_description": "5:00 ET, Mon-Fri (SG)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -280,6 +290,7 @@
       "display_name": "Daily Market Pipeline (TW)",
       "is_enabled": true,
       "last_run": null,
+      "market": "TW",
       "name": "daily-market-pipeline-tw",
       "schedule_description": "2:00 ET, Mon-Fri (TW)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
@@ -289,6 +300,7 @@
       "display_name": "Daily Market Pipeline (US)",
       "is_enabled": true,
       "last_run": null,
+      "market": "US",
       "name": "daily-market-pipeline-us",
       "schedule_description": "16:30 ET, Mon-Fri (US)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"

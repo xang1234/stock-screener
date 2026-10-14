@@ -6,6 +6,10 @@
  * other markets sit behind an "Inactive markets" disclosure.
  */
 
+// Job states that are live work; failed and cancelled jobs stay in the job
+// console but no longer make their market active.
+export const ACTIVE_JOB_STATES = new Set(['queued', 'waiting', 'reserved', 'running', 'stale', 'stuck']);
+
 // Queue names end in the market code: data_fetch_jp, market_jobs_jp, user_scans_jp.
 export function queueMarket(queueName, supportedMarkets = []) {
   const code = String(queueName ?? '').split('_').pop().toUpperCase();
@@ -25,7 +29,7 @@ export function findActiveMarkets({ enabledMarkets = [], supportedMarkets = [], 
     if (queue.depth > 0 || queue.consumers > 0) addQueue(queue.queue);
   });
   jobsPayload?.jobs?.forEach((job) => {
-    if (job.market) active.add(job.market);
+    if (job.market && ACTIVE_JOB_STATES.has(job.state)) active.add(job.market);
   });
   Object.entries(jobsPayload?.leases?.market_workload ?? {}).forEach(([market, holder]) => {
     if (holder) active.add(market);

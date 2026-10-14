@@ -43,10 +43,14 @@ import SocialSignalHealthPanel from '../features/socialSignals/SocialSignalHealt
 import ExposureResearchWorkspace from '../features/companyExposure/ExposureResearchWorkspace';
 import SchedulesSection from '../components/Operations/SchedulesSection';
 import InactiveMarkets from '../components/Operations/InactiveMarkets';
-import { findActiveMarkets, queueMarket, splitByMarket } from '../components/Operations/activeMarkets';
+import {
+  ACTIVE_JOB_STATES,
+  findActiveMarkets,
+  queueMarket,
+  splitByMarket,
+} from '../components/Operations/activeMarkets';
 
 const POLL_MS = 30000;
-const ACTIVE_JOB_STATES = new Set(['queued', 'waiting', 'reserved', 'running', 'stale', 'stuck']);
 const EMPTY_ARRAY = [];
 const EMPTY_LEASES = { external_fetch_global: null, market_workload: {} };
 
