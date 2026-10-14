@@ -443,6 +443,137 @@ describe('SchedulesSection', () => {
     expect(await screen.findByText(/manual_refresh_cooldown/)).toBeInTheDocument();
   });
 
+  describe('grouped by job type', () => {
+    const pipeline = (market, run, extra = {}) => ({
+      ...task(`daily-market-pipeline-${market.toLowerCase()}`, `Daily Market Pipeline (${market})`, run),
+      description: 'Runs price refresh, breadth, group rankings, and market scan in order',
+      schedule_description: `${market === 'US' ? '17:30' : '4:30'} ET, Mon-Fri (${market})`,
+      market,
+      job_type: 'daily-market-pipeline',
+      job_name: 'Daily Market Pipeline',
+      advanced: false,
+      ...extra,
+    });
+
+    it('shows one row per job type with a chip per market', async () => {
+      getScheduledTasks.mockResolvedValue(payload([
+        pipeline('US', lastRun('completed')),
+        pipeline('HK', lastRun('failed', { error_message: 'provider down' })),
+        pipeline('CN', null),
+      ]));
+
+      renderSection();
+
+      const row = (await screen.findByText('Daily Market Pipeline')).closest('tr');
+      expect(screen.getAllByText('Runs price refresh, breadth, group rankings, and market scan in order')).toHaveLength(1);
+      expect(within(row).getByText('Varies by market')).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Daily Market Pipeline (US): Completed, 5m ago' }))
+        .toHaveTextContent('US ✓ 5m');
+      expect(within(row).getByRole('button', { name: 'Daily Market Pipeline (HK): Failed, 5m ago' }))
+        .toHaveTextContent('HK ✗ 5m');
+      expect(within(row).getByRole('button', { name: 'Daily Market Pipeline (CN): never run' }))
+        .toHaveTextContent('CN — never');
+      expect(screen.queryByText('Daily Market Pipeline (US)')).not.toBeInTheDocument();
+    });
+
+    it('opens a market chip to its status note and runs only that market', async () => {
+      getScheduledTasks.mockResolvedValue(payload([
+        pipeline('US', lastRun('completed')),
+        pipeline('HK', lastRun('failed', { error_message: 'provider down' })),
+      ]));
+      triggerTask.mockResolvedValue({ task_id: 'new-run', status: 'queued' });
+
+      renderSection();
+      fireEvent.click(await screen.findByRole('button', { name: /^Daily Market Pipeline \(HK\):/ }));
+
+      const detail = await screen.findByRole('dialog', { name: 'Daily Market Pipeline (HK)' });
+      expect(within(detail).getByText('provider down')).toBeInTheDocument();
+      expect(within(detail).getByText('4:30 ET, Mon-Fri (HK)')).toBeInTheDocument();
+      fireEvent.click(within(detail).getByRole('button', { name: 'Run Daily Market Pipeline (HK) now' }));
+
+      await waitFor(() => expect(triggerTask).toHaveBeenCalledWith('daily-market-pipeline-hk'));
+      expect(triggerTask).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the pre-flight reason and claim link in the chip detail', async () => {
+      getScheduledTasks.mockResolvedValue(payload([
+        pipeline('US', lastRun('dispatched'), {
+          run_blocker: { reason: 'market_pipeline_already_active', active_since: '2026-10-13T20:30:00+00:00' },
+        }),
+      ]));
+
+      renderSection();
+      fireEvent.click(await screen.findByRole('button', { name: /^Daily Market Pipeline \(US\):/ }));
+
+      const detail = await screen.findByRole('dialog', { name: 'Daily Market Pipeline (US)' });
+      expect(within(detail).getByRole('button', { name: 'Run Daily Market Pipeline (US) now' })).toBeDisabled();
+      expect(within(detail).getByText(/Pipeline in progress since/)).toBeInTheDocument();
+      expect(within(detail).getByRole('link', { name: 'See its claim in Lease status' })).toBeInTheDocument();
+    });
+
+    it('shows a schedule shared by every market once, without the market', async () => {
+      getScheduledTasks.mockResolvedValue(payload(['US', 'HK'].map((market) => ({
+        ...pipeline(market, null),
+        name: `weekly-fundamental-refresh-${market.toLowerCase()}`,
+        display_name: `Weekly Fundamental Refresh (${market})`,
+        schedule_description: `Saturday 8:00 AM ET (${market})`,
+        job_type: 'weekly-fundamental-refresh',
+        job_name: 'Weekly Fundamental Refresh',
+      }))));
+
+      renderSection();
+
+      const row = (await screen.findByText('Weekly Fundamental Refresh')).closest('tr');
+      expect(within(row).getByText('Saturday 8:00 AM ET')).toBeInTheDocument();
+    });
+
+    it('describes the job once, and a market only where its own wording differs', async () => {
+      getScheduledTasks.mockResolvedValue(payload(['US', 'HK'].map((market) => ({
+        ...pipeline(market, null),
+        name: `weekly-universe-refresh-${market.toLowerCase()}`,
+        display_name: `Weekly Universe Refresh (${market})`,
+        description: market === 'US' ? 'Adds new US stocks' : `Refreshes the official ${market} universe`,
+        job_description: "Refreshes each market's stock list",
+        job_type: 'weekly-universe-refresh',
+        job_name: 'Weekly Universe Refresh',
+      }))));
+
+      renderSection();
+
+      const row = (await screen.findByText('Weekly Universe Refresh')).closest('tr');
+      expect(within(row).getByText("Refreshes each market's stock list")).toBeInTheDocument();
+      expect(screen.queryByText('Adds new US stocks')).not.toBeInTheDocument();
+      fireEvent.click(within(row).getByRole('button', { name: /^Weekly Universe Refresh \(US\):/ }));
+      const detail = await screen.findByRole('dialog', { name: 'Weekly Universe Refresh (US)' });
+      expect(within(detail).getByText('Adds new US stocks')).toBeInTheDocument();
+    });
+
+    it('moves inactive markets’ chips behind the disclosure under the same job', async () => {
+      getScheduledTasks.mockResolvedValue(payload([pipeline('US', null), pipeline('DE', null)]));
+
+      renderWithProviders(<SchedulesSection activeMarkets={new Set(['US'])} />);
+
+      expect(await screen.findByRole('button', { name: /^Daily Market Pipeline \(US\):/ })).toBeVisible();
+      expect(screen.queryByRole('button', { name: /^Daily Market Pipeline \(DE\):/ })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Inactive markets (1): DE' }));
+      expect(screen.getByRole('button', { name: /^Daily Market Pipeline \(DE\):/ })).toBeVisible();
+    });
+
+    it('lists manual-only and destructive jobs under Advanced', async () => {
+      getScheduledTasks.mockResolvedValue(payload([
+        { ...task('weekly-orphaned-scan-cleanup', 'Weekly Scan Cleanup', null), advanced: false },
+        { ...task('monthly-price-data-cleanup', 'Monthly Price Data Cleanup', null), advanced: true },
+      ]));
+
+      renderSection();
+
+      const advanced = await screen.findByRole('region', { name: 'Advanced' });
+      expect(within(advanced).getByText('Monthly Price Data Cleanup')).toBeInTheDocument();
+      expect(within(advanced).queryByText('Weekly Scan Cleanup')).not.toBeInTheDocument();
+      expect(screen.getByText('Weekly Scan Cleanup')).toBeVisible();
+    });
+  });
+
   describe('on a phone-width screen', () => {
     beforeEach(() => {
       // useMediaQuery(breakpoints.down('md')) matches, as in the Layout tests.
@@ -492,6 +623,24 @@ describe('SchedulesSection', () => {
       const card = within(list).getByText('Daily Market Pipeline (US)').closest('li');
       expect(within(card).getByText(/Pipeline in progress since/)).toBeInTheDocument();
       expect(within(card).getByRole('link', { name: 'See its claim in Lease status' })).toBeInTheDocument();
+    });
+
+    it('gives a per-market job one card with a chip per market', async () => {
+      getScheduledTasks.mockResolvedValue(payload(['US', 'HK'].map((market) => ({
+        ...task(`weekly-universe-refresh-${market.toLowerCase()}`, `Weekly Universe Refresh (${market})`, null),
+        schedule_description: `Sunday 3:00 AM ET (${market})`,
+        market,
+        job_type: 'weekly-universe-refresh',
+        job_name: 'Weekly Universe Refresh',
+      }))));
+
+      renderSection();
+
+      const list = await screen.findByRole('list', { name: 'Scheduled jobs' });
+      const card = within(list).getByText('Weekly Universe Refresh').closest('li');
+      expect(within(card).getByRole('button', { name: 'Weekly Universe Refresh (US): never run' })).toBeInTheDocument();
+      expect(within(card).getByRole('button', { name: 'Weekly Universe Refresh (HK): never run' })).toBeInTheDocument();
+      expect(within(card).getByText('Sunday 3:00 AM ET')).toBeInTheDocument();
     });
   });
 });

@@ -12,8 +12,10 @@ import {
   Box,
   Chip,
   CircularProgress,
+  Divider,
   IconButton,
   Link,
+  Popover,
   Table,
   TableBody,
   TableCell,
@@ -257,6 +259,117 @@ function RunButton({ task, pending, onRun }) {
   );
 }
 
+// Per-market registry entries share a job_type; the rest (and rows from an
+// older server without job_type) stand alone.
+function groupJobs(tasks) {
+  const groups = new Map();
+  tasks.forEach((task) => {
+    const key = task.job_type ?? task.name;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(task);
+  });
+  return [...groups.values()];
+}
+
+const isPerMarket = (group) => group[0].job_type != null && group[0].job_type !== group[0].name;
+
+const jobDescription = (task) => task.job_description ?? task.description;
+
+const withoutMarket = (task) => task.schedule_description.replace(` (${task.market})`, '');
+
+function groupSchedule(group) {
+  const schedules = new Set(group.map(withoutMarket));
+  return schedules.size === 1 ? [...schedules][0] : 'Varies by market';
+}
+
+// Paired with the chip colour so the outcome reads without colour too.
+const STATUS_GLYPH = {
+  completed: '✓',
+  failed: '✗',
+  skipped: '–',
+  dispatched: '→',
+  cancelled: '⊘',
+  lost: '?',
+};
+
+function MarketChip({ task, pending, onOpen }) {
+  const run = task.last_run;
+  const display = run ? STATUS_DISPLAY[run.status] || { color: 'default', label: run.status } : null;
+  const age = run ? ageMs(run.started_at) : NaN;
+  const label = run
+    ? [task.market, STATUS_GLYPH[run.status], Number.isNaN(age) ? null : ageLabel(age)].filter(Boolean).join(' ')
+    : `${task.market} — never`;
+  const busy = pending || ACTIVE_STATUSES.has(run?.status);
+  return (
+    <Chip
+      size="small"
+      color={display?.color ?? 'default'}
+      variant={display ? display.variant || 'filled' : 'outlined'}
+      label={label}
+      icon={busy ? <CircularProgress size={12} color="inherit" /> : undefined}
+      aria-label={`${task.display_name}: ${display ? `${display.label}, ${formatRelativeTime(run.started_at)}` : 'never run'}`}
+      aria-haspopup="dialog"
+      onClick={(event) => onOpen(task.name, event.currentTarget)}
+    />
+  );
+}
+
+function MarketDetail({ task, groupDescription, pending, onRun }) {
+  return (
+    <>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="subtitle2" sx={{ flex: 1 }}>{task.display_name}</Typography>
+        <RunButton task={task} pending={pending} onRun={onRun} />
+      </Box>
+      {task.description !== groupDescription && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{task.description}</Typography>
+      )}
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{task.schedule_description}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 1 }}>
+        {task.last_run && <StatusChip run={task.last_run} />}
+        <LastRun run={task.last_run} />
+      </Box>
+      <StatusNote task={task} />
+      <PreflightNote task={task} />
+    </>
+  );
+}
+
+// One chip per market; a chip opens that market's status and Run.
+function MarketChips({ group, pendingNames, onRun }) {
+  const [open, setOpen] = useState(null);
+  // Looked up each render so a refetch updates an open popover.
+  const task = open && group.find((item) => item.name === open.name);
+  return (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+      {group.map((item) => (
+        <MarketChip
+          key={item.name}
+          task={item}
+          pending={pendingNames.has(item.name)}
+          onOpen={(name, anchorEl) => setOpen({ name, anchorEl })}
+        />
+      ))}
+      <Popover
+        open={Boolean(task)}
+        anchorEl={open?.anchorEl}
+        onClose={() => setOpen(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        PaperProps={{ role: 'dialog', 'aria-label': task?.display_name, sx: { p: 1.5, maxWidth: 360 } }}
+      >
+        {task && (
+          <MarketDetail
+            task={task}
+            groupDescription={jobDescription(group[0])}
+            pending={pendingNames.has(task.name)}
+            onRun={onRun}
+          />
+        )}
+      </Popover>
+    </Box>
+  );
+}
+
 function JobsTable({ tasks, pendingNames, onRun }) {
   return (
     <Table size="small">
@@ -270,22 +383,34 @@ function JobsTable({ tasks, pendingNames, onRun }) {
         </TableRow>
       </TableHead>
       <TableBody>
-        {tasks.map((task) => (
-          <TableRow key={task.name} hover>
-            <TableCell>
-              <Typography variant="body2" fontWeight="medium">{task.display_name}</Typography>
-              <Typography variant="caption" color="text.secondary">{task.description}</Typography>
-            </TableCell>
-            <TableCell>
-              <Typography variant="body2">{task.schedule_description}</Typography>
-            </TableCell>
-            <TableCell><LastRun run={task.last_run} /></TableCell>
-            <TableCell><Status task={task} /></TableCell>
-            <TableCell align="center">
-              <RunButton task={task} pending={pendingNames.has(task.name)} onRun={onRun} />
-            </TableCell>
-          </TableRow>
-        ))}
+        {groupJobs(tasks).map((group) => {
+          const [task] = group;
+          const perMarket = isPerMarket(group);
+          return (
+            <TableRow key={task.job_type ?? task.name} hover>
+              <TableCell>
+                <Typography variant="body2" fontWeight="medium">{perMarket ? task.job_name : task.display_name}</Typography>
+                <Typography variant="caption" color="text.secondary">{perMarket ? jobDescription(task) : task.description}</Typography>
+              </TableCell>
+              <TableCell>
+                <Typography variant="body2">{perMarket ? groupSchedule(group) : task.schedule_description}</Typography>
+              </TableCell>
+              {perMarket ? (
+                <TableCell colSpan={3}>
+                  <MarketChips group={group} pendingNames={pendingNames} onRun={onRun} />
+                </TableCell>
+              ) : (
+                <>
+                  <TableCell><LastRun run={task.last_run} /></TableCell>
+                  <TableCell><Status task={task} /></TableCell>
+                  <TableCell align="center">
+                    <RunButton task={task} pending={pendingNames.has(task.name)} onRun={onRun} />
+                  </TableCell>
+                </>
+              )}
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
@@ -296,27 +421,42 @@ function JobCards({ tasks, pendingNames, onRun }) {
   return (
     // role="list": WebKit drops list semantics from a ul styled list-style: none.
     <Box component="ul" role="list" aria-label="Scheduled jobs" sx={{ listStyle: 'none', p: 0, m: 0 }}>
-      {tasks.map((task) => (
-        <Box
-          component="li"
-          key={task.name}
-          sx={{ py: 1.25, borderBottom: 1, borderColor: 'divider' }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="body2" fontWeight="medium" sx={{ flex: 1 }}>{task.display_name}</Typography>
-            <RunButton task={task} pending={pendingNames.has(task.name)} onRun={onRun} />
+      {groupJobs(tasks).map((group) => {
+        const [task] = group;
+        return (
+          <Box
+            component="li"
+            key={task.job_type ?? task.name}
+            sx={{ py: 1.25, borderBottom: 1, borderColor: 'divider' }}
+          >
+            {isPerMarket(group) ? (
+              <>
+                <Typography variant="body2" fontWeight="medium" sx={{ mb: 0.5 }}>{task.job_name}</Typography>
+                <MarketChips group={group} pendingNames={pendingNames} onRun={onRun} />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {groupSchedule(group)}
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" fontWeight="medium" sx={{ flex: 1 }}>{task.display_name}</Typography>
+                  <RunButton task={task} pending={pendingNames.has(task.name)} onRun={onRun} />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
+                  {task.last_run && <StatusChip run={task.last_run} />}
+                  <LastRun run={task.last_run} />
+                </Box>
+                <StatusNote task={task} />
+                <PreflightNote task={task} />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {task.schedule_description}
+                </Typography>
+              </>
+            )}
           </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
-            {task.last_run && <StatusChip run={task.last_run} />}
-            <LastRun run={task.last_run} />
-          </Box>
-          <StatusNote task={task} />
-          <PreflightNote task={task} />
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            {task.schedule_description}
-          </Typography>
-        </Box>
-      ))}
+        );
+      })}
     </Box>
   );
 }
@@ -392,6 +532,8 @@ export default function SchedulesSection({ activeMarkets }) {
     (task) => ATTENTION_STATUSES.has(task.last_run?.status) || task.run_blocker?.reason === PIPELINE_ACTIVE,
   );
   const onRun = (taskName) => runMutation.mutate(taskName);
+  const routine = shown.filter((task) => !task.advanced);
+  const advanced = shown.filter((task) => task.advanced);
 
   return (
     <Box sx={{ mt: 3 }}>
@@ -419,10 +561,21 @@ export default function SchedulesSection({ activeMarkets }) {
         <Typography variant="body2" color="text.secondary">No scheduled tasks configured.</Typography>
       ) : (
         <>
-          <Jobs tasks={shown} pendingNames={pendingNames} onRun={onRun} />
+          <Jobs tasks={routine} pendingNames={pendingNames} onRun={onRun} />
           <InactiveMarkets markets={hiddenMarkets}>
             <Jobs tasks={hidden} pendingNames={pendingNames} onRun={onRun} />
           </InactiveMarkets>
+          {advanced.length > 0 && (
+            <Box component="section" aria-labelledby="advanced-jobs-heading" sx={{ mt: 2 }}>
+              <Divider textAlign="left">
+                <Typography id="advanced-jobs-heading" variant="overline" color="text.secondary">Advanced</Typography>
+              </Divider>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                Run on demand only, or delete data.
+              </Typography>
+              <Jobs tasks={advanced} pendingNames={pendingNames} onRun={onRun} />
+            </Box>
+          )}
         </>
       )}
     </Box>
