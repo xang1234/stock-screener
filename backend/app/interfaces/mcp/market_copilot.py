@@ -1605,6 +1605,14 @@ class MarketCopilotService:
         return task.get("last_run") or {}
 
     def _candidate_record(self, item: Any) -> dict[str, Any]:
+        """Project one scan result into the flat MCP candidate record.
+
+        Only persisted facts are projected: everything below comes from the
+        feature run's stored ``extended_fields`` (see
+        ``_map_feature_to_scan_result``), which in turn reads the published
+        ``details_json``. Nothing is recomputed here, and the existing keys
+        keep their names and values, so current clients stay compatible.
+        """
         extended = getattr(item, "extended_fields", {}) or {}
         return {
             "symbol": item.symbol,
@@ -1620,8 +1628,33 @@ class MarketCopilotService:
             "volume": extended.get("volume"),
             "eps_growth_qq": extended.get("eps_growth_qq"),
             "sales_growth_qq": extended.get("sales_growth_qq"),
+            # Persisted per-screener ratings (screener output, not recomputed).
+            "minervini_rating": extended.get("minervini_rating"),
+            "canslim_rating": extended.get("canslim_rating"),
+            "volume_breakthrough_rating": extended.get("volume_breakthrough_rating"),
+            # Persisted coverage / evidence state of the feature row.
+            "data_status": extended.get("data_status"),
+            "is_scannable": extended.get("is_scannable"),
+            "action_state": extended.get("action_state"),
+            "opportunity_state": extended.get("opportunity_state"),
+            # Persisted VCP facts (num_bases comes from the stored Minervini block).
+            "vcp_detected": extended.get("vcp_detected"),
+            "vcp_num_bases": extended.get("vcp_num_bases"),
+            "volume_surge": extended.get("volume_surge"),
+            # Canonical Setup Engine facts, as persisted under setup_engine.
             "se_setup_score": extended.get("se_setup_score"),
             "se_setup_ready": extended.get("se_setup_ready"),
+            "se_readiness_score": extended.get("se_readiness_score"),
+            "se_quality_score": extended.get("se_quality_score"),
+            "se_pattern_primary": extended.get("se_pattern_primary"),
+            "se_pivot_price": extended.get("se_pivot_price"),
+            "se_pivot_type": extended.get("se_pivot_type"),
+            "se_pivot_date": extended.get("se_pivot_date"),
+            "se_distance_to_pivot_pct": extended.get("se_distance_to_pivot_pct"),
+            "se_in_early_zone": extended.get("se_in_early_zone"),
+            "se_extended_from_pivot": extended.get("se_extended_from_pivot"),
+            "se_atr14_pct": extended.get("se_atr14_pct"),
+            "se_volume_vs_50d": extended.get("se_volume_vs_50d"),
         }
 
     def _theme_record(self, theme: ThemeCluster, metrics: ThemeMetrics | None) -> dict[str, Any]:

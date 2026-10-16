@@ -114,13 +114,15 @@ def seed_market_copilot_data(session_factory: sessionmaker) -> None:
         session.add_all([run_one, run_two, FeatureRunPointer(key="latest_published", run_id=2)])
 
         for run_id, as_of_date, symbol, score, rating, details in (
-            (1, date(2026, 3, 28), "NVDA", 88.0, 5, _details("NVDA", 88.0, "Strong Buy", 2, 92, "Semiconductors", 140.0, 25_000_000, 3_000_000_000_000, 34.0, 28.0)),
+            (1, date(2026, 3, 28), "NVDA", 88.0, 5, _details("NVDA", 88.0, "Strong Buy", 2, 92, "Semiconductors", 140.0, 25_000_000, 3_000_000_000_000, 34.0, 28.0, vcp_num_bases=3)),
             (1, date(2026, 3, 28), "AAPL", 76.0, 4, _details("AAPL", 76.0, "Buy", 2, 85, "Consumer Electronics", 210.0, 18_000_000, 2_700_000_000_000, 18.0, 14.0)),
             (1, date(2026, 3, 28), "AVGO", 81.0, 4, _details("AVGO", 81.0, "Buy", 2, 89, "Semiconductors", 1_120.0, 12_000_000, 900_000_000_000, 22.0, 17.0)),
             (1, date(2026, 3, 28), "PANW", 79.0, 4, _details("PANW", 79.0, "Buy", 2, 87, "Cybersecurity", 325.0, 8_000_000, 120_000_000_000, 20.0, 19.0)),
             (1, date(2026, 3, 28), "SNOW", 60.0, 3, _details("SNOW", 60.0, "Watch", 1, 70, "Cloud Software", 182.0, 6_000_000, 60_000_000_000, 9.0, 11.0)),
-            (2, date(2026, 3, 29), "NVDA", 92.0, 5, _details("NVDA", 92.0, "Strong Buy", 2, 95, "Semiconductors", 145.0, 26_000_000, 3_000_000_000_000, 36.0, 30.0)),
-            (2, date(2026, 3, 29), "MSFT", 82.0, 4, _details("MSFT", 82.0, "Buy", 2, 90, "Software", 430.0, 14_000_000, 3_200_000_000_000, 19.0, 16.0)),
+            (2, date(2026, 3, 29), "NVDA", 92.0, 5, _details("NVDA", 92.0, "Strong Buy", 2, 95, "Semiconductors", 145.0, 26_000_000, 3_000_000_000_000, 36.0, 30.0, vcp_num_bases=3)),
+            # Detected, but no base count persisted: the mapper must report None
+            # rather than derive a number from vcp_detected or from candidates.
+            (2, date(2026, 3, 29), "MSFT", 82.0, 4, _details("MSFT", 82.0, "Buy", 2, 90, "Software", 430.0, 14_000_000, 3_200_000_000_000, 19.0, 16.0, vcp_detected=True)),
             (2, date(2026, 3, 29), "AVGO", 83.0, 4, _details("AVGO", 83.0, "Buy", 2, 90, "Semiconductors", 1_135.0, 13_000_000, 900_000_000_000, 24.0, 18.0)),
             (2, date(2026, 3, 29), "PANW", 84.0, 5, _details("PANW", 84.0, "Strong Buy", 2, 91, "Cybersecurity", 332.0, 8_500_000, 120_000_000_000, 23.0, 20.0)),
             (2, date(2026, 3, 29), "SNOW", 55.0, 3, _details("SNOW", 55.0, "Watch", 1, 67, "Cloud Software", 176.0, 5_500_000, 60_000_000_000, 7.0, 9.0)),
@@ -349,7 +351,42 @@ def _details(
     market_cap: int,
     eps_growth_qq: float,
     sales_growth_qq: float,
+    *,
+    vcp_detected: bool | None = None,
+    vcp_num_bases: int | None = None,
 ) -> dict:
+    """Build one persisted feature row's ``details_json`` payload.
+
+    ``vcp_detected`` and ``vcp_num_bases`` are deliberately independent: the
+    base count lives in the Minervini block's ``full_analysis.vcp`` and is
+    stored as its own fact. A row can therefore be ``vcp_detected`` without a
+    persisted base count, which is exactly the case the mapper must not guess
+    around. ``vcp_num_bases=None`` omits the block entirely.
+    """
+
+    minervini_screener = {
+        "score": composite_score,
+        "passes": True,
+        "rating": rating,
+        "breakdown": {
+            "rs_rating": {"points": 20, "max_points": 20, "passes": True},
+            "stage": {"points": 20 if stage == 2 else 5, "max_points": 20, "passes": stage == 2},
+            "ma_alignment": {"points": 15, "max_points": 15, "passes": True},
+        },
+        "details": (
+            {}
+            if vcp_num_bases is None
+            else {
+                "full_analysis": {
+                    "vcp": {
+                        "num_bases": vcp_num_bases,
+                        "vcp_score": composite_score - 27.0,
+                    }
+                }
+            }
+        ),
+    }
+
     return {
         "symbol": symbol,
         "rating": rating,
@@ -364,23 +401,31 @@ def _details(
         "sales_growth_qq": sales_growth_qq,
         "ibd_industry_group": industry_group,
         "gics_sector": "Information Technology",
+        "minervini_rating": rating,
+        "canslim_rating": "Buy" if rating == "Strong Buy" else rating,
+        "volume_breakthrough_rating": "Strong Buy" if composite_score >= 90 else "Pass",
+        "data_status": "ok",
+        "is_scannable": True,
+        "action_state": "WATCH",
+        "opportunity_state": {
+            "policy_version": "correction-survivors-v1",
+            "metrics": {"hard_invalidation": False, "is_scannable": True},
+            "data_availability": {"setup": "available", "required_evidence": "complete"},
+        },
+        "vcp_detected": (
+            vcp_num_bases is not None and vcp_num_bases > 0
+            if vcp_detected is None
+            else vcp_detected
+        ),
+        "vcp_score": composite_score - 27.0,
+        "volume_surge": avg_dollar_volume >= 20_000_000,
         "screeners_run": ["minervini", "canslim"],
         "screeners_passed": 2 if rating in {"Strong Buy", "Buy"} else 1,
         "screeners_total": 2,
         "composite_method": "weighted_average",
         "details": {
             "screeners": {
-                "minervini": {
-                    "score": composite_score,
-                    "passes": True,
-                    "rating": rating,
-                    "breakdown": {
-                        "rs_rating": {"points": 20, "max_points": 20, "passes": True},
-                        "stage": {"points": 20 if stage == 2 else 5, "max_points": 20, "passes": stage == 2},
-                        "ma_alignment": {"points": 15, "max_points": 15, "passes": True},
-                    },
-                    "details": {},
-                },
+                "minervini": minervini_screener,
                 "canslim": {
                     "score": max(composite_score - 6, 0),
                     "passes": rating in {"Strong Buy", "Buy"},
@@ -399,8 +444,15 @@ def _details(
             "quality_score": composite_score - 10,
             "readiness_score": composite_score - 3,
             "pattern_primary": "VCP",
+            "pattern_confidence": 0.8,
             "pivot_price": round(current_price * 1.04, 2),
+            "pivot_type": "cup_with_handle",
+            "pivot_date": "2026-03-27",
             "distance_to_pivot_pct": 4.0,
+            "in_early_zone": False,
+            "extended_from_pivot": False,
+            "atr14_pct": 3.5,
+            "volume_vs_50d": 1.4,
             "setup_ready": rating in {"Strong Buy", "Buy"},
             "explain": {"thesis": f"{symbol} is acting constructively in the fixture run."},
             "candidates": [{"pattern": "VCP", "score": composite_score - 5}],

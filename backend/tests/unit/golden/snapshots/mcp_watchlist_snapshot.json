@@ -42,21 +42,52 @@
   },
   "items": [
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Buy",
       "company_name": "NVIDIA Corporation",
       "composite_score": 92.0,
       "current_price": 145.0,
+      "data_status": "ok",
       "eps_growth_qq": 36.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Semiconductors",
+      "is_scannable": true,
       "market_cap": 3000000000000,
+      "minervini_rating": "Strong Buy",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Strong Buy",
       "rs_rating": 95,
       "sales_growth_qq": 30.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 150.8,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 82.0,
+      "se_readiness_score": 89.0,
       "se_setup_ready": true,
       "se_setup_score": 87.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 2,
       "symbol": "NVDA",
-      "volume": 26000000
+      "vcp_detected": true,
+      "vcp_num_bases": 3,
+      "volume": 26000000,
+      "volume_breakthrough_rating": "Strong Buy",
+      "volume_surge": true
     }
   ],
   "missing_symbols": [
@@ -74,21 +105,52 @@
   },
   "strongest": [
     {
+      "action_state": "WATCH",
+      "canslim_rating": "Buy",
       "company_name": "NVIDIA Corporation",
       "composite_score": 92.0,
       "current_price": 145.0,
+      "data_status": "ok",
       "eps_growth_qq": 36.0,
       "gics_sector": "Information Technology",
       "ibd_industry_group": "Semiconductors",
+      "is_scannable": true,
       "market_cap": 3000000000000,
+      "minervini_rating": "Strong Buy",
+      "opportunity_state": {
+        "data_availability": {
+          "required_evidence": "complete",
+          "setup": "available"
+        },
+        "metrics": {
+          "hard_invalidation": false,
+          "is_scannable": true
+        },
+        "policy_version": "correction-survivors-v1"
+      },
       "rating": "Strong Buy",
       "rs_rating": 95,
       "sales_growth_qq": 30.0,
+      "se_atr14_pct": 3.5,
+      "se_distance_to_pivot_pct": 4.0,
+      "se_extended_from_pivot": false,
+      "se_in_early_zone": false,
+      "se_pattern_primary": "VCP",
+      "se_pivot_date": "2026-03-27",
+      "se_pivot_price": 150.8,
+      "se_pivot_type": "cup_with_handle",
+      "se_quality_score": 82.0,
+      "se_readiness_score": 89.0,
       "se_setup_ready": true,
       "se_setup_score": 87.0,
+      "se_volume_vs_50d": 1.4,
       "stage": 2,
       "symbol": "NVDA",
-      "volume": 26000000
+      "vcp_detected": true,
+      "vcp_num_bases": 3,
+      "volume": 26000000,
+      "volume_breakthrough_rating": "Strong Buy",
+      "volume_surge": true
     }
   ],
   "summary": "Watchlist Leaders has 2 symbols; 1 are present in published run 2 and 1 are missing.",
