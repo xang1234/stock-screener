@@ -270,7 +270,7 @@ function StaticHomePage() {
 
       <MarketHealthExposure exposure={home?.market_health_exposure} />
 
-      <StaticCotSection manifest={manifestQuery.data} />
+      {marketEntry.market === 'US' ? <StaticCotSection manifest={manifestQuery.data} /> : null}
 
       {opportunityStateEnabled ? (
         <CorrectionSurvivorsPanel

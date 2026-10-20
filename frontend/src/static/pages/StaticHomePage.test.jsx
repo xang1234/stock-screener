@@ -149,6 +149,7 @@ describe('StaticHomePage', () => {
     staticCotSpy.mockClear();
     delete manifest.assets;
     delete manifest.markets.US.features;
+    delete manifest.markets.HK;
     useStaticManifest.mockReturnValue({
       data: manifest,
       isLoading: false,
@@ -686,5 +687,15 @@ describe('StaticHomePage', () => {
     expect(health.compareDocumentPosition(cot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(cot.compareDocumentPosition(candidates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(staticCotSpy.mock.calls.at(-1)[0].assets.cot.path).toBe('cot/index.json');
+  });
+
+  it('hides COT positioning outside the US market', async () => {
+    manifest.assets = { cot: { path: 'cot/index.json' } };
+    manifest.markets.HK = { ...manifest.markets.US, display_name: 'Hong Kong' };
+    useStaticMarket.mockReturnValue({ selectedMarket: 'HK' });
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByTestId('market-health-exposure')).toBeInTheDocument();
+    expect(screen.queryByTestId('static-cot-section')).not.toBeInTheDocument();
   });
 });

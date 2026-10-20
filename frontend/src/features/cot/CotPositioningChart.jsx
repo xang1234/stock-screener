@@ -75,7 +75,13 @@ const CotPositioningChart = ({ history, mode, participant, visibleParticipants, 
       )}
       <Box role="img" aria-label={description} aria-describedby={descriptionId} sx={{ width: '100%', height: 370 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={rows} margin={{ top: 10, right: 20, left: 10, bottom: 10 }}>
+          <ComposedChart
+            data={rows}
+            margin={{ top: 10, right: 20, left: 10, bottom: 10 }}
+            stackOffset="sign"
+            barGap={0}
+            barCategoryGap="12%"
+          >
             <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
             <XAxis dataKey="reportDate" minTickGap={32} />
             <YAxis yAxisId="position" tickFormatter={formatCotNumber} />
@@ -98,7 +104,7 @@ const CotPositioningChart = ({ history, mode, participant, visibleParticipants, 
                   dataKey={item.participant}
                   name={item.label}
                   fill={COLORS[index % COLORS.length]}
-                  maxBarSize={18}
+                  stackId="net"
                 />
               )
             )) : (
@@ -115,7 +121,7 @@ const CotPositioningChart = ({ history, mode, participant, visibleParticipants, 
       <Typography variant="overline" display="block" sx={{ mt: 1 }}>Open Interest</Typography>
       <Box sx={{ width: '100%', height: 120 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} margin={{ top: 4, right: 20, left: 10, bottom: 4 }}>
+          <BarChart data={rows} margin={{ top: 4, right: 20, left: 10, bottom: 4 }} barCategoryGap="12%">
             <XAxis dataKey="reportDate" hide />
             <YAxis tickFormatter={formatCotNumber} />
             <Tooltip formatter={(value) => formatCotNumber(value)} />
