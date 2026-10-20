@@ -425,9 +425,11 @@ calculation version, report date, retrieval metadata, and freshness.
 ## Static contract
 
 The root static manifest advertises the global optional asset as
-`assets.cot.path = "cot/index.json"`. COT is independent of the selected stock
-market, so Static Daily reads this root asset rather than a market-specific
-asset. Static Daily remains valid when older artifacts do not advertise it.
+`assets.cot.path = "cot/index.json"`. The data is independent of the selected
+stock market, so Static Daily reads this root asset rather than a
+market-specific asset. CFTC positioning covers US futures, so Static Daily
+renders it only when the US market is selected. Static Daily remains valid when
+older artifacts do not advertise it.
 
 The export contains:
 
