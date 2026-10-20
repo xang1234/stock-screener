@@ -58,6 +58,8 @@ def _post_snapshot(post: SocialPostRecord) -> dict:
     for field in ("attachments", "prepared_evidence", "evidence_digest"):
         if not snapshot.get(field):
             snapshot.pop(field, None)
+    for item in snapshot.get("prepared_evidence", ()):
+        item["available_at"] = item["available_at"].isoformat()
     snapshot["created_at"] = post.created_at.isoformat()
     snapshot["observed_at"] = post.observed_at.isoformat()
     return snapshot

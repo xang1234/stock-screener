@@ -1054,3 +1054,25 @@ def test_alias_of_a_listing_outside_the_active_universe_does_not_reach_the_llm(b
     assert llm.calls == 0
     with backlog() as db:
         assert db.get(SocialExtractionWork, work_id).error_code == "skipped:no_signal"
+
+
+def test_enqueue_stores_a_post_with_prepared_evidence_as_json(backlog):
+    from hashlib import sha256
+
+    from app.domain.social_signals.records import SocialPreparedEvidence
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+
+    text = "chart shows $AAA backlog doubling"
+    digest = sha256(text.encode()).hexdigest()
+    evidence = SocialPreparedEvidence(id=digest, kind="image", url="https://pbs.twimg.com/a.jpg", text=text,
+        original_text_sha256=digest, text_sha256=digest, available_at=NOW, provenance_json="{}")
+    value = replace(post(1), attachments=(SocialAttachmentRef("image", "https://pbs.twimg.com/a.jpg"),),
+        prepared_evidence=(evidence,), evidence_digest=digest)
+
+    enqueue(backlog, processor(backlog, FakeLLM()), value)
+
+    with backlog() as db:
+        snapshot = dict(db.scalar(select(SocialExtractionWork)).input_snapshot_json)
+    for field in ("created_at", "observed_at"):
+        snapshot[field] = datetime.fromisoformat(snapshot[field])
+    assert SocialPostRecord(**snapshot) == value
