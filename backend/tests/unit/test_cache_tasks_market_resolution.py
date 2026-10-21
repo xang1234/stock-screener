@@ -44,10 +44,18 @@ def test_active_benchmark_markets_always_includes_us():
 
 
 def test_warm_spy_cache_returns_error_when_any_market_warm_fails(monkeypatch):
+    from datetime import date
+
+    from app.services.cache_manager import BenchmarkWarmResult
+
     class _FakeCacheManager:
         @staticmethod
         def warm_benchmark_cache(*, period, market):
-            return not (market == "HK" and period == "1y")
+            if market == "HK" and period == "1y":
+                return BenchmarkWarmResult(
+                    ok=False, required_date=date(2026, 3, 16), reason="no_benchmark_data",
+                )
+            return BenchmarkWarmResult(ok=True, required_date=date(2026, 3, 16), latest_date=date(2026, 3, 16))
 
     class _FakeSession:
         @staticmethod
@@ -61,7 +69,6 @@ def test_warm_spy_cache_returns_error_when_any_market_warm_fails(monkeypatch):
 
     result = cache_tasks.warm_spy_cache()
 
-    assert "error" in result
-    assert "HK:1y" in result["error"]
+    assert result["error"] == "Benchmark warm failed for HK:1y (no_benchmark_data: latest none, required 2026-03-16)"
     assert "by_market" in result
     assert result["by_market"]["US"]["2y"] is True
