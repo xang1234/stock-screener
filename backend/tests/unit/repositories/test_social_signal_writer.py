@@ -47,6 +47,20 @@ def writer(factory):
     return SocialSignalWriter(factory, clock=lambda: NOW)
 
 
+def test_a_batch_repeating_a_post_records_it_once(store):
+    single = batch()
+    post = single.posts[0]
+    repeated = replace(single, posts=(post, replace(post, likes=11)),
+        outcome=replace(single.outcome, received_count=2))
+
+    writer(store).persist_observations(repeated)
+
+    with store() as db:
+        assert db.query(ContentItem).count() == 1
+        assert db.query(SocialPostSource).count() == 1
+        assert db.query(SocialContentMetrics).one().likes == 10
+
+
 def test_cross_list_duplicate_retains_memberships_and_only_social_eligibility(store):
     w = writer(store)
     w.persist_observations(batch())
