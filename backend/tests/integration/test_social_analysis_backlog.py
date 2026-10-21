@@ -1109,3 +1109,29 @@ def test_saved_result_with_a_duplicate_of_a_batch_peer_decodes(backlog):
     with backlog() as db:
         _, result = _decode(db.get(SocialExtractionWork, work_id))
     assert [claim.duplicate_of_post_ids for claim in result.claims] == [("1",)]
+
+
+def test_a_result_that_fails_revalidation_is_saved_as_failed(backlog, monkeypatch):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_extraction_service import SocialExtractionError, SocialExtractionParser
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    parse_batch = SocialExtractionParser.parse_batch
+
+    def reject_post_two_on_revalidation(self, posts, content, **kwargs):
+        if kwargs.get("strict_claims") and [p["post_id"] for p in posts] == ["2"]:
+            raise SocialExtractionError("excerpt_not_in_source")
+        return parse_batch(self, posts, content, **kwargs)
+
+    monkeypatch.setattr(SocialExtractionParser, "parse_batch", reject_post_two_on_revalidation)
+    configure_budget(backlog)
+    worker = ProcessSocialBacklog(backlog, llm=FakeLLM(), batch_size=3)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 4)]
+
+    result = asyncio.run(worker.execute(NOW, 3))
+
+    assert (result.succeeded, result.failed) == (2, 1)
+    with backlog() as db:
+        states = [(db.get(SocialExtractionWork, work_id).state,
+                   db.get(SocialExtractionWork, work_id).error_code) for work_id in work_ids]
+    assert states == [("succeeded", None), ("failed_terminal", "invalid_saved_result"), ("succeeded", None)]
