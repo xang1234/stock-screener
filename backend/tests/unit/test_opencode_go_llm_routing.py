@@ -69,6 +69,32 @@ def test_opencode_go_never_falls_back_to_an_unrelated_openai_key():
         service._apply_provider_overrides({"model": MODEL})
 
 
+def test_metered_provider_failure_logs_only_the_exception_class(monkeypatch, caplog):
+    from app.services.llm import llm_service as llm_module
+
+    class AuthenticationError(Exception):
+        pass
+
+    async def provider_call(**kwargs):
+        raise AuthenticationError("key go-secret expired; prompt fixture")
+
+    monkeypatch.setattr(llm_module, "acompletion", provider_call)
+    service = LLMService(use_case="extraction")
+    service._opencode_go_api_key = "go-secret"
+
+    with caplog.at_level("WARNING", logger=llm_module.__name__), pytest.raises(LLMError, match="^metered_provider_error$"):
+        asyncio.run(service.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": "fixture"}],
+            max_tokens=20,
+            allow_fallbacks=False,
+            num_retries=0,
+            metered=True,
+        ))
+
+    assert [r.getMessage() for r in caplog.records] == ["Metered LLM dispatch failed: AuthenticationError"]
+
+
 def test_metered_missing_key_is_classified_before_provider_dispatch(monkeypatch):
     from app.services.llm import llm_service as llm_module
 
