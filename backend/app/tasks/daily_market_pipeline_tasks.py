@@ -38,9 +38,10 @@ PRIMARY_BENCHMARK_MISSING = "primary_benchmark_missing"
 
 class PrimaryBenchmarkMissing(RuntimeError):
     """The primary benchmark has no bar for the pipeline's as-of date after a
-    refetch. Market RS needs it (the as-of date is its first anchor) and US
-    exposure is scored on the primary only, so the chain stops here, where a
-    re-run can still recover the evening."""
+    refetch, and a re-run is queued. US exposure is scored on the primary
+    only, so the chain stops here while a re-run can still recover the
+    evening. With no re-run left the chain goes on: Market RS falls back to
+    the next benchmark candidate, as it did before this guard existed."""
 
 
 def _normalize_pipeline_market(market: str | None) -> str:
@@ -260,6 +261,8 @@ def guard_price_refresh(
             PRIMARY_BENCHMARK_MISSING, market, benchmark.get("symbol"), as_of_date, rerun,
             extra={"market": market, "reason": PRIMARY_BENCHMARK_MISSING, "rerun": rerun},
         )
+        if rerun["status"] != "scheduled":
+            return {"status": "ok", "market": market, "stage": "prices", "benchmark_rerun": rerun}
         raise PrimaryBenchmarkMissing(
             f"{PRIMARY_BENCHMARK_MISSING}: {market} has no {benchmark.get('symbol')} bar for "
             f"{as_of_date} after a refetch; rerun={rerun}; benchmark={benchmark}"
