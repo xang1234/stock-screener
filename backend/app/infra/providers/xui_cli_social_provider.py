@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import time
@@ -18,6 +19,7 @@ from app.domain.social_signals.records import (
 )
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+logger = logging.getLogger(__name__)
 _READ_KEYS = frozenset({
     "succeeded_sources", "failed_sources", "page_loads", "scroll_rounds",
     "seen_items", "outcomes", "items",
@@ -100,12 +102,11 @@ class XuiCliSocialProvider:
                 payload = json.loads(read_result.stdout)
             except (TypeError, json.JSONDecodeError):
                 return self._failed(request, "invalid_provider_json")
-            try:
-                posts = self._normalize(payload, request, effective_limit)
-            except (TypeError, ValueError, KeyError):
-                return self._failed(request, "invalid_provider_schema")
-
-            if read_result.returncode != 0 or payload["failed_sources"] != 0:
+            # A read xui reports as failed keeps xui's reason even when the rest
+            # of its payload would not pass the success schema.
+            if read_result.returncode != 0 or (
+                isinstance(payload, dict) and payload.get("failed_sources", 0) != 0
+            ):
                 code = self._failure_code(payload)
                 if code == "provider_network_error" and attempt == 0:
                     time.sleep(_RETRY_DELAY_SECONDS)
@@ -114,6 +115,11 @@ class XuiCliSocialProvider:
                     request, code,
                     cooldown=code not in {"provider_network_error", "provider_timeout"},
                 )
+            try:
+                posts = self._normalize(payload, request, effective_limit)
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("xui read failed the schema check: %s", exc)
+                return self._failed(request, "invalid_provider_schema")
             break
 
         timestamps = [post.created_at for post in posts]

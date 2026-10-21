@@ -309,7 +309,9 @@ class LLMService:
                 ) from None
             try:
                 return await acompletion(**params)
-            except Exception:
+            except Exception as exc:
+                # The class tells an expired key from an outage; the message can carry the prompt.
+                logger.warning("Metered LLM dispatch failed: %s", type(exc).__name__)
                 raise LLMError("metered_provider_error") from None
 
         # Build fallback list
