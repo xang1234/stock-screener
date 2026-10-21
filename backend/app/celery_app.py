@@ -400,6 +400,8 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
     'app.tasks.cache_tasks.force_refresh_stale_intraday',
     'app.tasks.cache_tasks.smart_refresh_cache',
     'app.tasks.cache_tasks.retry_failed_price_symbols',
+    # Refetches the benchmark candidates from the price providers.
+    'app.tasks.daily_market_pipeline_tasks.ensure_benchmark_prices',
     'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
     'app.tasks.universe_tasks.refresh_stock_universe',
     'app.tasks.universe_tasks.refresh_official_market_universe',
