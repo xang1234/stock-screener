@@ -208,6 +208,22 @@ def test_a_schema_failure_logs_the_check_that_failed(caplog):
     assert [r.getMessage() for r in caplog.records] == ["xui read failed the schema check: summary_coherence"]
 
 
+def test_a_malformed_attachment_url_is_not_logged(caplog):
+    payload = json.loads(FIXTURE.read_text())
+    payload["items"][0]["article_urls"] = ["https://user:hunter2@exam℀ple.com/a"]
+    batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
+    assert batch.outcome.error_code == "invalid_provider_schema"
+    assert [r.getMessage() for r in caplog.records] == ["xui read failed the schema check: attachment_url"]
+
+
+@pytest.mark.parametrize("value", ["0", None, True])
+def test_a_malformed_failure_count_is_a_schema_failure_without_cooldown(value):
+    payload = json.loads(FIXTURE.read_text())
+    payload["failed_sources"] = value
+    batch = provider(SyntheticRunner(auth(), completed(payload))).read_source(request())
+    assert (batch.outcome.error_code, batch.outcome.rate_limit_reset_at) == ("invalid_provider_schema", None)
+
+
 def test_a_read_xui_reports_as_failed_keeps_its_failure_reason_when_malformed():
     payload = {"succeeded_sources":0, "failed_sources":1, "page_loads":1, "scroll_rounds":0,
                "seen_items":0, "items":[], "outcomes":[{"source_id":"list:1522014550211457024",

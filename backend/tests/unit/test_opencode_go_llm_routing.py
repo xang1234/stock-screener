@@ -81,6 +81,7 @@ def test_metered_provider_failure_logs_only_the_exception_class(monkeypatch, cap
     monkeypatch.setattr(llm_module, "acompletion", provider_call)
     service = LLMService(use_case="extraction")
     service._opencode_go_api_key = "go-secret"
+    caplog.clear()
 
     with caplog.at_level("WARNING", logger=llm_module.__name__), pytest.raises(LLMError, match="^metered_provider_error$"):
         asyncio.run(service.completion(

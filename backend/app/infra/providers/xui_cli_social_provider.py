@@ -104,8 +104,9 @@ class XuiCliSocialProvider:
                 return self._failed(request, "invalid_provider_json")
             # A read xui reports as failed keeps xui's reason even when the rest
             # of its payload would not pass the success schema.
+            failed_sources = payload.get("failed_sources") if isinstance(payload, dict) else None
             if read_result.returncode != 0 or (
-                isinstance(payload, dict) and payload.get("failed_sources", 0) != 0
+                type(failed_sources) is int and failed_sources > 0
             ):
                 code = self._failure_code(payload)
                 if code == "provider_network_error" and attempt == 0:
@@ -239,7 +240,7 @@ class XuiCliSocialProvider:
     def _failure_code(payload):
         outcomes = payload.get("outcomes") if isinstance(payload, dict) else None
         error = outcomes[0].get("error") if isinstance(outcomes, list) and outcomes and isinstance(outcomes[0], dict) else ""
-        lowered = str(error or "").lower()
+        lowered = error.lower() if isinstance(error, str) else ""
         normalized = re.sub(r"[_-]+", " ", lowered)
         if any(
             re.search(rf"\b{re.escape(term.replace('_', ' '))}\b", normalized)
@@ -264,17 +265,25 @@ class XuiCliSocialProvider:
         ))
 
 
+def _parse_url(value: str):
+    try:
+        return urlparse(value)
+    except ValueError:
+        # urlparse quotes the URL in its error, and post URLs are untrusted.
+        raise ValueError("attachment_url") from None
+
+
 def _attachment_refs(raw: dict) -> list[dict[str, str]]:
     """Map xui's post-owned evidence fields without treating video previews as photos."""
 
     refs: list[dict[str, str]] = []
     for value in _string_list(raw.get("image_urls")):
-        parsed = urlparse(value)
+        parsed = _parse_url(value)
         host = (parsed.hostname or "").lower()
         if host == "pbs.twimg.com" and parsed.path.startswith("/media/"):
             refs.append({"kind": "image", "url": value})
     for value in _string_list(raw.get("article_urls")):
-        parsed = urlparse(value)
+        parsed = _parse_url(value)
         host = (parsed.hostname or "").lower()
         x_hosts = {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}
         is_x_article = host in x_hosts and "/article/" in parsed.path
