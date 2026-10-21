@@ -365,6 +365,12 @@ class SocialSignalWriter:
         for post in batch.posts:
             validate_utc_timestamp(post.observed_at, "post_observed_at", reference_at=ingress_at)
             validate_utc_timestamp(post.created_at, "post_created_at", reference_at=ingress_at)
+        # A provider page can repeat a post. Keep its first copy, since one read
+        # observes every post at the same time.
+        unique = {}
+        for post in batch.posts:
+            unique.setdefault(post.provider_post_id, post)
+        posts = tuple(unique.values())
         with self.session_factory.begin() as db:
             registry = _lock_registry(db)
             source = db.get(SocialSourceConfiguration, int(batch.request.source_id))
@@ -390,13 +396,13 @@ class SocialSignalWriter:
                     if existing["request_id"] != batch.request.request_id:
                         raise ValueError("source_already_collected")
                     if (existing["request"] != serialized(batch.request)
-                            or [i.get("source_post", i["post"]) for i in existing["inputs"]] != [serialized(p) for p in batch.posts]
+                            or [i.get("source_post", i["post"]) for i in existing["inputs"]] != [serialized(p) for p in posts]
                             or run.source_outcomes_json[batch.request.source_id] != serialized(replace(batch.outcome,
                                 committed_progress=existing["committed_progress"]))):
                         raise ValueError("duplicate_delivery_mismatch")
                     return replace(batch, outcome=replace(batch.outcome, committed_progress=existing["committed_progress"]))
             observations = []
-            for post in batch.posts:
+            for post in posts:
                 if post.source_id != batch.request.source_id or post.provider != registry.provider or (run and post.provider != run.provider):
                     raise ValueError("post_source_identity_mismatch")
                 external_id = twitter_external_id(post.provider_post_id)
