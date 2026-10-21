@@ -305,6 +305,7 @@ class ProcessSocialBacklog:
                     work = skipped
                     if work is None:
                         # Saved as an empty judgment, so readiness and replays treat it like any result.
+                        # It has no claims to fail revalidation, so it skips the check in _finish.
                         result = ExtractionResult(input_hash, NO_SIGNAL_GATE, NO_SIGNAL_GATE, prompt_version,
                             schema_version, (), None, None, (ExtractionPostJudgment(post.provider_post_id, False, None),))
                         work = SocialExtractionWork(content_item_id=content_item_id, input_hash=input_hash,
@@ -432,7 +433,7 @@ class ProcessSocialBacklog:
                     # Every later stage revalidates this row and stops the run if it fails.
                     _decode(row)
                 except ValueError as exc:
-                    logger.warning("Saved social result is invalid work_id=%s reason=%s", work_id, exc)
+                    logger.error("Saved social result is invalid work_id=%s reason=%s", work_id, exc)
                     row.state, row.error_code = "failed_terminal", "invalid_saved_result"
             return row.state
 
