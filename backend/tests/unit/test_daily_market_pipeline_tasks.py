@@ -61,6 +61,9 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
 
     assert [signature.task for signature in signatures] == [
         "app.tasks.cache_tasks.smart_refresh_cache",
+        # On the data_fetch queue: refetches the benchmark candidates through
+        # the provider plan when the primary has no bar for the as-of date.
+        "app.tasks.daily_market_pipeline_tasks.ensure_benchmark_prices",
         "app.tasks.daily_market_pipeline_tasks.guard_price_refresh",
         "app.tasks.market_rs_tasks.calculate_market_rs_snapshot",
         "app.tasks.daily_market_pipeline_tasks.guard_market_rs_result",
@@ -76,22 +79,26 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
         "app.tasks.daily_market_pipeline_tasks.guard_exposure_result",
     ]
     assert signatures[0].kwargs == {"mode": "delta", "market": "HK"}
-    assert signatures[2].kwargs == {
+    assert signatures[1].kwargs == {"market": "HK", "as_of_date": "2026-03-16"}
+    assert signatures[1].options["queue"] == "data_fetch_hk"
+    assert signatures[2].kwargs == {"market": "HK", "as_of_date": "2026-03-16", "rerun_attempt": 0}
+    assert signatures[2].options["queue"] == "market_jobs_hk"
+    assert signatures[3].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
         "formula_version": "balanced-horizon-percentile-v2",
     }
-    assert signatures[4].kwargs == {
+    assert signatures[5].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
         "execution_policy": "refresh_guarded",
     }
-    assert signatures[8].kwargs == {
+    assert signatures[9].kwargs == {
         "market": "HK",
         "calculation_date": "2026-03-16",
         "execution_policy": "refresh_guarded",
     }
-    assert signatures[6].kwargs == {
+    assert signatures[7].kwargs == {
         "market": "HK",
         "as_of_date_str": "2026-03-16",
         "universe_name": "market:HK",
@@ -319,7 +326,7 @@ class _ChainClaims:
         return False
 
 
-def _ready_to_dispatch(monkeypatch, module, claims, published):
+def _ready_to_dispatch(monkeypatch, module, claims, published, *, market_open=False):
     class _FakeCalendar:
         def market_now(self, _market):
             return datetime(2026, 3, 16, 16, 30)
@@ -329,6 +336,9 @@ def _ready_to_dispatch(monkeypatch, module, claims, published):
 
         def last_completed_trading_day(self, _market):
             return date(2026, 3, 16)
+
+        def is_market_open(self, _market):
+            return market_open
 
     class _FakeChain:
         def __init__(self, signatures):
@@ -351,7 +361,9 @@ def _ready_to_dispatch(monkeypatch, module, claims, published):
     monkeypatch.setattr(module, "_market_pipeline_active", lambda _market: None)
     monkeypatch.setattr(module, "MarketCalendarService", lambda: _FakeCalendar())
     monkeypatch.setattr(
-        module, "_build_daily_market_pipeline_signatures", lambda *_args: ["prices", "groups", "snapshot"],
+        module,
+        "_build_daily_market_pipeline_signatures",
+        lambda *_args, **_kwargs: ["prices", "groups", "snapshot"],
     )
     monkeypatch.setattr(module, "chain", lambda *signatures: _FakeChain(list(signatures)))
     monkeypatch.setattr(module, "_pipeline_chain_claims", lambda: claims)
@@ -1139,3 +1151,342 @@ def test_guard_market_rs_accepts_exact_completed_balanced_run():
         "formula_version": BALANCED_RS_FORMULA_VERSION,
         "market_rs_run_id": 42,
     }
+
+
+# --- The primary benchmark's as-of bar: refetch once, then a bounded re-run ---
+
+
+def _price_rows(monkeypatch, module, rows):
+    """Point the module's SessionLocal at an in-memory StockPrice table.
+
+    ``rows`` are (symbol, date, adj_close). Every ``SessionLocal()`` opens a new
+    connection, so the engine shares one connection across them.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.database import Base
+    from app.models.stock import StockPrice
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine, tables=[StockPrice.__table__])
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(module, "SessionLocal", session_factory)
+
+    def insert(symbol, day, adj_close):
+        with session_factory() as session:
+            session.add(StockPrice(
+                symbol=symbol, date=day, open=1.0, high=1.0, low=1.0, close=1.0, volume=1,
+                adj_close=adj_close,
+            ))
+            session.commit()
+
+    for symbol, day, adj_close in rows:
+        insert(symbol, day, adj_close)
+    return insert
+
+
+def test_ensure_benchmark_prices_passes_a_present_bar_through_without_a_refetch(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    _price_rows(monkeypatch, module, [("SPY", date(2026, 3, 16), 500.0)])
+    fetches = []
+    monkeypatch.setattr(module, "_refetch_prices", lambda market, symbols: fetches.append((market, symbols)))
+
+    result = module.ensure_benchmark_prices.run(
+        {"status": "completed", "refreshed": 10, "total": 10}, market="US", as_of_date="2026-03-16",
+    )
+
+    assert result == {
+        "status": "completed",
+        "refreshed": 10,
+        "total": 10,
+        "benchmark": {"status": "present", "symbol": "SPY", "as_of_date": "2026-03-16", "refetched": False},
+    }
+    assert fetches == []
+
+
+def test_ensure_benchmark_prices_refetches_the_candidates_when_the_primary_bar_is_missing(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    insert = _price_rows(monkeypatch, module, [("SPY", date(2026, 3, 13), 499.0)])
+    fetches = []
+
+    def refetch_supplies_the_bar(market, symbols):
+        fetches.append((market, symbols))
+        insert("SPY", date(2026, 3, 16), 500.0)
+
+    monkeypatch.setattr(module, "_refetch_prices", refetch_supplies_the_bar)
+
+    result = module.ensure_benchmark_prices.run(
+        {"status": "completed", "refreshed": 10, "total": 10}, market="US", as_of_date="2026-03-16",
+    )
+
+    assert result["benchmark"] == {
+        "status": "present", "symbol": "SPY", "as_of_date": "2026-03-16", "refetched": True,
+    }
+    assert fetches == [("US", ("SPY", "IVV", "^VIX"))]
+
+
+def test_ensure_benchmark_prices_reports_a_bar_still_missing_after_the_refetch(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    _price_rows(monkeypatch, module, [("SPY", date(2026, 3, 13), 499.0)])
+    monkeypatch.setattr(module, "_refetch_prices", lambda market, symbols: None)
+
+    result = module.ensure_benchmark_prices.run(
+        {"status": "completed", "refreshed": 10, "total": 10}, market="US", as_of_date="2026-03-16",
+    )
+
+    assert result["benchmark"] == {
+        "status": "missing", "symbol": "SPY", "as_of_date": "2026-03-16", "refetched": True,
+    }
+
+
+def test_ensure_benchmark_prices_ignores_a_bar_without_a_usable_adjusted_close(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    _price_rows(monkeypatch, module, [("SPY", date(2026, 3, 16), None)])
+    fetches = []
+    monkeypatch.setattr(module, "_refetch_prices", lambda market, symbols: fetches.append(symbols))
+
+    result = module.ensure_benchmark_prices.run(
+        {"status": "completed", "refreshed": 10, "total": 10}, market="US", as_of_date="2026-03-16",
+    )
+
+    assert result["benchmark"]["status"] == "missing"
+    assert fetches == [("SPY", "IVV", "^VIX")]
+
+
+def test_ensure_benchmark_prices_reports_a_refetch_that_raises_instead_of_ending_the_chain(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    _price_rows(monkeypatch, module, [])
+
+    def yahoo_down(market, symbols):
+        raise ConnectionError("yahoo down")
+
+    monkeypatch.setattr(module, "_refetch_prices", yahoo_down)
+
+    result = module.ensure_benchmark_prices.run(
+        {"status": "completed", "refreshed": 10, "total": 10}, market="US", as_of_date="2026-03-16",
+    )
+
+    assert result["benchmark"] == {
+        "status": "missing",
+        "symbol": "SPY",
+        "as_of_date": "2026-03-16",
+        "refetched": True,
+        "error": "yahoo down",
+    }
+
+
+def test_ensure_benchmark_prices_leaves_a_failed_refresh_for_its_guard(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    _price_rows(monkeypatch, module, [])
+    fetches = []
+    monkeypatch.setattr(module, "_refetch_prices", lambda market, symbols: fetches.append(symbols))
+    failed = {"status": "failed", "error": "boom", "refreshed": 0, "failed": 10}
+
+    result = module.ensure_benchmark_prices.run(failed, market="US", as_of_date="2026-03-16")
+
+    assert result == {"status": "failed", "error": "boom", "refreshed": 0, "failed": 10}
+    assert fetches == []
+
+
+def test_refetch_prices_runs_the_candidates_through_the_bulk_price_path(monkeypatch):
+    import pandas as pd
+
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    spy = pd.DataFrame({"Close": [500.0]}, index=pd.to_datetime(["2026-03-16"]))
+    vix = pd.DataFrame({"Close": [15.0]}, index=pd.to_datetime(["2026-03-16"]))
+    fetched, stored = [], []
+
+    class _FakeBulkFetcher:
+        def fetch_prices_in_batches(self, symbols, *, period, market):
+            fetched.append((symbols, period, market))
+            return {
+                "SPY": {"symbol": "SPY", "price_data": spy, "has_error": False},
+                "IVV": {"symbol": "IVV", "price_data": None, "has_error": True, "error": "No data"},
+                "^VIX": {"symbol": "^VIX", "price_data": vix, "has_error": False},
+            }
+
+    class _FakePriceCache:
+        def store_refreshed_batch(self, batch, *, period, market_by_symbol):
+            stored.append((batch, period, market_by_symbol))
+            return len(batch)
+
+    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", _FakeBulkFetcher)
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: _FakePriceCache())
+
+    module._refetch_prices("US", ("SPY", "IVV", "^VIX"))
+
+    assert fetched == [(["SPY", "IVV", "^VIX"], "1y", "US")]
+    [(batch, period, market_by_symbol)] = stored
+    assert batch == {"SPY": spy, "^VIX": vix}
+    assert period == "1y"
+    assert market_by_symbol == {"SPY": "US", "^VIX": "US"}
+
+
+def _guard_with_benchmark(monkeypatch, module, *, status, rerun_attempt, market_open=False):
+    scheduled = []
+    monkeypatch.setattr(
+        module.queue_daily_market_pipeline,
+        "apply_async",
+        lambda **options: scheduled.append(options) or SimpleNamespace(id="rerun-1"),
+    )
+    monkeypatch.setattr(
+        module, "_preflight_calendar", lambda: SimpleNamespace(is_market_open=lambda _market: market_open),
+    )
+    result = {
+        "status": "completed",
+        "refreshed": 10,
+        "total": 10,
+        "benchmark": {"status": status, "symbol": "SPY", "as_of_date": "2026-03-16", "refetched": True},
+    }
+    return (
+        lambda: module.guard_price_refresh.run(
+            result, market="US", as_of_date="2026-03-16", rerun_attempt=rerun_attempt,
+        ),
+        scheduled,
+    )
+
+
+def test_guard_price_refresh_passes_when_the_primary_benchmark_bar_is_present(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    guard, scheduled = _guard_with_benchmark(monkeypatch, module, status="present", rerun_attempt=0)
+
+    assert guard() == {"status": "ok", "market": "US", "stage": "prices"}
+    assert scheduled == []
+
+
+def test_guard_price_refresh_schedules_one_rerun_when_the_primary_benchmark_is_missing(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    guard, scheduled = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=0)
+
+    with pytest.raises(module.PrimaryBenchmarkMissing, match="primary_benchmark_missing: US has no SPY bar for 2026-03-16"):
+        guard()
+
+    assert scheduled == [{
+        "kwargs": {"market": "US", "rerun_attempt": 1, "rerun_as_of_date": "2026-03-16"},
+        "countdown": 45 * 60,
+        "queue": "market_jobs_us",
+    }]
+
+
+def test_guard_price_refresh_stops_rerunning_after_the_last_attempt(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    last, scheduled_by_last = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=1)
+    with pytest.raises(module.PrimaryBenchmarkMissing):
+        last()
+    assert [options["kwargs"]["rerun_attempt"] for options in scheduled_by_last] == [2]
+
+    exhausted, scheduled_by_exhausted = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=2)
+    with pytest.raises(module.PrimaryBenchmarkMissing, match="exhausted"):
+        exhausted()
+    assert scheduled_by_exhausted == []
+
+
+def test_guard_price_refresh_never_schedules_a_rerun_while_the_market_is_open(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    guard, scheduled = _guard_with_benchmark(
+        monkeypatch, module, status="missing", rerun_attempt=0, market_open=True,
+    )
+
+    with pytest.raises(module.PrimaryBenchmarkMissing, match="market_open"):
+        guard()
+    assert scheduled == []
+
+
+def test_guard_price_refresh_accepts_a_chain_published_before_the_benchmark_stage(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    scheduled = []
+    monkeypatch.setattr(
+        module.queue_daily_market_pipeline, "apply_async", lambda **options: scheduled.append(options),
+    )
+
+    result = module.guard_price_refresh.run({"status": "completed", "refreshed": 10, "total": 10}, market="US")
+
+    assert result == {"status": "ok", "market": "US", "stage": "prices"}
+    assert scheduled == []
+
+
+def test_a_benchmark_rerun_dispatches_with_its_attempt_number(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    claims, published = _ChainClaims(), []
+    _ready_to_dispatch(monkeypatch, module, claims, published)
+    built = []
+    monkeypatch.setattr(
+        module,
+        "_build_daily_market_pipeline_signatures",
+        lambda market, trading_day, *, rerun_attempt: built.append((market, trading_day, rerun_attempt)) or ["prices"],
+    )
+
+    result = module.queue_daily_market_pipeline.run("US", rerun_attempt=1, rerun_as_of_date="2026-03-16")
+
+    assert result["status"] == "queued"
+    assert result["as_of_date"] == "2026-03-16"
+    assert built == [("US", date(2026, 3, 16), 1)]
+    assert len(published) == 1
+
+
+def test_a_benchmark_rerun_skips_once_a_newer_session_completed(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    claims, published = _ChainClaims(), []
+    _ready_to_dispatch(monkeypatch, module, claims, published)
+
+    result = module.queue_daily_market_pipeline.run("US", rerun_attempt=1, rerun_as_of_date="2026-03-13")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "rerun_session_advanced"
+    assert result["as_of_date"] == "2026-03-16"
+    assert result["rerun_as_of_date"] == "2026-03-13"
+    assert published == []
+    assert claims.holders == {}
+
+
+def test_a_benchmark_rerun_never_runs_during_a_session(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    claims, published = _ChainClaims(), []
+    _ready_to_dispatch(monkeypatch, module, claims, published, market_open=True)
+
+    result = module.queue_daily_market_pipeline.run("US", rerun_attempt=1, rerun_as_of_date="2026-03-16")
+
+    assert result == {
+        "status": "skipped",
+        "reason": "market_open",
+        "market": "US",
+        "as_of_date": "2026-03-16",
+        "timestamp": result["timestamp"],
+    }
+    assert published == []
+    assert claims.holders == {}
+
+
+def test_a_benchmark_rerun_cannot_double_run_a_pipeline_still_holding_the_claim(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    claims, published = _ChainClaims(), []
+    _ready_to_dispatch(monkeypatch, module, claims, published)
+
+    first = module.queue_daily_market_pipeline.run("US")
+    rerun = module.queue_daily_market_pipeline.run("US", rerun_attempt=1, rerun_as_of_date="2026-03-16")
+
+    assert first["status"] == "queued"
+    assert rerun["status"] == "skipped"
+    assert rerun["reason"] == "market_pipeline_already_active"
+    assert rerun["active_chain_token"] == claims.holders["US"]["task_id"]
+    assert len(published) == 1

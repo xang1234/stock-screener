@@ -80,6 +80,14 @@ def test_market_rs_task_is_registered_and_routed_to_market_jobs(task_name):
     assert celery_app.conf.task_routes[task_name] == {"queue": "market_jobs_us"}
 
 
+def test_benchmark_refetch_stage_is_routed_to_a_data_fetch_queue():
+    # It calls the price providers, so it must never land on a market_jobs
+    # or general worker; the chain narrows it to the market's data_fetch queue.
+    assert celery_app.conf.task_routes[
+        "app.tasks.daily_market_pipeline_tasks.ensure_benchmark_prices"
+    ] == {"queue": "data_fetch_shared"}
+
+
 # ---------------------------------------------------------------------------
 # Redis backend resilience
 # ---------------------------------------------------------------------------
