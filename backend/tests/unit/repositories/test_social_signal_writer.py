@@ -81,6 +81,17 @@ def test_a_redelivered_batch_repeating_a_post_is_accepted_as_the_same_delivery(s
     assert [value["post"]["provider_post_id"] for value in inputs] == ["100"]
 
 
+def test_a_redelivery_whose_repeated_copy_names_another_source_is_rejected(store):
+    w = writer(store)
+    run = w.create_run("run", NOW)
+    w.persist_observations(repeated_post_batch(), run_id=run)
+    changed = repeated_post_batch()
+    changed = replace(changed, posts=(changed.posts[0], replace(changed.posts[1], source_id="2")))
+
+    with pytest.raises(ValueError, match="post_source_identity_mismatch"):
+        w.persist_observations(changed, run_id=run)
+
+
 def test_cross_list_duplicate_retains_memberships_and_only_social_eligibility(store):
     w = writer(store)
     w.persist_observations(batch())

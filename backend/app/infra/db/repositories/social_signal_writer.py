@@ -383,6 +383,10 @@ class SocialSignalWriter:
             run = db.get(SocialSignalRun, run_id) if run_id else None
             if run_id and (run is None or run.status != "running"):
                 raise ValueError("run_not_collecting")
+            # Every copy, including repeats the collapse drops and redeliveries, names this source.
+            for post in batch.posts:
+                if post.source_id != batch.request.source_id or post.provider != registry.provider or (run and post.provider != run.provider):
+                    raise ValueError("post_source_identity_mismatch")
             if run is not None:
                 if "replay" in run.application_progress_json:
                     raise ValueError("replay_collection_forbidden")
@@ -401,9 +405,6 @@ class SocialSignalWriter:
                                 committed_progress=existing["committed_progress"]))):
                         raise ValueError("duplicate_delivery_mismatch")
                     return replace(batch, outcome=replace(batch.outcome, committed_progress=existing["committed_progress"]))
-            for post in batch.posts:
-                if post.source_id != batch.request.source_id or post.provider != registry.provider or (run and post.provider != run.provider):
-                    raise ValueError("post_source_identity_mismatch")
             observations = []
             for post in posts:
                 external_id = twitter_external_id(post.provider_post_id)
