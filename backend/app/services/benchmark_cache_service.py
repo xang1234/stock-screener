@@ -487,13 +487,23 @@ class BenchmarkCacheService:
 
             logger.info("Fetched benchmark %s %s: %s rows", benchmark_symbol, period, len(benchmark_data))
 
-            # Cache in Redis
-            self._store_in_redis(
-                benchmark_symbol=benchmark_symbol,
-                period=period,
-                data=benchmark_data,
-                market=market,
-            )
+            # Redis holds only a history that reaches the required date, so a
+            # waiter on the lock never adopts a short one as current. The
+            # database keeps every real bar either way (insert-only).
+            if benchmark_data_meets_required_date(
+                benchmark_data, required_as_of_date=required_as_of_date
+            ):
+                self._store_in_redis(
+                    benchmark_symbol=benchmark_symbol,
+                    period=period,
+                    data=benchmark_data,
+                    market=market,
+                )
+            else:
+                logger.info(
+                    "Benchmark %s %s ends before %s; not cached in Redis",
+                    benchmark_symbol, period, required_as_of_date,
+                )
 
             # Persist to database
             self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)

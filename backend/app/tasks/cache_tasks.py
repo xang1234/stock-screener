@@ -300,13 +300,16 @@ def warm_spy_cache(market: Optional[str] = None):
         by_market = {}
         failed_periods: list[str] = []
         for market in markets:
-            by_market[market] = {
-                '2y': cache_manager.warm_benchmark_cache(period="2y", market=market),
-                '1y': cache_manager.warm_benchmark_cache(period="1y", market=market),
+            outcomes = {
+                period: cache_manager.warm_benchmark_cache(period=period, market=market)
+                for period in ("2y", "1y")
             }
-            for period, ok in by_market[market].items():
-                if not ok:
-                    failed_periods.append(f"{market}:{period}")
+            by_market[market] = {period: outcome.ok for period, outcome in outcomes.items()}
+            failed_periods.extend(
+                f"{market}:{period} ({outcome.describe()})"
+                for period, outcome in outcomes.items()
+                if not outcome.ok
+            )
 
         results = {
             'by_market': by_market,

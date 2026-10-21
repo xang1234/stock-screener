@@ -5,19 +5,41 @@ Provides centralized cache coordination, warming, and statistics.
 """
 import logging
 import time
+from dataclasses import dataclass
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import date, datetime
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from .benchmark_cache_service import BenchmarkCacheService
 from .benchmark_registry_service import benchmark_registry
+from .benchmark_resolution import latest_benchmark_data_date
 from .cache.market_cache_policy import market_cache_policy
 from .price_cache_service import PriceCacheService
 from .redis_pool import get_redis_client, is_redis_enabled
 from ..utils.market_hours import is_market_open, format_market_status
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BenchmarkWarmResult:
+    """One benchmark period's warm.
+
+    ``ok`` only when a candidate carries a bar for ``required_date``, the
+    market's last completed session. ``latest_date`` is the newest bar on or
+    before it that any candidate reached.
+    """
+
+    ok: bool
+    required_date: date | None
+    latest_date: date | None = None
+    reason: str | None = None
+
+    def describe(self) -> str:
+        latest = self.latest_date.isoformat() if self.latest_date else "none"
+        required = self.required_date.isoformat() if self.required_date else "unknown"
+        return f"{self.reason}: latest {latest}, required {required}"
 
 
 class CacheManager:
@@ -59,39 +81,62 @@ class CacheManager:
 
         self.db = db
 
-    def warm_benchmark_cache(self, period: str = "2y", market: str = "US") -> bool:
-        """
-        Warm market benchmark cache.
+    def warm_benchmark_cache(self, period: str = "2y", market: str = "US") -> BenchmarkWarmResult:
+        """Warm one period of the market's benchmark cache.
 
-        Args:
-            period: Time period to cache
-            market: Market code for benchmark resolution (US, HK, JP, TW)
-
-        Returns:
-            True if successful
+        The warm requires a bar for the market's last completed session, so a
+        provider history that ends a session earlier (Yahoo publishes a close
+        late, or drops it) is a failed warm, not a current cache. During a
+        session that is the prior day: today's partial bar is neither
+        required nor counted. A calendar that cannot name that session fails
+        the warm too; warming blind is what let stale data count as fresh.
         """
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        required_date: date | None = None
         try:
+            required_date = get_market_calendar_service().last_completed_trading_day(market)
             benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(market)
-            logger.info(f"Warming {market} benchmark cache ({benchmark_symbol}, {period})...")
+            logger.info(
+                "Warming %s benchmark cache (%s, %s) through %s...",
+                market, benchmark_symbol, period, required_date,
+            )
             start_time = time.time()
 
-            benchmark_data = self.benchmark_cache.get_benchmark_data(
+            resolution = self.benchmark_cache.resolve_benchmark_bundle(
                 market=market,
                 period=period,
                 force_refresh=False,
+                required_as_of_date=required_date,
             )
+            if resolution.bundle is None:
+                reason = resolution.error or "no_benchmark_data"
+                latest_date = max(
+                    (status.latest_date for status in resolution.candidate_statuses if status.latest_date),
+                    default=None,
+                )
+                logger.warning(
+                    "Failed to warm %s benchmark cache (%s): %s; candidates: %s",
+                    market, period, reason, resolution.candidate_diagnostics(),
+                )
+                return BenchmarkWarmResult(
+                    ok=False, required_date=required_date, latest_date=latest_date, reason=reason,
+                )
 
-            if benchmark_data is not None and not benchmark_data.empty:
-                elapsed = time.time() - start_time
-                logger.info(f"✓ {market} benchmark cache warmed: {len(benchmark_data)} rows in {elapsed:.2f}s")
-                return True
-            else:
-                logger.warning(f"Failed to warm {market} benchmark cache")
-                return False
+            elapsed = time.time() - start_time
+            logger.info(
+                "✓ %s benchmark cache warmed: %s rows (%s) in %.2fs",
+                market, len(resolution.bundle.data), resolution.bundle.benchmark_symbol, elapsed,
+            )
+            return BenchmarkWarmResult(
+                ok=True,
+                required_date=required_date,
+                latest_date=latest_benchmark_data_date(resolution.bundle.data, as_of_date=required_date),
+            )
 
         except Exception as e:
             logger.error(f"Error warming {market} benchmark cache: {e}", exc_info=True)
-            return False
+            return BenchmarkWarmResult(ok=False, required_date=required_date, reason=f"error: {e}")
 
     def warm_price_cache(
         self,
