@@ -1390,20 +1390,22 @@ def test_guard_price_refresh_stops_rerunning_after_the_last_attempt(monkeypatch)
     assert [options["kwargs"]["rerun_attempt"] for options in scheduled_by_last] == [2]
 
     exhausted, scheduled_by_exhausted = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=2)
-    with pytest.raises(module.PrimaryBenchmarkMissing, match="exhausted"):
-        exhausted()
+    # No re-run left: the chain goes on and Market RS takes the fallback benchmark.
+    assert exhausted() == {
+        "status": "ok", "market": "US", "stage": "prices",
+        "benchmark_rerun": {"status": "exhausted", "attempts": 2},
+    }
     assert scheduled_by_exhausted == []
 
 
-def test_guard_price_refresh_never_schedules_a_rerun_while_the_market_is_open(monkeypatch):
+def test_guard_price_refresh_continues_without_a_rerun_while_the_market_is_open(monkeypatch):
     from app.tasks import daily_market_pipeline_tasks as module
 
     guard, scheduled = _guard_with_benchmark(
         monkeypatch, module, status="missing", rerun_attempt=0, market_open=True,
     )
 
-    with pytest.raises(module.PrimaryBenchmarkMissing, match="market_open"):
-        guard()
+    assert guard()["benchmark_rerun"] == {"status": "skipped", "reason": "market_open"}
     assert scheduled == []
 
 
