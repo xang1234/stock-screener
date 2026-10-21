@@ -216,6 +216,13 @@ def test_a_malformed_attachment_url_is_not_logged(caplog):
     assert [r.getMessage() for r in caplog.records] == ["xui read failed the schema check: attachment_url"]
 
 
+def test_an_attachment_record_rejects_a_malformed_url_without_quoting_it():
+    from app.domain.social_signals.records import SocialAttachmentRef
+
+    with pytest.raises(ValueError, match="^invalid_attachment_url$"):
+        SocialAttachmentRef("article", "https://user:hunter2@exam℀ple.com/a")
+
+
 @pytest.mark.parametrize("value", ["0", None, True])
 def test_a_malformed_failure_count_is_a_schema_failure_without_cooldown(value):
     payload = json.loads(FIXTURE.read_text())

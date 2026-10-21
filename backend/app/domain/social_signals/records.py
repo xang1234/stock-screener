@@ -123,7 +123,11 @@ class SocialAttachmentRef:
     def __post_init__(self) -> None:
         _choice(self.kind, {"image", "article"}, "attachment_kind")
         _required(self.url, "attachment_url")
-        parsed = urlparse(self.url)
+        try:
+            parsed = urlparse(self.url)
+        except ValueError:
+            # urlparse quotes the URL in its error, and providers log these codes.
+            raise ValueError("invalid_attachment_url") from None
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("invalid_attachment_url")
 
