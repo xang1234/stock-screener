@@ -401,10 +401,11 @@ class SocialSignalWriter:
                                 committed_progress=existing["committed_progress"]))):
                         raise ValueError("duplicate_delivery_mismatch")
                     return replace(batch, outcome=replace(batch.outcome, committed_progress=existing["committed_progress"]))
-            observations = []
-            for post in posts:
+            for post in batch.posts:
                 if post.source_id != batch.request.source_id or post.provider != registry.provider or (run and post.provider != run.provider):
                     raise ValueError("post_source_identity_mismatch")
+            observations = []
+            for post in posts:
                 external_id = twitter_external_id(post.provider_post_id)
                 item = db.scalar(select(ContentItem).where(
                     ContentItem.source_type == "twitter",
