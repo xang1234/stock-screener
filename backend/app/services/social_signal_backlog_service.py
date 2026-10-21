@@ -419,17 +419,25 @@ class ProcessSocialBacklog:
             row = db.get(SocialExtractionWork, work_id)
             late_completion = row.state == "failed_terminal" and row.error_code == "completion_unknown"
             if (row.state != "running" and not late_completion) or row.claim_token != token:
-                return False
+                return None
             row.state, row.error_code = state, error
             row.claim_token = row.claim_expires_at = None
             row.updated_at = datetime.now(timezone.utc)
             if result is not None:
                 row.result_json = asdict(result)
                 row.actual_provider, row.actual_model = result.provider, result.model
-            return True
+            if row.state == "succeeded":
+                from app.services.social_theme_projection_service import _decode
+                try:
+                    # Every later stage revalidates this row and stops the run if it fails.
+                    _decode(row)
+                except ValueError as exc:
+                    logger.warning("Saved social result is invalid work_id=%s reason=%s", work_id, exc)
+                    row.state, row.error_code = "failed_terminal", "invalid_saved_result"
+            return row.state
 
     def _finish_many(self, claims, state, error=None):
-        return sum(self._finish(work_id, token, state, error) for work_id, token in claims)
+        return sum(self._finish(work_id, token, state, error) is not None for work_id, token in claims)
 
     def _settle_unknown(self, claims):
         """Close work a deferral released, unless another claim has taken it since."""
@@ -542,12 +550,12 @@ class ProcessSocialBacklog:
                 logger.exception("Social LLM extraction failed work_ids=%s", work_ids)
                 return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
         try:
-            succeeded = sum(self._finish(work_id, token, "succeeded", result=self._single_result(post, result))
-                            for (work_id, token), post in items)
+            states = [self._finish(work_id, token, "succeeded", result=self._single_result(post, result))
+                      for (work_id, token), post in items]
         except Exception:
             logger.exception("Saving social LLM results failed work_ids=%s", work_ids)
             return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
-        return (succeeded, 0, 0, 0), spare_calls
+        return (states.count("succeeded"), 0, states.count("failed_terminal"), 0), spare_calls
 
     async def _isolate(self, items, config, current_time, code, spare_calls):
         """Narrow an unusable batch response to the posts that provoke it.
