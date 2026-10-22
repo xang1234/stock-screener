@@ -298,6 +298,7 @@ def warm_spy_cache(market: Optional[str] = None):
 
         # Warm both 1y and 2y periods for each active market
         by_market = {}
+        warmed_symbols: dict[str, set[str | None]] = {}
         failed_periods: list[str] = []
         for market in markets:
             outcomes = {
@@ -305,6 +306,7 @@ def warm_spy_cache(market: Optional[str] = None):
                 for period in ("2y", "1y")
             }
             by_market[market] = {period: outcome.ok for period, outcome in outcomes.items()}
+            warmed_symbols[market] = {outcome.benchmark_symbol for outcome in outcomes.values() if outcome.ok}
             failed_periods.extend(
                 f"{market}:{period} ({outcome.describe()})"
                 for period, outcome in outcomes.items()
@@ -323,18 +325,17 @@ def warm_spy_cache(market: Optional[str] = None):
         if failed_periods:
             results["error"] = "Benchmark warm failed for " + ", ".join(failed_periods)
 
-        # Per-market telemetry (bead asia.10.1): record successful warms only
-        # so a fully failed warm doesn't reset the "age" gauge to zero.
+        # Per-market telemetry (bead asia.10.1): record warms of the primary
+        # only, so a failed warm, or one only the fallback served, doesn't
+        # reset the primary's "age" gauge to zero.
         try:
             from ..services.benchmark_registry_service import benchmark_registry
             from ..services.telemetry import get_telemetry
             telemetry = get_telemetry()
-            for warmed_market, periods in by_market.items():
-                if any(periods.values()):
-                    telemetry.record_benchmark_age(
-                        warmed_market,
-                        benchmark_symbol=benchmark_registry.get_primary_symbol(warmed_market),
-                    )
+            for warmed_market, symbols in warmed_symbols.items():
+                primary = benchmark_registry.get_primary_symbol(warmed_market)
+                if primary in symbols:
+                    telemetry.record_benchmark_age(warmed_market, benchmark_symbol=primary)
         except Exception as exc:
             logger.debug("telemetry: benchmark_age emit failed (%s)", exc)
 

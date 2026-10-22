@@ -28,13 +28,15 @@ class BenchmarkWarmResult:
 
     ``ok`` only when a candidate carries a bar for ``required_date``, the
     market's last completed session. ``latest_date`` is the newest bar on or
-    before it that any candidate reached.
+    before it that any candidate reached; ``benchmark_symbol`` is the
+    candidate that warmed.
     """
 
     ok: bool
     required_date: date | None
     latest_date: date | None = None
     reason: str | None = None
+    benchmark_symbol: str | None = None
 
     def describe(self) -> str:
         latest = self.latest_date.isoformat() if self.latest_date else "none"
@@ -132,6 +134,7 @@ class CacheManager:
                 ok=True,
                 required_date=required_date,
                 latest_date=latest_benchmark_data_date(resolution.bundle.data, as_of_date=required_date),
+                benchmark_symbol=resolution.bundle.benchmark_symbol,
             )
 
         except Exception as e:
