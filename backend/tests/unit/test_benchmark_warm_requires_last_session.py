@@ -69,6 +69,7 @@ def test_warm_accepts_a_fetch_that_ends_on_the_last_completed_session(monkeypatc
         required_date=date(2026, 3, 16),
         latest_date=date(2026, 3, 16),
         reason=None,
+        benchmark_symbol="SPY",
     )
 
 
@@ -92,6 +93,7 @@ def test_warm_mid_session_requires_only_the_prior_session(monkeypatch):
         required_date=date(2026, 3, 16),
         latest_date=date(2026, 3, 16),
         reason=None,
+        benchmark_symbol="SPY",
     )
     assert a_session_short.warm_benchmark_cache(period="1y", market="US").ok is False
 
@@ -193,9 +195,25 @@ def test_warm_spy_cache_reports_the_stale_reason_and_keeps_benchmark_age(monkeyp
 def test_warm_spy_cache_records_benchmark_age_after_a_current_warm(monkeypatch):
     result, recorded = _warm_spy_cache_with(
         monkeypatch,
-        BenchmarkWarmResult(ok=True, required_date=date(2026, 3, 16), latest_date=date(2026, 3, 16)),
+        BenchmarkWarmResult(
+            ok=True, required_date=date(2026, 3, 16), latest_date=date(2026, 3, 16), benchmark_symbol="SPY",
+        ),
     )
 
     assert result["by_market"] == {"US": {"2y": True, "1y": True}}
     assert "error" not in result
     assert recorded == [("US", "SPY")]
+
+
+def test_warm_spy_cache_keeps_benchmark_age_when_only_the_fallback_is_current(monkeypatch):
+    # SPY ends a session short and IVV reaches it: the warm serves IVV, but
+    # SPY's age gauge must not reset.
+    result, recorded = _warm_spy_cache_with(
+        monkeypatch,
+        BenchmarkWarmResult(
+            ok=True, required_date=date(2026, 3, 16), latest_date=date(2026, 3, 16), benchmark_symbol="IVV",
+        ),
+    )
+
+    assert result["by_market"] == {"US": {"2y": True, "1y": True}}
+    assert recorded == []
