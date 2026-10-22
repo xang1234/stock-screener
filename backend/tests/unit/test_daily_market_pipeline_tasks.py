@@ -1246,6 +1246,21 @@ def test_ensure_benchmark_prices_reports_a_bar_still_missing_after_the_refetch(m
     }
 
 
+def test_ensure_benchmark_prices_reports_a_fallback_candidate_that_has_the_bar(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    _price_rows(monkeypatch, module, [("IVV", date(2026, 3, 16), 550.0)])
+    monkeypatch.setattr(module, "_refetch_prices", lambda market, symbols: None)
+
+    result = module.ensure_benchmark_prices.run(
+        {"status": "completed", "refreshed": 10, "total": 10}, market="US", as_of_date="2026-03-16",
+    )
+
+    assert result["benchmark"] == {
+        "status": "fallback", "symbol": "SPY", "as_of_date": "2026-03-16", "refetched": True,
+    }
+
+
 def test_ensure_benchmark_prices_ignores_a_bar_without_a_usable_adjusted_close(monkeypatch):
     from app.tasks import daily_market_pipeline_tasks as module
 
@@ -1371,26 +1386,34 @@ def test_guard_price_refresh_schedules_one_rerun_when_the_primary_benchmark_is_m
 
     guard, scheduled = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=0)
 
-    with pytest.raises(module.PrimaryBenchmarkMissing, match="primary_benchmark_missing: US has no SPY bar for 2026-03-16"):
-        guard()
-
+    # The chain goes on (Market RS fails on its own without any candidate);
+    # the re-run is what recovers the evening.
+    assert guard()["benchmark_rerun"]["status"] == "scheduled"
     assert scheduled == [{
         "kwargs": {"market": "US", "rerun_attempt": 1, "rerun_as_of_date": "2026-03-16"},
         "countdown": 45 * 60,
+        "expires": 55 * 60,
         "queue": "market_jobs_us",
     }]
+
+
+def test_guard_price_refresh_continues_on_the_fallback_benchmark_without_a_rerun(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    guard, scheduled = _guard_with_benchmark(monkeypatch, module, status="fallback", rerun_attempt=0)
+
+    assert guard() == {"status": "ok", "market": "US", "stage": "prices"}
+    assert scheduled == []
 
 
 def test_guard_price_refresh_stops_rerunning_after_the_last_attempt(monkeypatch):
     from app.tasks import daily_market_pipeline_tasks as module
 
     last, scheduled_by_last = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=1)
-    with pytest.raises(module.PrimaryBenchmarkMissing):
-        last()
+    last()
     assert [options["kwargs"]["rerun_attempt"] for options in scheduled_by_last] == [2]
 
     exhausted, scheduled_by_exhausted = _guard_with_benchmark(monkeypatch, module, status="missing", rerun_attempt=2)
-    # No re-run left: the chain goes on and Market RS takes the fallback benchmark.
     assert exhausted() == {
         "status": "ok", "market": "US", "stage": "prices",
         "benchmark_rerun": {"status": "exhausted", "attempts": 2},
