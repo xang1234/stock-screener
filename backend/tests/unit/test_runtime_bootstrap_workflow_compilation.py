@@ -293,10 +293,14 @@ def test_bootstrap_includes_every_daily_pipeline_compute_step():
     daily = {
         s.task for s in _build_daily_market_pipeline_signatures("US", date(2026, 6, 1))
     }
+    # ensure_benchmark_prices belongs to the price stage: it refetches the
+    # benchmark after the delta refresh, which bootstrap's full fetch makes moot.
     daily_compute = {
         task
         for task in daily
-        if "guard" not in task and "smart_refresh" not in task
+        if "guard" not in task
+        and "smart_refresh" not in task
+        and "ensure_benchmark_prices" not in task
     }
 
     plan = build_bootstrap_plan(
