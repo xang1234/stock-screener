@@ -16,6 +16,7 @@ from app.domain.markets.catalog import get_market_catalog
 from app.domain.markets.registry import critical_price_symbols
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.relative_strength.price_validity import is_valid_adjusted_price
+from app.services.benchmark_registry_service import benchmark_registry
 from app.models.stock import StockPrice
 from app.services.market_calendar_service import MarketCalendarService
 from app.tasks.market_queues import (
@@ -28,20 +29,15 @@ from app.tasks.market_queues import (
 logger = logging.getLogger(__name__)
 
 _MIN_DAILY_PRICE_REFRESH_SUCCESS_RATE = 0.90
-# A missing primary benchmark bar: one refetch of the candidates, then this
-# many re-runs of the whole pipeline, each this long after the failed guard.
+# A missing primary benchmark bar: one refetch of the candidates. When no
+# candidate has the bar after it, this many re-runs of the whole pipeline,
+# each this long after the guard. The message expires before Redis' default
+# one-hour visibility timeout can deliver it a second time.
 _MAX_BENCHMARK_RERUNS = 2
 _BENCHMARK_RERUN_COUNTDOWN_SECONDS = 45 * 60
+_BENCHMARK_RERUN_EXPIRES_SECONDS = 55 * 60
 _BENCHMARK_REFETCH_PERIOD = "1y"
 PRIMARY_BENCHMARK_MISSING = "primary_benchmark_missing"
-
-
-class PrimaryBenchmarkMissing(RuntimeError):
-    """The primary benchmark has no bar for the pipeline's as-of date after a
-    refetch, and a re-run is queued. US exposure is scored on the primary
-    only, so the chain stops here while a re-run can still recover the
-    evening. With no re-run left the chain goes on: Market RS falls back to
-    the next benchmark candidate, as it did before this guard existed."""
 
 
 def _normalize_pipeline_market(market: str | None) -> str:
@@ -164,7 +160,12 @@ def ensure_benchmark_prices(
 ) -> dict:
     """Refetch the market's benchmark candidates once when the primary has no
     bar for ``as_of_date``, and add what the guard decides on to the price
-    refresh result.
+    refresh result: ``present`` (the primary has the bar), ``fallback``
+    (another candidate has it, so Market RS runs on that one) or ``missing``.
+
+    The daily refresh already fetched these symbols; this pass only helps
+    when its batch failed or skipped the primary. The re-run the guard
+    queues on ``missing`` is the recovery for a close Yahoo publishes late.
 
     Runs on the market's data_fetch queue so the refetch takes the provider
     plan the daily refresh takes. A refresh that already failed passes
@@ -192,7 +193,10 @@ def ensure_benchmark_prices(
             logger.warning("Benchmark refetch for %s failed", market_code, exc_info=True)
             report["error"] = str(exc)
         if not _benchmark_bar_present(primary, as_of):
-            report["status"] = "missing"
+            fallbacks = benchmark_registry.get_candidate_symbols(market_code)[1:]
+            report["status"] = (
+                "fallback" if any(_benchmark_bar_present(s, as_of) for s in fallbacks) else "missing"
+            )
     return {**result, "benchmark": report}
 
 
@@ -224,6 +228,7 @@ def _schedule_benchmark_rerun(
         task = queue_daily_market_pipeline.apply_async(
             kwargs={"market": market, "rerun_attempt": attempt, "rerun_as_of_date": as_of_date},
             countdown=_BENCHMARK_RERUN_COUNTDOWN_SECONDS,
+            expires=_BENCHMARK_RERUN_EXPIRES_SECONDS,
             queue=market_jobs_queue_for_market(market),
         )
     except Exception as exc:
@@ -251,22 +256,26 @@ def guard_price_refresh(
     if _price_refresh_failed(result):
         raise RuntimeError(f"Daily price refresh failed for {market}: {result}")
     # Absent from a chain published before ensure_benchmark_prices existed.
-    benchmark = result.get("benchmark")
-    if benchmark is not None and benchmark.get("status") != "present":
+    # The chain always goes on: Market RS takes a fallback candidate itself,
+    # and without any it fails on its own guard, as before this stage. A
+    # stopped chain would lose the evening whenever the re-run then skipped.
+    benchmark = result.get("benchmark") or {}
+    if benchmark.get("status") == "fallback":
+        logger.warning(
+            "%s: %s has no %s bar for %s; Market RS runs on the fallback benchmark",
+            PRIMARY_BENCHMARK_MISSING, market, benchmark.get("symbol"), as_of_date,
+            extra={"market": market, "reason": PRIMARY_BENCHMARK_MISSING},
+        )
+    elif benchmark.get("status") == "missing":
         rerun = _schedule_benchmark_rerun(
             market, as_of_date=as_of_date, rerun_attempt=rerun_attempt
         )
         logger.error(
-            "%s: %s has no %s bar for %s after a refetch (rerun: %s)",
-            PRIMARY_BENCHMARK_MISSING, market, benchmark.get("symbol"), as_of_date, rerun,
+            "%s: %s has no benchmark bar for %s after a refetch (rerun: %s)",
+            PRIMARY_BENCHMARK_MISSING, market, as_of_date, rerun,
             extra={"market": market, "reason": PRIMARY_BENCHMARK_MISSING, "rerun": rerun},
         )
-        if rerun["status"] != "scheduled":
-            return {"status": "ok", "market": market, "stage": "prices", "benchmark_rerun": rerun}
-        raise PrimaryBenchmarkMissing(
-            f"{PRIMARY_BENCHMARK_MISSING}: {market} has no {benchmark.get('symbol')} bar for "
-            f"{as_of_date} after a refetch; rerun={rerun}; benchmark={benchmark}"
-        )
+        return {"status": "ok", "market": market, "stage": "prices", "benchmark_rerun": rerun}
     return {"status": "ok", "market": market, "stage": "prices"}
 
 
