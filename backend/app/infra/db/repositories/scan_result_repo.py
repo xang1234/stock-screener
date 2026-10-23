@@ -15,6 +15,10 @@ from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository, ScanResultRsAudit
+from app.infra.db.repositories.feature_store_repo import (
+    _vcp_num_bases_from_details,
+)
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.infra.query.scan_result_query import (
     apply_filter_expression,
     apply_sort_all,
@@ -895,10 +899,13 @@ def _map_row_to_domain(
         "action_state": details.get("action_state"),
         "opportunity_state": details.get("opportunity_state"),
         "minervini_score": result.minervini_score,
+        "minervini_rating": details.get("minervini_rating"),
         "canslim_score": result.canslim_score,
+        "canslim_rating": details.get("canslim_rating"),
         "ipo_score": result.ipo_score,
         "custom_score": result.custom_score,
         "volume_breakthrough_score": result.volume_breakthrough_score,
+        "volume_breakthrough_rating": details.get("volume_breakthrough_rating"),
         "rs_rating": result.rs_rating,
         "rs_rating_1m": result.rs_rating_1m,
         "rs_rating_3m": result.rs_rating_3m,
@@ -909,6 +916,7 @@ def _map_row_to_domain(
         "market_cap": result.market_cap,
         "ma_alignment": details.get("ma_alignment"),
         "vcp_detected": details.get("vcp_detected"),
+        "vcp_num_bases": _vcp_num_bases_from_details(details),
         "vcp_score": details.get("vcp_score"),
         "vcp_pivot": details.get("vcp_pivot"),
         "vcp_ready_for_breakout": details.get("vcp_ready_for_breakout"),
