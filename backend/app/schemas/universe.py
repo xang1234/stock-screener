@@ -21,6 +21,8 @@ from ..domain.universe import (
 )
 from ..domain.universe.indexes import index_registry
 
+MAX_CUSTOM_UNIVERSE_SYMBOLS = 2000
+
 
 def _enum_member_name(value: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in value.upper()).strip("_")
@@ -58,7 +60,7 @@ class UniverseDefinition(BaseModel):
     - MARKET: market required
     - EXCHANGE: exchange required, market optional for ambiguous exchange codes
     - INDEX: index required
-    - CUSTOM/TEST: symbols required (non-empty, max 500)
+    - CUSTOM/TEST: symbols required (non-empty, max MAX_CUSTOM_UNIVERSE_SYMBOLS)
     """
     type: UniverseType
     market: Optional[Market] = None
@@ -168,8 +170,11 @@ class UniverseDefinition(BaseModel):
         elif t in (UniverseType.CUSTOM, UniverseType.TEST):
             if not self.symbols:
                 raise ValueError(f"{t.value.upper()} universe requires a non-empty 'symbols' list")
-            if len(self.symbols) > 500:
-                raise ValueError(f"Symbol list too long ({len(self.symbols)}). Maximum is 500.")
+            if len(self.symbols) > MAX_CUSTOM_UNIVERSE_SYMBOLS:
+                raise ValueError(
+                    f"Symbol list too long ({len(self.symbols)}). "
+                    f"Maximum is {MAX_CUSTOM_UNIVERSE_SYMBOLS}."
+                )
             if (
                 self.market is not None
                 or self.mic is not None

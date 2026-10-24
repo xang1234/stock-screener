@@ -23,7 +23,7 @@ from ..models.chatbot import Conversation, Message
 from ..models.stock_universe import StockUniverse
 from ..models.user_watchlist import UserWatchlist, WatchlistItem
 from ..services.errors import ServiceError
-from ..services.watchlist_import_service import split_import_results
+from ..services.watchlist_import_service import ImportToken, split_import_results
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +283,7 @@ class AssistantGatewayService:
             )
         }
         addable_symbols, existing_items, invalid_symbols = split_import_results(
-            requested_symbols,
+            [ImportToken(symbol, (symbol,)) for symbol in requested_symbols],
             known_symbols,
             existing_symbols,
         )

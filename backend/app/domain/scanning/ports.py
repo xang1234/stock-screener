@@ -23,7 +23,13 @@ from app.domain.relative_strength import (
 from app.domain.common.query import PageSpec, SortSpec
 
 from .filter_expression_model import FilterExpression, QuerySpec
-from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
+from .models import (
+    FilterOptions,
+    ProgressEvent,
+    ResolvedUniverse,
+    ResultPage,
+    ScanResultItemDomain,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -259,8 +265,11 @@ class UniverseRepository(abc.ABC):
     """Resolve which symbols belong to a universe."""
 
     @abc.abstractmethod
-    def resolve_symbols(self, universe_def: object) -> list[str]:
+    def resolve(self, universe_def: object) -> ResolvedUniverse:
         ...
+
+    def resolve_symbols(self, universe_def: object) -> list[str]:
+        return self.resolve(universe_def).symbols
 
     @abc.abstractmethod
     def resolve_markets(self, symbols: list[str]) -> dict[str, str]:

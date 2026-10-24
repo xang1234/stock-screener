@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Self
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .common import PriceChangeBounds
 from .opportunity_state import (
@@ -118,6 +118,11 @@ class WatchlistDataResponse(BaseModel):
     price_change_bounds: Dict[str, PriceChangeBounds]
 
 
+class WatchlistSymbolsResponse(BaseModel):
+    """A watchlist's symbols in display order."""
+    symbols: List[str]
+
+
 class WatchlistListResponse(BaseModel):
     """List of watchlists for selector"""
     watchlists: List[WatchlistResponse]
@@ -148,10 +153,14 @@ class BulkAddItemsRequest(BaseModel):
     symbols: List[str]
 
 
+# Matches the import dialog's 1 MB file cap; a 2000-symbol export is ~50 KB.
+MAX_WATCHLIST_IMPORT_CHARS = 1_000_000
+
+
 class WatchlistImportRequest(BaseModel):
     """Request body for importing symbols from pasted text or CSV."""
 
-    content: str
+    content: str = Field(max_length=MAX_WATCHLIST_IMPORT_CHARS)
     format: Optional[Literal["auto", "text", "csv"]] = "auto"
 
 

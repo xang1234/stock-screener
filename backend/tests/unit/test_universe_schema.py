@@ -236,14 +236,14 @@ class TestUniverseDefinitionValidation:
             UniverseDefinition(type=UniverseType.TEST)
 
     def test_max_symbol_count_exceeded(self):
-        symbols = [f"SYM{i}" for i in range(501)]
-        with pytest.raises(ValidationError, match="Maximum is 500"):
+        symbols = [f"SYM{i}" for i in range(2001)]
+        with pytest.raises(ValidationError, match=r"Symbol list too long \(2001\)\. Maximum is 2000\."):
             UniverseDefinition(type=UniverseType.CUSTOM, symbols=symbols)
 
     def test_max_symbol_count_at_limit(self):
-        symbols = [f"SYM{i}" for i in range(500)]
+        symbols = [f"SYM{i}" for i in range(2000)]
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=symbols)
-        assert len(u.symbols) == 500
+        assert len(u.symbols) == 2000
 
 
 class TestSymbolNormalization:

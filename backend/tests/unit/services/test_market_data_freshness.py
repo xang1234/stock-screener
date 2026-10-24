@@ -634,3 +634,144 @@ def test_latest_benchmark_bar_treats_an_unknown_market_as_unconfigured(monkeypat
     latest_bar = _real_latest_benchmark_bar(monkeypatch, {})
 
     assert latest_bar("ZZ") == ((), None)
+
+
+def _custom_policy():
+    from app.services.market_data_freshness import ScanFreshnessPolicy
+
+    return ScanFreshnessPolicy.for_universe_type("custom")
+
+
+def _evaluate_us_custom(fresh, stale, *, policy=None, refresh_state=None, calendar=None):
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    rows = [*_rows(fresh), *_rows(stale, last_date=date(2026, 5, 13))]
+    with (
+        _patch_session(rows),
+        calendar or _patch_calendar({"US": date(2026, 6, 18)}),
+        refresh_state or _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        return evaluate_symbol_freshness([*fresh, *stale], policy=policy or _custom_policy())
+
+
+@pytest.mark.parametrize(
+    ("fresh", "stale", "message"),
+    [
+        (
+            [f"FRESH{i}" for i in range(9)],
+            ["HALTED"],
+            "Omitted 1 stale symbol from this scan (90.00% fresh): HALTED",
+        ),
+        (["NVDA"], ["HALTED"], "Omitted 1 stale symbol from this scan (50.00% fresh): HALTED"),
+        (
+            [f"FRESH{i}" for i in range(8)],
+            ["HALTED", "SUSPENDED"],
+            "Omitted 2 stale symbols from this scan (80.00% fresh): HALTED, SUSPENDED",
+        ),
+    ],
+    ids=["10_with_1_stale", "2_with_1_stale", "10_with_2_stale"],
+)
+def test_custom_scan_omits_stale_symbols_while_one_fresh_symbol_remains(fresh, stale, message):
+    decision = _evaluate_us_custom(fresh, stale)
+
+    assert decision.blocking_detail is None
+    assert decision.symbols_to_scan == tuple(fresh)
+    assert [warning.message for warning in decision.warnings] == [message]
+    assert decision.warnings[0].omitted_symbols == tuple(stale)
+
+
+def test_custom_scan_stores_at_most_200_omitted_symbols_and_names_20():
+    stale = [f"STALE{i:03d}" for i in range(250)]
+
+    decision = _evaluate_us_custom(["NVDA"], stale)
+
+    [warning] = decision.warnings
+    assert decision.symbols_to_scan == ("NVDA",)
+    assert warning.omitted_count == 250
+    assert warning.omitted_symbols == tuple(stale[:200])
+    assert warning.message == (
+        "Omitted 250 stale symbols from this scan (0.40% fresh): "
+        "STALE000, STALE001, STALE002, STALE003, STALE004, STALE005, STALE006, "
+        "STALE007, STALE008, STALE009, STALE010, STALE011, STALE012, STALE013, "
+        "STALE014, STALE015, STALE016, STALE017, STALE018, STALE019, ..."
+    )
+
+
+def test_custom_scan_with_every_symbol_stale_still_blocks():
+    decision = _evaluate_us_custom([], ["HALTED", "SUSPENDED"])
+
+    assert decision.warnings == ()
+    assert decision.blocking_detail["code"] == "market_data_stale"
+    assert decision.blocking_detail["stale_markets"][0]["sample_stale_symbols"] == [
+        "HALTED",
+        "SUSPENDED",
+    ]
+
+
+@pytest.mark.parametrize("universe_type", ["test", "market", "all"])
+def test_non_custom_scans_keep_their_thresholds_for_a_small_list(universe_type):
+    from app.services.market_data_freshness import ScanFreshnessPolicy
+
+    decision = _evaluate_us_custom(
+        [f"FRESH{i}" for i in range(9)],
+        ["HALTED"],
+        policy=ScanFreshnessPolicy.for_universe_type(universe_type),
+    )
+
+    assert decision.warnings == ()
+    assert decision.blocking_detail["code"] == "market_data_stale"
+
+
+@pytest.mark.parametrize(
+    ("patches", "reason"),
+    [
+        (
+            {"refresh_state": _patch_refresh_state_payload({
+                "US": {"market": "US", "status": "running", "last_refreshed_trading_day": "2026-06-18"}
+            })},
+            "refresh_state_missing",
+        ),
+        ({"refresh_state": _patch_refresh_state({"US": date(2026, 6, 17)})}, "refresh_state_stale"),
+        (
+            {"calendar": patch(
+                "app.services.market_data_freshness.get_market_calendar_service",
+                return_value=SimpleNamespace(
+                    last_completed_trading_day=lambda market, now=None: 1 / 0
+                ),
+            )},
+            "calendar_unavailable",
+        ),
+    ],
+    ids=["refresh_state_missing", "refresh_state_stale", "calendar_unavailable"],
+)
+def test_custom_scan_still_hard_blocks_on_market_state(patches, reason):
+    decision = _evaluate_us_custom([f"FRESH{i}" for i in range(9)], ["HALTED"], **patches)
+
+    assert decision.warnings == ()
+    assert decision.blocking_detail["stale_markets"][0]["reason"] == reason
+
+
+def test_custom_scan_still_hard_blocks_on_a_stale_benchmark():
+    with _patch_benchmark({"US": (("SPY",), date(2026, 6, 17))}):
+        decision = _evaluate_us_custom([f"FRESH{i}" for i in range(9)], ["HALTED"])
+
+    assert decision.warnings == ()
+    assert decision.blocking_detail["stale_markets"][0]["reason"] == "benchmark_stale"
+
+
+def test_custom_scan_with_inactive_symbols_allowed_blocks_on_unresolved_symbols():
+    from app.services.market_data_freshness import evaluate_symbol_freshness
+
+    rows = [*_rows([f"FRESH{i}" for i in range(8)]), *_rows(["HALTED"], last_date=date(2026, 5, 13))]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 6, 18)}),
+        _patch_refresh_state({"US": date(2026, 6, 18)}),
+    ):
+        decision = evaluate_symbol_freshness(
+            [*(f"FRESH{i}" for i in range(8)), "HALTED", "UNLISTED"],
+            policy=_custom_policy(),
+        )
+
+    assert decision.warnings == ()
+    assert decision.blocking_detail["unresolved_symbols"] == ["UNLISTED"]

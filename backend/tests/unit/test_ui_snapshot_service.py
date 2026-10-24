@@ -280,7 +280,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
 
     warning = {
         "code": "market_data_stale_tail_omitted",
-        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "message": "Omitted 1 stale symbol from this scan (99.00% fresh).",
         "markets": ["US"],
         "omitted_symbols": ["LHSW"],
         "omitted_count": 1,

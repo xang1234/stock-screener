@@ -113,4 +113,42 @@ describe('AssistantWatchlistDialog', () => {
       expect(screen.getByRole('button', { name: 'Confirm add' })).toBeDisabled();
     });
   });
+
+  it('refreshes the watchlist the add targeted after the selection moves on', async () => {
+    getWatchlists.mockResolvedValue({
+      watchlists: [{ id: 7, name: 'Leaders' }, { id: 8, name: 'Laggards' }],
+    });
+    let finishAdd;
+    bulkAddItems.mockReturnValue(new Promise((resolve) => { finishAdd = resolve; }));
+    const { queryClient } = renderWithProviders(
+      <AssistantWatchlistDialog open symbols={['NVDA', 'AVGO']} onClose={vi.fn()} />,
+    );
+    const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    expect(await screen.findByText('1 symbol can be added to Leaders.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm add' }));
+    await waitFor(() => expect(bulkAddItems).toHaveBeenCalledWith(7, ['NVDA']));
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Laggards' }));
+    finishAdd([]);
+
+    await waitFor(() => {
+      expect(invalidateQueriesSpy).toHaveBeenCalledWith({ queryKey: ['userWatchlistData', 7] });
+    });
+    expect(invalidateQueriesSpy).not.toHaveBeenCalledWith({ queryKey: ['userWatchlistData', 8] });
+  });
+
+  it('shows a validation error list from the add as text', async () => {
+    bulkAddItems.mockRejectedValue({
+      response: { status: 422, data: { detail: [{ loc: ['body', 'symbols'], msg: 'Field required' }] } },
+    });
+    renderWithProviders(
+      <AssistantWatchlistDialog open symbols={['NVDA', 'AVGO']} onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByText('1 symbol can be added to Leaders.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm add' }));
+
+    expect(await screen.findByText('Field required')).toBeInTheDocument();
+  });
 });

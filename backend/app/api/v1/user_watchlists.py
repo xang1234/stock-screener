@@ -20,10 +20,11 @@ from ...models.user_watchlist import UserWatchlist, WatchlistItem
 from ...models.stock import StockPrice
 from ...models.stock_universe import StockUniverse
 from ...models.industry import IBDIndustryGroup
+from ...schemas.universe import MAX_CUSTOM_UNIVERSE_SYMBOLS
 from ...schemas.user_watchlist import (
     WatchlistCreate, WatchlistUpdate, WatchlistResponse,
     WatchlistItemCreate, WatchlistItemUpdate, WatchlistItemResponse,
-    WatchlistDataResponse, WatchlistListResponse,
+    WatchlistDataResponse, WatchlistListResponse, WatchlistSymbolsResponse,
     WatchlistMembershipResponse,
     WatchlistStockData, PriceChangeBounds,
     ReorderWatchlistsRequest, ReorderItemsRequest,
@@ -34,10 +35,11 @@ from ...schemas.user_watchlist import (
 from ...services.price_row_normalization import stock_price_frame
 from ...services.symbol_format import normalize_symbol
 from ...services.watchlist_import_service import (
-    parse_watchlist_import_symbols,
+    parse_watchlist_import_tokens,
     split_import_results,
 )
 from ...services.watchlist_stewardship_service import WatchlistStewardshipService
+from ...services.watchlist_symbols import watchlist_symbols
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,6 +65,26 @@ def _is_duplicate_watchlist_symbol_error(exc: IntegrityError) -> bool:
             and "symbol" in message
         )
     )
+
+
+def _ensure_watchlist_capacity(existing_count: int, adding_count: int) -> None:
+    """Reject growing a watchlist past what a custom-universe scan accepts."""
+    total = existing_count + adding_count
+    if adding_count and total > MAX_CUSTOM_UNIVERSE_SYMBOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"A watchlist holds at most {MAX_CUSTOM_UNIVERSE_SYMBOLS:,} symbols. "
+                f"This one has {existing_count:,}, and adding {adding_count:,} more "
+                f"would make {total:,}."
+            ),
+        )
+
+
+def _watchlist_item_count(db: Session, watchlist_id: int) -> int:
+    return db.query(func.count(WatchlistItem.id)).filter(
+        WatchlistItem.watchlist_id == watchlist_id
+    ).scalar()
 
 
 # ================= Watchlist CRUD =================
@@ -184,6 +206,15 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     db.delete(watchlist)
     db.commit()
     return {"status": "deleted", "watchlist_id": watchlist_id}
+
+
+@router.get("/{watchlist_id}/symbols", response_model=WatchlistSymbolsResponse)
+def get_watchlist_symbols(watchlist_id: int, db: Session = Depends(get_db)):
+    """Get a watchlist's symbols in display order, without market data."""
+    symbols = watchlist_symbols(db, watchlist_id)
+    if symbols is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    return WatchlistSymbolsResponse(symbols=symbols)
 
 
 # ================= Watchlist Data (with sparklines and price changes) =================
@@ -446,6 +477,7 @@ def add_item(
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Stock already exists in watchlist")
+    _ensure_watchlist_capacity(_watchlist_item_count(db, watchlist_id), 1)
 
     max_pos = db.query(func.max(WatchlistItem.position)).filter(
         WatchlistItem.watchlist_id == watchlist_id
@@ -505,6 +537,9 @@ def bulk_add_items(
         else []
     )
     known_symbols = {row.symbol for row in known_rows}
+    _ensure_watchlist_capacity(
+        len(existing_items), sum(symbol in known_symbols for symbol in candidates)
+    )
 
     max_pos = db.query(func.max(WatchlistItem.position)).filter(
         WatchlistItem.watchlist_id == watchlist_id
@@ -545,11 +580,11 @@ def import_items(
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    parsed_symbols = parse_watchlist_import_symbols(
+    tokens = parse_watchlist_import_tokens(
         import_data.content,
         format_hint=import_data.format,
     )
-    if not parsed_symbols:
+    if not tokens:
         return WatchlistImportResult(
             requested_count=0,
             added=[],
@@ -568,17 +603,20 @@ def import_items(
         for row in db.query(StockUniverse.symbol)
         .filter(
             StockUniverse.active_filter(),
-            StockUniverse.symbol.in_(parsed_symbols),
+            StockUniverse.symbol.in_(
+                {candidate for token in tokens for candidate in token.candidates}
+            ),
         )
         .all()
         if row.symbol
     }
 
     addable_symbols, skipped_existing, invalid_symbols = split_import_results(
-        parsed_symbols,
+        tokens,
         known_symbols,
         existing_symbols,
     )
+    _ensure_watchlist_capacity(len(existing_items), len(addable_symbols))
 
     max_pos = db.query(func.max(WatchlistItem.position)).filter(
         WatchlistItem.watchlist_id == watchlist_id
@@ -611,7 +649,7 @@ def import_items(
         db.refresh(item)
 
     return WatchlistImportResult(
-        requested_count=len(parsed_symbols),
+        requested_count=len(tokens),
         added=added_symbols,
         skipped_existing=skipped_existing,
         invalid_symbols=invalid_symbols,

@@ -36,23 +36,8 @@ import {
   addItem,
   bulkAddItems,
 } from '../../api/userWatchlists';
-
-const formatErrorDetail = (detail) => {
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) {
-    return detail.map(formatErrorDetail).filter(Boolean).join('; ');
-  }
-  if (detail && typeof detail === 'object') {
-    return typeof detail.msg === 'string' ? detail.msg : JSON.stringify(detail);
-  }
-  return detail == null ? '' : String(detail);
-};
-
-const getErrorMessage = (error) => (
-  formatErrorDetail(error?.response?.data?.detail)
-  || error?.message
-  || 'Unable to update watchlist'
-);
+import { invalidateWatchlistItems } from '../../api/userWatchlistQueries';
+import { getErrorMessage } from '../../utils/errorMessage';
 
 function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   const [anchorEl, setAnchorEl] = useState(null);
@@ -121,7 +106,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   const addItemMutation = useMutation({
     mutationFn: ({ watchlistId, data }) => addItem(watchlistId, data),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
+      invalidateWatchlistItems(queryClient, variables.watchlistId);
       recordMembership(variables.watchlistId, [variables.data.symbol]);
       onSuccess?.();
     },
@@ -131,7 +116,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   const bulkAddMutation = useMutation({
     mutationFn: ({ watchlistId, symbols }) => bulkAddItems(watchlistId, symbols),
     onSuccess: (addedItems, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
+      invalidateWatchlistItems(queryClient, variables.watchlistId);
       recordMembership(
         variables.watchlistId,
         variables.symbols,
@@ -219,7 +204,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
 
         {visibleError && (
           <Alert severity="error" sx={{ mx: 1, my: 1 }}>
-            {getErrorMessage(visibleError)}
+            {getErrorMessage(visibleError, 'Unable to update watchlist')}
           </Alert>
         )}
 

@@ -82,6 +82,16 @@ export const getWatchlistData = async (watchlistId) => {
   return response.data;
 };
 
+/**
+ * Get a watchlist's symbols in display order, without market data.
+ * @param {number} watchlistId - The watchlist ID
+ * @returns {Promise<Object>} { symbols }
+ */
+export const getWatchlistSymbols = async (watchlistId) => {
+  const response = await apiClient.get(`${BASE_PATH}/${watchlistId}/symbols`);
+  return response.data;
+};
+
 export const getWatchlistStewardship = async (watchlistId, profile, asOfDate) => {
   const response = await apiClient.get(`${BASE_PATH}/${watchlistId}/stewardship`, {
     params: {

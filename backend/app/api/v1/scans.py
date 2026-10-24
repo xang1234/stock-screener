@@ -23,9 +23,11 @@ from ...schemas.scanning import (
     normalize_scan_warnings_for_response,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...schemas.universe import UniverseType
 from ...database import SessionLocal
 from ...domain.markets import market_registry
 from ...domain.markets.catalog import get_market_catalog
+from ...domain.scanning.models import ResolvedUniverse
 from ...domain.universe.indexes import index_registry
 from ...services.market_activity_gate import MarketActivityGate, MarketGateConflict
 from ...services.market_activity_service import get_runtime_activity_status
@@ -97,6 +99,19 @@ def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     if getattr(universe_def, "index", None):
         return index_registry.market_for(universe_def.index.value)
     return None
+
+
+def _scan_guard_markets(
+    universe_def: Any, uow: Any
+) -> tuple[list[str], ResolvedUniverse | None]:
+    """Markets whose refresh blocks the scan, and the CUSTOM membership they came from."""
+    if universe_def.type == UniverseType.CUSTOM:
+        with uow:
+            resolved = uow.universe.resolve(universe_def)
+            markets = uow.universe.resolve_markets(resolved.symbols).values()
+            return sorted(set(markets)), resolved
+    market = _resolve_scan_guard_market(universe_def)
+    return ([market] if market else []), None
 
 
 def _normalize_list_market(market: str | None) -> str | None:
@@ -191,11 +206,13 @@ def create_scan(
         record_legacy_universe_usage(universe_resolution.legacy_value)
     # A last-published request only reads a pinned publication and never
     # computes, so an active refresh does not block it.
+    resolved_universe = None
     if request.data_mode != "last_published":
-        guard_market = _resolve_scan_guard_market(universe_def)
-        market_refresh_conflict = _get_market_refresh_conflict_detail(guard_market)
-        if market_refresh_conflict is not None:
-            raise HTTPException(status_code=409, detail=market_refresh_conflict)
+        guard_markets, resolved_universe = _scan_guard_markets(universe_def, uow)
+        for guard_market in guard_markets:
+            market_refresh_conflict = _get_market_refresh_conflict_detail(guard_market)
+            if market_refresh_conflict is not None:
+                raise HTTPException(status_code=409, detail=market_refresh_conflict)
     universe_projection = universe_def.storage_projection()
     cmd = CreateScanCommand(
         universe_def=universe_def,
@@ -206,6 +223,7 @@ def create_scan(
         universe_exchange=universe_projection.exchange,
         universe_index=universe_projection.index,
         universe_symbols=universe_projection.symbols,
+        resolved_universe=resolved_universe,
         screeners=request.screeners,
         composite_method=request.composite_method,
         criteria=request.criteria,

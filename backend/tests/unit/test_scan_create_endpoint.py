@@ -5,6 +5,9 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
@@ -24,6 +27,14 @@ from app.use_cases.scanning.create_scan import (
     StaleMarketDataError,
 )
 from app.use_cases.scanning.published_snapshot import SnapshotIneligible
+from app.infra.db.repositories.universe_repo import SqlUniverseRepository
+from app.models.stock_universe import StockUniverse
+from app.use_cases.scanning.create_scan import CreateScanUseCase
+from tests.unit.use_cases.conftest import (
+    FakeTaskDispatcher,
+    FakeUnitOfWork,
+    FakeUniverseRepository,
+)
 
 
 class _FakeUoW:
@@ -70,7 +81,7 @@ class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
 def _warning_payload():
     return {
         "code": "market_data_stale_tail_omitted",
-        "message": "Omitted 1 stale symbol from this broad scan (99.00% fresh).",
+        "message": "Omitted 1 stale symbol from this scan (99.00% fresh).",
         "markets": ["US"],
         "omitted_symbols": ["LHSW"],
         "omitted_count": 1,
@@ -432,7 +443,12 @@ def _price_refresh(market, task_id, *, percent=55.0, current=550, total=1000):
 
 
 async def _post_scan_during_activity(client, universe_def, activity):
-    fake_uow = _FakeUoW()
+    fake_uow = FakeUnitOfWork(
+        universe=FakeUniverseRepository(
+            universe_def.get("symbols"),
+            markets={"NVDA": "US", "0700.HK": "HK", "ZZZZ.T": "JP"},
+        )
+    )
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-during-activity",
@@ -518,6 +534,12 @@ async def _post_scan_during_activity(client, universe_def, activity):
             )
             for index_name, market in [("HSI", "HK"), ("NIKKEI225", "JP"), ("TAIEX", "TW")]
         ),
+        pytest.param(
+            {"type": "custom", "symbols": ["NVDA", "0700.HK"]},
+            _price_refresh("HK", "task-hk"),
+            {"market": "HK", "active_stages": ["prices"]},
+            id="custom_symbols_when_one_of_their_markets_refreshes",
+        ),
     ],
 )
 async def test_create_scan_returns_409_when_scan_market_refresh_is_active(
@@ -571,6 +593,13 @@ async def test_create_scan_returns_409_when_scan_market_refresh_is_active(
             "universe_exchange",
             "KOSPI",
             id="kr_exchange_ignores_us_refresh_activity",
+        ),
+        pytest.param(
+            {"type": "custom", "symbols": ["NVDA", "0700.HK"]},
+            _price_refresh("JP", "task-jp"),
+            "universe_symbols",
+            ["NVDA", "0700.HK"],
+            id="custom_symbols_ignore_other_market_refresh",
         ),
     ],
 )
@@ -870,3 +899,145 @@ async def test_create_scan_rejects_unknown_data_mode(client):
     )
 
     assert response.status_code == 422
+
+
+@pytest.fixture
+def universe_session():
+    # The sync endpoint runs in a worker thread, so the in-memory DB must be
+    # one connection shared across threads.
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    StockUniverse.__table__.create(engine)
+    session = sessionmaker(bind=engine)()
+    for symbol, market in (("NVDA", "US"), ("ANET", "US"), ("0700.HK", "HK")):
+        session.add(StockUniverse(symbol=symbol, name=symbol, market=market, is_active=True))
+    session.commit()
+    yield session
+    session.close()
+    engine.dispose()
+
+
+async def _create_custom_scan_against_universe(client, universe_session, symbols, *, universe_def=None):
+    dispatcher = FakeTaskDispatcher()
+    app.dependency_overrides[get_uow] = lambda: FakeUnitOfWork(
+        universe=SqlUniverseRepository(universe_session)
+    )
+    app.dependency_overrides[get_create_scan_use_case] = lambda: CreateScanUseCase(dispatcher)
+    try:
+        response = await client.post(
+            "/api/v1/scans",
+            json={"universe_def": universe_def or {"type": "custom", "symbols": symbols}},
+        )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+    return response, dispatcher
+
+
+@pytest.mark.asyncio
+async def test_custom_scan_reports_symbols_missing_from_the_universe(client, universe_session):
+    response, dispatcher = await _create_custom_scan_against_universe(
+        client, universe_session, ["NVDA", "ZZZZ", "ANET", "QQQQ.HK"]
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_stocks"] == 2
+    assert payload["warnings"] == [
+        {
+            "code": "symbols_not_in_universe",
+            "message": "Skipped 2 symbols not in the active stock universe: ZZZZ, QQQQ.HK",
+            "dropped_symbols": ["ZZZZ", "QQQQ.HK"],
+            "dropped_count": 2,
+        }
+    ]
+    assert dispatcher.dispatched[0][1] == ["NVDA", "ANET"]
+
+
+@pytest.mark.asyncio
+async def test_custom_scan_of_known_symbols_has_no_warning(client, universe_session):
+    response, _ = await _create_custom_scan_against_universe(
+        client, universe_session, ["NVDA", "0700.HK"]
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total_stocks"] == 2
+    assert response.json()["warnings"] == []
+
+
+async def _create_custom_scan_during_hk_refresh(client, universe_session, universe_def):
+    universe_session.query(StockUniverse).filter_by(symbol="0700.HK").update({"is_active": False})
+    universe_session.commit()
+    with patch(
+        "app.api.v1.scans.get_runtime_activity_status",
+        return_value={
+            "bootstrap": {},
+            "summary": {"active_market_count": 1, "active_markets": ["HK"], "status": "active"},
+            "markets": [_price_refresh("HK", "task-hk")],
+        },
+    ):
+        return await _create_custom_scan_against_universe(
+            client, universe_session, universe_def["symbols"], universe_def=universe_def
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_scan_guard_skips_the_market_of_an_inactive_symbol(client, universe_session):
+    response, dispatcher = await _create_custom_scan_during_hk_refresh(
+        client, universe_session, {"type": "custom", "symbols": ["NVDA", "0700.HK"]}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total_stocks"] == 1
+    assert dispatcher.dispatched[0][1] == ["NVDA"]
+
+
+@pytest.mark.asyncio
+async def test_custom_scan_guard_keeps_inactive_symbols_the_scan_will_use(client, universe_session):
+    response, dispatcher = await _create_custom_scan_during_hk_refresh(
+        client,
+        universe_session,
+        {"type": "custom", "symbols": ["NVDA", "0700.HK"], "allow_inactive_symbols": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "market_refresh_active"
+    assert response.json()["detail"]["market"] == "HK"
+    assert dispatcher.dispatched == []
+
+
+class _CountingUniverseRepository(SqlUniverseRepository):
+    def __init__(self, session):
+        super().__init__(session)
+        self.resolve_calls = 0
+
+    def resolve(self, universe_def):
+        self.resolve_calls += 1
+        return super().resolve(universe_def)
+
+
+@pytest.mark.asyncio
+async def test_custom_scan_resolves_its_universe_once_for_guard_and_scan(
+    client, universe_session, caplog
+):
+    universe = _CountingUniverseRepository(universe_session)
+    dispatcher = FakeTaskDispatcher()
+    app.dependency_overrides[get_uow] = lambda: FakeUnitOfWork(universe=universe)
+    app.dependency_overrides[get_create_scan_use_case] = lambda: CreateScanUseCase(dispatcher)
+    try:
+        with caplog.at_level("WARNING", logger="app.services.universe_resolver"):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "custom", "symbols": ["NVDA", "ZZZZ", "0700.HK"]}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    assert universe.resolve_calls == 1
+    assert [record.getMessage() for record in caplog.records if "Dropped" in record.getMessage()] == [
+        "Dropped 1 inactive or unknown symbols from custom universe: ZZZZ"
+    ]
+    assert dispatcher.dispatched[0][1] == ["NVDA", "0700.HK"]

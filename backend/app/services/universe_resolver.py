@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 
 from sqlalchemy.orm import Session
 
+from ..domain.scanning.models import ResolvedUniverse
 from ..schemas.universe import UniverseDefinition, UniverseType
 from ..wiring.bootstrap import get_stock_universe_service
 from ..services.universe_compat_adapter import resolve_scan_universe_request
@@ -62,24 +63,26 @@ def resolve_symbols(
     universe_def: Any,
     limit: Optional[int] = None,
 ) -> List[str]:
-    """
-    Resolve a UniverseDefinition to a list of stock symbols.
+    """Resolve a UniverseDefinition to a list of uppercase stock symbols."""
+    return resolve_universe(db, universe_def, limit).symbols
 
-    Args:
-        db: Database session
-        universe_def: Typed or normalized universe definition
-        limit: Optional max number of symbols to return
 
-    Returns:
-        List of uppercase stock symbol strings
+def resolve_universe(
+    db: Session,
+    universe_def: Any,
+    limit: Optional[int] = None,
+) -> ResolvedUniverse:
+    """Resolve a universe, reporting CUSTOM/TEST symbols the active universe lacks.
+
+    Dropped symbols are never added to ``stock_universe``.
     """
     universe_def = normalize_universe_definition(universe_def)
     t = universe_def.type
 
     if t == UniverseType.ALL:
-        return get_stock_universe_service().get_active_symbols(
+        return ResolvedUniverse(get_stock_universe_service().get_active_symbols(
             db, market=None, exchange=None, sp500_only=False, limit=limit
-        )
+        ))
 
     elif t == UniverseType.MARKET:
         kwargs = {
@@ -90,31 +93,32 @@ def resolve_symbols(
         }
         if universe_def.listing_tier is not None:
             kwargs["listing_tier"] = universe_def.listing_tier
-        return get_stock_universe_service().get_active_symbols(db, **kwargs)
+        return ResolvedUniverse(get_stock_universe_service().get_active_symbols(db, **kwargs))
 
     elif t == UniverseType.EXCHANGE:
-        return get_stock_universe_service().get_active_symbols(
+        return ResolvedUniverse(get_stock_universe_service().get_active_symbols(
             db,
             market=universe_def.market.value if universe_def.market else None,
             exchange=universe_def.exchange.value,
             sp500_only=False,
             limit=limit,
-        )
+        ))
 
     elif t == UniverseType.INDEX:
         # Dispatch by the requested index name. SP500 keeps using the
         # legacy ``is_sp500`` column; HSI/NIKKEI225/TAIEX resolve via
         # ``stock_universe_index_membership``.
-        return get_stock_universe_service().get_active_symbols(
+        return ResolvedUniverse(get_stock_universe_service().get_active_symbols(
             db,
             market=None,
             exchange=None,
             index_name=universe_def.index.value,
             limit=limit,
-        )
+        ))
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):
         symbols = universe_def.symbols
+        dropped: list[str] = []
         if not universe_def.allow_inactive_symbols:
             stock_universe_service = get_stock_universe_service()
             filtered = stock_universe_service.filter_active_symbols(db, symbols)
@@ -129,8 +133,8 @@ def resolve_symbols(
                 )
             symbols = filtered
         if limit is not None:
-            return symbols[:limit]
-        return symbols
+            symbols = symbols[:limit]
+        return ResolvedUniverse(symbols, tuple(dropped))
 
     else:
         raise ValueError(f"Unknown universe type: {t}")

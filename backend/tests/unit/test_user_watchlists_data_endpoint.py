@@ -203,3 +203,51 @@ async def test_reorder_items_only_touches_the_watchlist_with_one_select(client, 
     assert request_selects == 1
     session.expire_all()
     assert (b.position, a.position, foreign.position) == (0, 2, 5)
+
+
+def _seed_watchlists(session):
+    leaders = UserWatchlist(name="Leaders", position=0)
+    empty = UserWatchlist(name="Empty", position=1)
+    session.add_all([leaders, empty])
+    session.commit()
+    session.add_all([
+        WatchlistItem(watchlist_id=leaders.id, symbol="ANET", position=1),
+        WatchlistItem(watchlist_id=leaders.id, symbol="NVDA", position=0),
+        WatchlistItem(watchlist_id=leaders.id, symbol="0700.HK", position=2),
+    ])
+    session.commit()
+    return leaders.id, empty.id
+
+
+def test_watchlist_symbols_reads_ordered_symbols_in_one_query(session):
+    from sqlalchemy import event
+
+    from app.services.watchlist_symbols import watchlist_symbols
+
+    leaders_id, empty_id = _seed_watchlists(session)
+    statements: list[str] = []
+    event.listen(
+        session.get_bind(),
+        "before_cursor_execute",
+        lambda *args: statements.append(args[2]),
+    )
+
+    assert watchlist_symbols(session, leaders_id) == ["NVDA", "ANET", "0700.HK"]
+    assert len(statements) == 1
+    assert watchlist_symbols(session, empty_id) == []
+    assert watchlist_symbols(session, 999) is None
+
+
+@pytest.mark.asyncio
+async def test_watchlist_symbols_endpoint(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    leaders_id, empty_id = _seed_watchlists(session)
+
+    leaders = await client.get(f"/api/v1/user-watchlists/{leaders_id}/symbols")
+    empty = await client.get(f"/api/v1/user-watchlists/{empty_id}/symbols")
+    missing = await client.get("/api/v1/user-watchlists/999/symbols")
+
+    assert leaders.status_code == 200
+    assert leaders.json() == {"symbols": ["NVDA", "ANET", "0700.HK"]}
+    assert empty.json() == {"symbols": []}
+    assert missing.status_code == 404

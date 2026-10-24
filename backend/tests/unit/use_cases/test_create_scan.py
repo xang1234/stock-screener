@@ -60,7 +60,7 @@ def _stale_detail_decision(detail):
 def _omission_warning():
     return FreshnessOmissionWarning(
         code="market_data_stale_tail_omitted",
-        message="Omitted 1 stale symbol from this broad scan (66.67% fresh).",
+        message="Omitted 1 stale symbol from this scan (66.67% fresh).",
         markets=("US",),
         omitted_symbols=("LHSW",),
         omitted_count=1,
@@ -157,6 +157,20 @@ class TestCreateScanUseCase:
             uc.execute(uow, _make_command())
 
         assert len(dispatcher.dispatched) == 0
+
+    def test_custom_universe_with_no_active_symbol_says_so(self):
+        uow = FakeUnitOfWork(universe=FakeUniverseRepository([], dropped_symbols=("ZZZZ", "QQQQ")))
+        uc = CreateScanUseCase(dispatcher=FakeTaskDispatcher())
+
+        with pytest.raises(ValidationError) as exc_info:
+            uc.execute(uow, _make_command(
+                universe_def={"type": "custom", "symbols": ["ZZZZ", "QQQQ"]},
+                universe_label="Custom (2 symbols)",
+                universe_key="custom:abc",
+                universe_type="custom",
+            ))
+
+        assert str(exc_info.value) == "None of the requested symbols are in the active stock universe."
 
     def test_rejects_second_active_scan(self):
         uow = _make_uow(["AAPL", "MSFT"])
@@ -414,7 +428,71 @@ class TestFreshnessChecker:
         assert uow.scans.rows[0].warnings[0]["omitted_symbols"] == ["LHSW"]
         assert result.warnings[0].omitted_count == 1
 
-    def test_custom_universe_does_not_allow_stale_tail(self):
+    def test_custom_universe_omits_a_stale_symbol_from_a_small_list(self):
+        from datetime import date
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from app.services import market_data_freshness
+
+        fresh = [f"FRESH{i:03d}" for i in range(9)]
+        symbols = [*fresh, "HALTED"]
+        rows = [
+            SimpleNamespace(symbol=symbol, market="US", last_date=date(2026, 6, 18))
+            for symbol in fresh
+        ] + [SimpleNamespace(symbol="HALTED", market="US", last_date=date(2026, 5, 13))]
+        session = SimpleNamespace(close=lambda: None)
+        for method in ("query", "outerjoin", "filter", "group_by"):
+            setattr(session, method, lambda *args, **kwargs: session)
+        session.all = lambda: rows
+        uow = _make_uow(symbols)
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(
+            dispatcher=dispatcher,
+            freshness_evaluator=market_data_freshness.evaluate_symbol_freshness,
+        )
+
+        with (
+            patch.object(market_data_freshness, "SessionLocal", return_value=session),
+            patch.object(
+                market_data_freshness,
+                "get_market_calendar_service",
+                return_value=SimpleNamespace(
+                    last_completed_trading_day=lambda market, now=None: date(2026, 6, 18)
+                ),
+            ),
+            patch.object(
+                market_data_freshness,
+                "get_market_refresh_state",
+                return_value={
+                    "market": "US",
+                    "status": "completed",
+                    "last_refreshed_trading_day": "2026-06-18",
+                },
+            ),
+            patch.object(
+                market_data_freshness,
+                "_latest_benchmark_bar",
+                return_value=(("SPY",), date.max),
+            ),
+        ):
+            result = uc.execute(
+                uow,
+                _make_command(
+                    universe_type="custom",
+                    universe_key="custom:watchlist",
+                    universe_symbols=symbols,
+                ),
+            )
+
+        assert dispatcher.dispatched[0][1] == fresh
+        assert [warning.code for warning in result.warnings] == [
+            "market_data_stale_tail_omitted"
+        ]
+        assert result.warnings[0].omitted_symbols == ("HALTED",)
+        assert uow.scans.rows[0].warnings[0]["omitted_count"] == 1
+
+    def test_test_universe_still_blocks_on_any_stale_symbol(self):
         uow = _make_uow(["AAPL", "LHSW"])
         dispatcher = FakeTaskDispatcher()
         captured: list[bool] = []
@@ -427,8 +505,8 @@ class TestFreshnessChecker:
         uc.execute(
             uow,
             _make_command(
-                universe_type="custom",
-                universe_key="custom:AAPL,LHSW",
+                universe_type="test",
+                universe_key="test:AAPL,LHSW",
                 universe_symbols=["AAPL", "LHSW"],
             ),
         )
@@ -497,6 +575,46 @@ class TestFreshnessChecker:
         assert result2.is_duplicate is True
         assert result2.warnings[0].omitted_symbols == ("LHSW",)
         assert calls == 1
+
+    def test_idempotent_duplicate_returns_stored_dropped_symbols_warning(self):
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["NVDA"], dropped_symbols=("ZZZZ",))
+        )
+        uc = CreateScanUseCase(dispatcher=FakeTaskDispatcher())
+        command = _make_command(
+            idempotency_key="custom-retry",
+            universe_type="custom",
+            universe_key="custom:abc",
+        )
+
+        uc.execute(uow, command)
+        retried = uc.execute(uow, command)
+
+        assert retried.is_duplicate is True
+        assert [warning.to_dict() for warning in retried.warnings] == [
+            {
+                "code": "symbols_not_in_universe",
+                "message": "Skipped 1 symbol not in the active stock universe: ZZZZ",
+                "dropped_symbols": ["ZZZZ"],
+                "dropped_count": 1,
+            }
+        ]
+
+    def test_dropped_symbols_warning_stores_a_bounded_sample(self):
+        dropped = tuple(f"GONE{i:03d}" for i in range(250))
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["NVDA"], dropped_symbols=dropped)
+        )
+        uc = CreateScanUseCase(dispatcher=FakeTaskDispatcher())
+
+        result = uc.execute(
+            uow, _make_command(universe_type="custom", universe_key="custom:big")
+        )
+
+        stored = uow.scans.rows[0].warnings[0]
+        assert stored["dropped_count"] == 250
+        assert stored["dropped_symbols"] == [f"GONE{i:03d}" for i in range(200)]
+        assert result.warnings[0].dropped_count == 250
 
     def test_feature_run_hash_uses_filtered_symbols(self):
         from datetime import date

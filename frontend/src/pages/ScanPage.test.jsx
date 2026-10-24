@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import ScanPage from './ScanPage';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 import * as scanApi from '../api/scans';
+import * as watchlistApi from '../api/userWatchlists';
 import { renderWithProviders } from '../test/renderWithProviders';
 
 const runtimeState = {
@@ -18,7 +19,7 @@ const filterPresetsState = vi.hoisted(() => ({ presets: [] }));
 const CAPABILITY_TRANSITION_TIMEOUT = 10_000;
 const STALE_TAIL_WARNING = {
   code: 'market_data_stale_tail_omitted',
-  message: 'Omitted 1 stale symbol from this broad scan (99.00% fresh).',
+  message: 'Omitted 1 stale symbol from this scan (99.00% fresh).',
   omitted_symbols: ['LHSW'],
   omitted_count: 1,
 };
@@ -82,6 +83,13 @@ vi.mock('../api/scans', () => ({
   refreshScanCache: vi.fn(),
 }));
 
+vi.mock('../api/userWatchlists', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getWatchlists: vi.fn(),
+  getWatchlistData: vi.fn(),
+  getWatchlistSymbols: vi.fn(),
+}));
+
 beforeEach(() => {
   window.history.replaceState(null, '', '/scan');
   vi.clearAllMocks();
@@ -130,6 +138,129 @@ describe('ScanPage', () => {
         universe_def: { type: 'custom', symbols: ['0700', '9988'] },
       })
     ));
+  });
+
+  const pickWatchlist = async (user, name) => {
+    await user.click(await screen.findByRole('combobox', { name: 'Market' }));
+    await user.click(await screen.findByRole('option', { name: 'Watchlist' }));
+    await user.click(await screen.findByRole('combobox', { name: 'Watchlist' }));
+    if (name) {
+      await user.click(await screen.findByRole('option', { name }));
+    }
+  };
+
+  it('scans a saved watchlist as a custom universe sent in the request body', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    watchlistApi.getWatchlists.mockResolvedValue({
+      watchlists: [{ id: 7, name: 'Leaders' }, { id: 8, name: 'Laggards' }],
+      total: 2,
+    });
+    watchlistApi.getWatchlistSymbols.mockResolvedValue({ symbols: ['NVDA', '0700.HK', 'ANET'] });
+    scanApi.createScan.mockResolvedValueOnce({ scan_id: 'watchlist-scan', status: 'queued' });
+
+    renderWithProviders(<ScanPage />);
+    await pickWatchlist(user, 'Leaders');
+
+    expect(await screen.findByText('3 stocks')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Scan' }));
+
+    await waitFor(() => expect(scanApi.createScan.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        universe_def: { type: 'custom', symbols: ['NVDA', '0700.HK', 'ANET'] },
+      })
+    ));
+    expect(watchlistApi.getWatchlistSymbols).toHaveBeenCalledWith(7);
+    expect(watchlistApi.getWatchlistData).not.toHaveBeenCalled();
+    expect(window.location.search).toBe('');
+  });
+
+  it('drops a selected watchlist that was deleted elsewhere', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    watchlistApi.getWatchlists.mockResolvedValue({ watchlists: [{ id: 7, name: 'Leaders' }], total: 1 });
+    watchlistApi.getWatchlistSymbols.mockResolvedValue({ symbols: ['NVDA'] });
+
+    const { queryClient } = renderWithProviders(<ScanPage />);
+    await pickWatchlist(user, 'Leaders');
+    expect(await screen.findByText('1 stocks')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Watchlist' })).toHaveTextContent('Leaders');
+
+    watchlistApi.getWatchlists.mockResolvedValue({ watchlists: [{ id: 8, name: 'Laggards' }], total: 1 });
+    await act(() => queryClient.invalidateQueries({ queryKey: ['userWatchlists'] }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Scan' })).toBeDisabled());
+    expect(screen.getByText('...')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Watchlist' })).not.toHaveTextContent('Leaders');
+  });
+
+  it.each([
+    ['there are none', () => watchlistApi.getWatchlists.mockResolvedValue({ watchlists: [], total: 0 }), 'No watchlists yet'],
+    ['the list fails to load', () => watchlistApi.getWatchlists.mockRejectedValue(new Error('down')), 'Could not load watchlists'],
+  ])('shows a disabled hint when %s', async (_, arrange, hint) => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    arrange();
+
+    renderWithProviders(<ScanPage />);
+    await pickWatchlist(user);
+
+    expect(await screen.findByRole('option', { name: hint })).toHaveAttribute('aria-disabled', 'true');
+    await user.keyboard('{Escape}');
+    expect(await screen.findByRole('button', { name: 'Scan' })).toBeDisabled();
+  });
+
+  it('never offers to refresh the Watchlist pseudo-market', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    watchlistApi.getWatchlists.mockResolvedValue({ watchlists: [{ id: 7, name: 'Leaders' }], total: 1 });
+    watchlistApi.getWatchlistSymbols.mockResolvedValue({ symbols: ['NVDA'] });
+    scanApi.createScan.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: { detail: { code: 'market_data_stale', message: 'Some symbols have no market.' } },
+      },
+      message: 'Request failed with status code 409',
+    });
+
+    renderWithProviders(<ScanPage />);
+    await pickWatchlist(user, 'Leaders');
+    await user.click(await screen.findByRole('button', { name: 'Scan' }));
+
+    expect(await screen.findByText('Error: Some symbols have no market.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /refresh .* data/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a plain-string rejection of a watchlist scan as its text', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    watchlistApi.getWatchlists.mockResolvedValue({ watchlists: [{ id: 7, name: 'Leaders' }], total: 1 });
+    watchlistApi.getWatchlistSymbols.mockResolvedValue({ symbols: ['ZZZZ'] });
+    scanApi.createScan.mockRejectedValueOnce({
+      response: {
+        status: 400,
+        data: { detail: 'None of the requested symbols are in the active stock universe.' },
+      },
+      message: 'Request failed with status code 400',
+    });
+
+    renderWithProviders(<ScanPage />);
+    await pickWatchlist(user, 'Leaders');
+    await user.click(await screen.findByRole('button', { name: 'Scan' }));
+
+    expect(
+      await screen.findByText('Error: None of the requested symbols are in the active stock universe.')
+    ).toBeInTheDocument();
+  });
+
+  it('caps a Social selection at the 2000-symbol custom universe limit', async () => {
+    runtimeState.runtimeReady = true;
+    const symbols = Array.from({ length: 2001 }, (_, index) => `S${index}`).join(',');
+    window.history.replaceState(null, '', `/scan?symbols=${symbols}`);
+
+    renderWithProviders(<ScanPage />);
+
+    expect(await screen.findByText('Social selection: 2000 symbols')).toBeInTheDocument();
   });
 
   it('renders without a temporal-dead-zone crash before runtime bootstrap completes', () => {
@@ -517,6 +648,46 @@ describe('ScanPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
 
     expect(await screen.findByText(STALE_TAIL_WARNING.message)).toBeInTheDocument();
+  });
+
+  it('renders the symbols-not-in-universe warning returned by scan creation', async () => {
+    runtimeState.runtimeReady = true;
+    window.history.replaceState(null, '', '/scan?symbols=NVDA%2CZZZZ');
+    scanApi.createScan.mockResolvedValueOnce({
+      scan_id: 'custom-warning',
+      status: 'queued',
+      total_stocks: 1,
+      warnings: [{
+        code: 'symbols_not_in_universe',
+        message: 'Skipped 1 symbol not in the active stock universe: ZZZZ',
+        dropped_symbols: ['ZZZZ'],
+        dropped_count: 1,
+      }],
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+
+    expect(
+      await screen.findByText('Skipped 1 symbol not in the active stock universe: ZZZZ')
+    ).toBeInTheDocument();
+  });
+
+  it('renders any scan warning that carries a message', async () => {
+    runtimeState.runtimeReady = true;
+    window.history.replaceState(null, '', '/scan?symbols=NVDA');
+    scanApi.createScan.mockResolvedValueOnce({
+      scan_id: 'future-warning',
+      status: 'queued',
+      total_stocks: 1,
+      warnings: [{ code: 'some_future_warning', message: 'A newer server says hello.' }],
+    });
+
+    renderWithProviders(<ScanPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+
+    expect(await screen.findByText('A newer server says hello.')).toBeInTheDocument();
   });
 
   it('renders bootstrap stale-tail warning and clears it for a new scan', async () => {

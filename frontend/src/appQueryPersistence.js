@@ -8,6 +8,8 @@ const NON_PERSISTED_QUERY_ROOTS = new Set([
   'allFilteredSymbols',
   'calculationStatus',
   'setupDetails',
+  // Scanned as-is, so a restored copy must never stand in for the live list.
+  'userWatchlistSymbols',
 ]);
 
 // Families where a reload only needs the most recently loaded entry. Every

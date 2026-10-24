@@ -5,9 +5,16 @@ paginated results, filter options, and score explanations.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Self
+from typing import Annotated, Any, Dict, List, Literal, Optional, Self, Union
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from ..domain.scanning.models import (
     ScanResultItemDomain,
@@ -81,7 +88,7 @@ class ScanCreateRequest(BaseModel):
 
 
 class StaleTailOmissionWarningResponse(BaseModel):
-    """Warning emitted when a broad scan omits a small stale symbol tail."""
+    """Warning emitted when a scan omits stale symbols and scans the rest."""
 
     code: Literal[ScanWarningCode.STALE_TAIL_OMITTED.value]
     message: str
@@ -95,13 +102,27 @@ class StaleTailOmissionWarningResponse(BaseModel):
     oldest_last_cached_dates: Dict[str, Optional[str]] = Field(default_factory=dict)
 
 
+class SymbolsNotInUniverseWarningResponse(BaseModel):
+    """Warning emitted when a custom scan skips symbols the active universe lacks."""
+
+    code: Literal[ScanWarningCode.SYMBOLS_NOT_IN_UNIVERSE.value]
+    message: str
+    dropped_symbols: List[str]
+    dropped_count: int
+
+
+ScanWarningResponse = Annotated[
+    Union[StaleTailOmissionWarningResponse, SymbolsNotInUniverseWarningResponse],
+    Field(discriminator="code"),
+]
+_SCAN_WARNING_ADAPTER: TypeAdapter[ScanWarningResponse] = TypeAdapter(ScanWarningResponse)
+
+
 def normalize_scan_warnings_for_response(warnings: Any) -> list[dict[str, Any]]:
     """Return response-safe scan warnings, dropping unknown stored payloads."""
     if warnings is None or isinstance(warnings, (str, bytes)):
         return []
-    if isinstance(warnings, StaleTailOmissionWarningResponse):
-        warning_items = (warnings,)
-    elif isinstance(warnings, dict):
+    if isinstance(warnings, (BaseModel, dict)):
         warning_items = (warnings,)
     else:
         try:
@@ -111,23 +132,16 @@ def normalize_scan_warnings_for_response(warnings: Any) -> list[dict[str, Any]]:
 
     normalized: list[dict[str, Any]] = []
     for warning in warning_items:
-        if isinstance(warning, StaleTailOmissionWarningResponse):
-            normalized.append(warning.model_dump(mode="json"))
-            continue
-
-        if not isinstance(warning, dict):
+        if isinstance(warning, BaseModel):
+            warning = warning.model_dump()
+        elif not isinstance(warning, dict):
             to_dict = getattr(warning, "to_dict", None)
             if not callable(to_dict):
                 continue
             warning = to_dict()
-
-        if warning.get("code") != ScanWarningCode.STALE_TAIL_OMITTED.value:
-            continue
         try:
             normalized.append(
-                StaleTailOmissionWarningResponse.model_validate(warning).model_dump(
-                    mode="json"
-                )
+                _SCAN_WARNING_ADAPTER.validate_python(warning).model_dump(mode="json")
             )
         except ValidationError:
             continue
@@ -142,7 +156,7 @@ class ScanCreateResponse(BaseModel):
     total_stocks: int
     message: str
     feature_run_id: Optional[int] = None
-    warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
+    warnings: List[ScanWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
     published_source: Optional[Dict[str, Any]] = None
 
@@ -158,7 +172,7 @@ class ScanStatusResponse(BaseModel):
     passed_stocks: int
     started_at: datetime
     eta_seconds: Optional[int] = None
-    warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
+    warnings: List[ScanWarningResponse] = Field(default_factory=list)
     universe_def: UniverseDefinition
     published_source: Optional[Dict[str, Any]] = None
 
@@ -536,7 +550,7 @@ class ScanListItem(BaseModel):
     started_at: datetime
     completed_at: Optional[datetime] = None
     source: Optional[str] = None
-    warnings: List[StaleTailOmissionWarningResponse] = Field(default_factory=list)
+    warnings: List[ScanWarningResponse] = Field(default_factory=list)
     published_source: Optional[Dict[str, Any]] = None
 
 

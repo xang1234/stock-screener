@@ -5,6 +5,7 @@ import {
   buildUniverseDef,
   getSelectionCount,
   parseLegacyUniverseDefault,
+  withWatchlistUniverse,
 } from './universeSelection';
 
 describe('buildUniverseDef', () => {
@@ -173,5 +174,46 @@ describe('UNIVERSE_SCOPES_BY_MARKET', () => {
       { value: 'exchange:XASX', label: 'ASX' },
       { value: 'index:ASX200', label: 'S&P/ASX 200' },
     ]);
+  });
+});
+
+describe('withWatchlistUniverse', () => {
+  const base = {
+    markets: [{ value: 'US', label: 'United States' }, { value: 'TEST', label: 'Test Mode' }],
+    scopesByMarket: { US: [], TEST: [] },
+  };
+  const watchlists = [{ id: 7, name: 'Leaders' }, { id: 8, name: 'Laggards' }];
+
+  it('lists watchlists under a Watchlist market placed before Test Mode', () => {
+    const selections = withWatchlistUniverse(base, { watchlists });
+
+    expect(selections.markets.map((option) => option.value)).toEqual(['US', 'WATCHLIST', 'TEST']);
+    expect(selections.scopesByMarket.WATCHLIST.map((option) => [option.value, option.label])).toEqual([
+      ['7', 'Leaders'],
+      ['8', 'Laggards'],
+    ]);
+  });
+
+  it('turns the loaded watchlist into a counted custom universe', () => {
+    const selections = withWatchlistUniverse(base, { watchlists, selected: { id: '7', symbols: ['NVDA', 'ANET'] } });
+    const [leaders] = selections.scopesByMarket.WATCHLIST;
+
+    expect(buildUniverseDef('WATCHLIST', '7', selections)).toEqual({
+      type: 'custom',
+      symbols: ['NVDA', 'ANET'],
+    });
+    expect(getSelectionCount('WATCHLIST', '7', null, leaders.universe_def)).toBe(2);
+  });
+
+  it('blocks an empty watchlist and one over the 2000-symbol limit', () => {
+    const empty = withWatchlistUniverse(base, { watchlists, selected: { id: '7', symbols: [] } });
+    const oversized = withWatchlistUniverse(base, {
+      watchlists,
+      selected: { id: '7', symbols: Array.from({ length: 2001 }, (_, index) => `S${index}`) },
+    });
+
+    expect(empty.scopesByMarket.WATCHLIST[0].disabledReason).toBe('Empty');
+    expect(oversized.scopesByMarket.WATCHLIST[0].disabledReason).toBe('Over 2000 symbols');
+    expect(buildUniverseDef('WATCHLIST', '7', oversized)).toBeNull();
   });
 });

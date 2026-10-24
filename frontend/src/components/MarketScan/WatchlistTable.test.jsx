@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -9,6 +9,9 @@ import WatchlistTable from './WatchlistTable';
 vi.mock('../../features/opportunityState/opportunityTelemetry', () => ({
   recordOpportunityEvidenceOpen: vi.fn().mockResolvedValue(undefined),
 }));
+
+const { removeItem } = vi.hoisted(() => ({ removeItem: vi.fn() }));
+vi.mock('../../api/userWatchlists', () => ({ removeItem }));
 
 const watchlistData = {
   id: 1,
@@ -156,5 +159,31 @@ describe('WatchlistTable', () => {
     await user.click(screen.getByText('NVIDIA'));
 
     expect(onOpenChart).toHaveBeenCalledWith('NVDA');
+  });
+
+  it('refreshes only the watchlist a removal targeted', async () => {
+    let finishRemove;
+    removeItem.mockReturnValue(new Promise((resolve) => { finishRemove = resolve; }));
+    const { queryClient, rerender } = renderWithProviders(tableElement());
+    for (const queryKey of [
+      ['userWatchlistData', 1],
+      ['userWatchlistSymbols', 1],
+      ['userWatchlistData', 2],
+      ['userWatchlists'],
+    ]) {
+      queryClient.setQueryData(queryKey, {});
+    }
+    const invalidated = (queryKey) => queryClient.getQueryState(queryKey).isInvalidated;
+
+    fireEvent.mouseEnter(screen.getByText('NVIDIA').closest('tr'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from watchlist' }));
+    await waitFor(() => expect(removeItem).toHaveBeenCalledWith(11));
+    rerender(tableElement({ data: { ...watchlistData, id: 2 } }));
+    finishRemove({ status: 'deleted' });
+
+    await waitFor(() => expect(invalidated(['userWatchlistSymbols', 1])).toBe(true));
+    expect(invalidated(['userWatchlistData', 1])).toBe(true);
+    expect(invalidated(['userWatchlistData', 2])).toBe(false);
+    expect(invalidated(['userWatchlists'])).toBe(false);
   });
 });

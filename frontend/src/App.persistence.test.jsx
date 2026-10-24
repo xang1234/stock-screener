@@ -19,6 +19,11 @@ describe('app query persistence', () => {
     expect(shouldDehydratePersistedQuery(successfulQuery(['runtimeActivity']))).toBe(false);
   });
 
+  it('never restores a scannable watchlist symbol list from storage', () => {
+    expect(shouldDehydratePersistedQuery(successfulQuery(['userWatchlistSymbols', 7]))).toBe(false);
+    expect(shouldDehydratePersistedQuery(successfulQuery(['userWatchlists']))).toBe(true);
+  });
+
   it('persists ordinary successful data queries only', () => {
     expect(shouldDehydratePersistedQuery(successfulQuery(['scanHistory', 'US']))).toBe(true);
     expect(shouldDehydratePersistedQuery(failedQuery(['scanHistory', 'US']))).toBe(false);

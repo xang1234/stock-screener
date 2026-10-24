@@ -44,6 +44,11 @@ import {
   reorderItems,
   importItems,
 } from '../../api/userWatchlists';
+import { invalidateWatchlistItems } from '../../api/userWatchlistQueries';
+import { getErrorMessage } from '../../utils/errorMessage';
+
+// Matches the backend's 1,000,000-character import cap; a 2000-symbol export is ~50 KB.
+const MAX_IMPORT_CHARS = 1_000_000;
 
 function UserWatchlistManager({ open, onClose, onUpdate }) {
   const queryClient = useQueryClient();
@@ -56,6 +61,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importContent, setImportContent] = useState('');
   const [importDraftWatchlistId, setImportDraftWatchlistId] = useState(null);
+  const [importFileError, setImportFileError] = useState(null);
 
   // Fetch watchlists
   const { data: watchlistsData, isLoading: watchlistsLoading } = useQuery({
@@ -83,7 +89,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       setSelectedWatchlistId(newWatchlist.id);
       onUpdate?.();
     },
-    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to create watchlist' }),
+    onError: (err) => setFeedback({ severity: 'error', message: getErrorMessage(err, 'Failed to create watchlist') }),
   });
 
   const updateMutation = useMutation({
@@ -94,7 +100,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to update watchlist' }),
+    onError: (err) => setFeedback({ severity: 'error', message: getErrorMessage(err, 'Failed to update watchlist') }),
   });
 
   const deleteMutation = useMutation({
@@ -107,28 +113,28 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to delete watchlist' }),
+    onError: (err) => setFeedback({ severity: 'error', message: getErrorMessage(err, 'Failed to delete watchlist') }),
   });
 
   const addItemMutation = useMutation({
     mutationFn: ({ watchlistId, data }) => addItem(watchlistId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+    onSuccess: (_, { watchlistId }) => {
+      invalidateWatchlistItems(queryClient, watchlistId);
       setNewSymbol('');
       setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to add stock' }),
+    onError: (err) => setFeedback({ severity: 'error', message: getErrorMessage(err, 'Failed to add stock') }),
   });
 
   const removeItemMutation = useMutation({
-    mutationFn: (id) => removeItem(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+    mutationFn: ({ itemId }) => removeItem(itemId),
+    onSuccess: (_, { watchlistId }) => {
+      invalidateWatchlistItems(queryClient, watchlistId);
       setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to remove stock' }),
+    onError: (err) => setFeedback({ severity: 'error', message: getErrorMessage(err, 'Failed to remove stock') }),
   });
 
   const reorderWatchlistsMutation = useMutation({
@@ -141,8 +147,8 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
 
   const reorderItemsMutation = useMutation({
     mutationFn: ({ watchlistId, itemIds }) => reorderItems(watchlistId, itemIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+    onSuccess: (_, { watchlistId }) => {
+      invalidateWatchlistItems(queryClient, watchlistId);
       onUpdate?.();
     },
   });
@@ -150,7 +156,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
   const importItemsMutation = useMutation({
     mutationFn: ({ watchlistId, payload }) => importItems(watchlistId, payload),
     onSuccess: (result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
+      invalidateWatchlistItems(queryClient, variables.watchlistId);
       setImportContent('');
       setImportDialogOpen(false);
       const parts = [
@@ -165,7 +171,8 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       setFeedback({ severity: 'success', message: parts.join(', ') });
       onUpdate?.();
     },
-    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to import symbols' }),
+    // The import dialog shows the error while open; this keeps it once closed.
+    onError: (err) => setFeedback({ severity: 'error', message: getErrorMessage(err, 'Failed to import symbols') }),
   });
 
   const handleCreate = () => {
@@ -204,10 +211,12 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
   };
 
   const handleRemoveItem = (itemId) => {
-    removeItemMutation.mutate(itemId);
+    removeItemMutation.mutate({ itemId, watchlistId: selectedWatchlistId });
   };
 
   const handleOpenImportDialog = () => {
+    setImportFileError(null);
+    importItemsMutation.reset();
     if (importDraftWatchlistId !== selectedWatchlistId) {
       setImportContent('');
       setImportDraftWatchlistId(selectedWatchlistId);
@@ -251,6 +260,10 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
   };
 
   const selectedWatchlist = watchlists.find((w) => w.id === selectedWatchlistId);
+  const importTooLong = importContent.length > MAX_IMPORT_CHARS;
+  const importError = importFileError
+    || (importTooLong && `This text is over ${MAX_IMPORT_CHARS.toLocaleString('en-US')} characters.`)
+    || (importItemsMutation.isError && getErrorMessage(importItemsMutation.error, 'Failed to import symbols'));
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -451,6 +464,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
                                   <ListItemSecondaryAction>
                                     <IconButton
                                       size="small"
+                                      aria-label={`Remove ${item.symbol}`}
                                       onClick={() => handleRemoveItem(item.id)}
                                       sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}
                                     >
@@ -498,8 +512,39 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
         <DialogTitle>Import Symbols</DialogTitle>
         <DialogContent>
           <Typography id="watchlist-import-help" variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Paste newline, comma, tab, or CSV-formatted symbols. The importer will dedupe entries and report invalid symbols.
+            Paste newline, comma, tab, or CSV-formatted symbols, or choose a .txt/.csv file such as a
+            TradingView watchlist export. The importer will dedupe entries and report invalid symbols.
           </Typography>
+          <Button component="label" size="small" startIcon={<UploadFileIcon />} sx={{ mb: 1.5 }}>
+            Choose file
+            <input
+              hidden
+              type="file"
+              accept=".txt,.csv,text/plain,text/csv"
+              onChange={async (event) => {
+                const [file] = event.target.files;
+                event.target.value = '';
+                if (!file) {
+                  return;
+                }
+                if (file.size > MAX_IMPORT_CHARS) {
+                  setImportFileError(`${file.name} is over 1 MB.`);
+                  return;
+                }
+                try {
+                  setImportContent(await file.text());
+                  setImportFileError(null);
+                } catch {
+                  setImportFileError(`Could not read ${file.name}.`);
+                }
+              }}
+            />
+          </Button>
+          {importError && (
+            <Alert severity="error" sx={{ mb: 1.5 }}>
+              {importError}
+            </Alert>
+          )}
           <TextField
             autoFocus
             multiline
@@ -522,7 +567,9 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
               watchlistId: selectedWatchlistId,
               payload: { content: importContent, format: 'auto' },
             })}
-            disabled={!selectedWatchlistId || !importContent.trim() || importItemsMutation.isPending}
+            disabled={
+              !selectedWatchlistId || !importContent.trim() || importTooLong || importItemsMutation.isPending
+            }
           >
             Import
           </Button>

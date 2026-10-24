@@ -94,6 +94,7 @@ class ScanWarningCode(str, Enum):
     """Durable scan warning codes exposed through the scan API."""
 
     STALE_TAIL_OMITTED = "market_data_stale_tail_omitted"
+    SYMBOLS_NOT_IN_UNIVERSE = "symbols_not_in_universe"
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,7 @@ class ScanFreshnessPolicy:
 
     allow_stale_tail: bool = False
     min_freshness_rate: float = 0.99
-    max_omitted_symbols: int = 100
+    max_omitted_symbols: int | None = 100
     stale_symbol_sample_limit: int = 20
 
     @classmethod
@@ -115,19 +116,27 @@ class ScanFreshnessPolicy:
 
     @classmethod
     def for_universe_type(cls, universe_type: str) -> "ScanFreshnessPolicy":
-        return cls(
-            allow_stale_tail=universe_type in {
-                "all",
-                "market",
-                "exchange",
-                "index",
-            }
-        )
+        if universe_type == "custom":
+            # A hand-picked list is scanned for whatever is fresh: one halted
+            # name in a 10-symbol watchlist must not block the other nine.
+            return cls(allow_stale_tail=True, min_freshness_rate=0.0, max_omitted_symbols=None)
+        return cls(allow_stale_tail=universe_type in {"all", "market", "exchange", "index"})
+
+
+# A scan warning names this many symbols in its message and stores this many;
+# its count field keeps the true total.
+WARNING_MESSAGE_SYMBOL_SAMPLE = 20
+WARNING_STORED_SYMBOL_SAMPLE = 200
+
+
+def warning_symbol_sample(symbols: tuple[str, ...]) -> str:
+    sample = ", ".join(symbols[:WARNING_MESSAGE_SYMBOL_SAMPLE])
+    return f"{sample}, ..." if len(symbols) > WARNING_MESSAGE_SYMBOL_SAMPLE else sample
 
 
 @dataclass(frozen=True)
 class FreshnessOmissionWarning:
-    """Durable warning describing symbols omitted from a degraded broad scan."""
+    """Durable warning describing symbols omitted from a degraded scan."""
 
     code: str
     message: str
@@ -172,6 +181,62 @@ class FreshnessOmissionWarning:
             "expected_dates": self.expected_dates,
             "oldest_last_cached_dates": self.oldest_last_cached_dates,
         }
+
+
+@dataclass(frozen=True)
+class SymbolsNotInUniverseWarning:
+    """Durable warning naming requested symbols the active universe lacks."""
+
+    code: str
+    message: str
+    dropped_symbols: tuple[str, ...]
+    dropped_count: int
+
+    @classmethod
+    def for_dropped(cls, dropped_symbols: tuple[str, ...]) -> "SymbolsNotInUniverseWarning":
+        noun = "symbol" if len(dropped_symbols) == 1 else "symbols"
+        return cls(
+            code=ScanWarningCode.SYMBOLS_NOT_IN_UNIVERSE.value,
+            message=(
+                f"Skipped {len(dropped_symbols)} {noun} not in the active "
+                f"stock universe: {warning_symbol_sample(dropped_symbols)}"
+            ),
+            dropped_symbols=dropped_symbols[:WARNING_STORED_SYMBOL_SAMPLE],
+            dropped_count=len(dropped_symbols),
+        )
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "SymbolsNotInUniverseWarning":
+        return cls(
+            code=str(payload["code"]),
+            message=str(payload["message"]),
+            dropped_symbols=tuple(str(value) for value in payload["dropped_symbols"]),
+            dropped_count=int(payload["dropped_count"]),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "dropped_symbols": list(self.dropped_symbols),
+            "dropped_count": self.dropped_count,
+        }
+
+
+ScanWarning = FreshnessOmissionWarning | SymbolsNotInUniverseWarning
+
+SCAN_WARNING_TYPES: dict[str, type[FreshnessOmissionWarning] | type[SymbolsNotInUniverseWarning]] = {
+    ScanWarningCode.STALE_TAIL_OMITTED.value: FreshnessOmissionWarning,
+    ScanWarningCode.SYMBOLS_NOT_IN_UNIVERSE.value: SymbolsNotInUniverseWarning,
+}
+
+
+@dataclass(frozen=True)
+class ResolvedUniverse:
+    """Symbols a universe resolves to, plus requested symbols it had to drop."""
+
+    symbols: list[str]
+    dropped_symbols: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

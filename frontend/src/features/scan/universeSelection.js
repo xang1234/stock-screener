@@ -1,4 +1,9 @@
-import { TEST_SYMBOLS, UNIVERSE_GEOGRAPHIC_MARKETS } from './constants';
+import {
+  MAX_CUSTOM_UNIVERSE_SYMBOLS,
+  TEST_SYMBOLS,
+  UNIVERSE_GEOGRAPHIC_MARKETS,
+  WATCHLIST_MARKET,
+} from './constants';
 
 function findRuntimeScopeOption(market, scope, universeSelections) {
   return universeSelections?.scopesByMarket?.[market]?.find((option) => option.value === scope) ?? null;
@@ -29,9 +34,73 @@ export function buildUniverseDef(market, scope, universeSelections = null) {
   return null;
 }
 
+function watchlistDisabledReason({ symbols, failed }) {
+  if (failed) {
+    return 'Unavailable';
+  }
+  if (!symbols) {
+    return 'Loading';
+  }
+  if (symbols.length === 0) {
+    return 'Empty';
+  }
+  if (symbols.length > MAX_CUSTOM_UNIVERSE_SYMBOLS) {
+    return `Over ${MAX_CUSTOM_UNIVERSE_SYMBOLS} symbols`;
+  }
+  return null;
+}
+
+function watchlistListHint(watchlists, listFailed) {
+  if (!watchlists) {
+    return listFailed ? 'Could not load watchlists' : 'Loading watchlists';
+  }
+  return watchlists.length === 0 ? 'No watchlists yet' : null;
+}
+
+function watchlistScope(watchlist, selected) {
+  const value = String(watchlist.id);
+  if (value !== selected?.id) {
+    return { value, label: watchlist.name, disabled: false, disabledReason: null };
+  }
+  const disabledReason = watchlistDisabledReason(selected);
+  return {
+    value,
+    label: watchlist.name,
+    disabled: Boolean(disabledReason),
+    disabledReason,
+    universe_def: disabledReason ? undefined : { type: 'custom', symbols: selected.symbols },
+  };
+}
+
+// The selected watchlist's scope option carries its custom universe_def, so
+// buildUniverseDef and getSelectionCount read it like any runtime scope.
+export function withWatchlistUniverse(
+  universeSelections,
+  { watchlists, listFailed = false, selected = null } = {},
+) {
+  const hint = watchlistListHint(watchlists, listFailed);
+  const scopes = hint
+    ? [{ value: 'none', label: hint, disabled: true, disabledReason: null }]
+    : watchlists.map((watchlist) => watchlistScope(watchlist, selected));
+  const markets = universeSelections?.markets ?? [];
+  const testIndex = markets.findIndex((option) => option.value === 'TEST');
+  const insertAt = testIndex === -1 ? markets.length : testIndex;
+  return {
+    markets: [
+      ...markets.slice(0, insertAt),
+      { value: WATCHLIST_MARKET, label: 'Watchlist', disabled: false, disabledReason: null },
+      ...markets.slice(insertAt),
+    ],
+    scopesByMarket: { ...universeSelections?.scopesByMarket, [WATCHLIST_MARKET]: scopes },
+  };
+}
+
 // Count of stocks matching a (market, scope) selection, derived from the
 // universeStats bootstrap payload. Returns null when data isn't available yet.
 export function getSelectionCount(market, scope, universeStats, universeDef = null) {
+  if (universeDef?.type === 'custom') {
+    return universeDef.symbols.length;
+  }
   if (!universeStats) {
     return null;
   }

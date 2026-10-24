@@ -26,6 +26,7 @@ import ActionStateBadge from '../shared/ActionStateBadge';
 import OpportunityEvidenceDrawer from '../shared/OpportunityEvidenceDrawer';
 import PriceChangeBar from './PriceChangeBar';
 import { removeItem } from '../../api/userWatchlists';
+import { invalidateWatchlistItems } from '../../api/userWatchlistQueries';
 
 const PRICE_PERIODS = [
   { key: '1d', label: '1D' },
@@ -56,16 +57,16 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
   }, [opportunityItemId, opportunityRow]);
 
   const removeMutation = useMutation({
-    mutationFn: removeItem,
-    onSuccess: () => {
-      queryClient.invalidateQueries(['userWatchlistData', watchlistData.id]);
+    mutationFn: ({ itemId }) => removeItem(itemId),
+    onSuccess: (_, { watchlistId }) => {
+      invalidateWatchlistItems(queryClient, watchlistId);
       if (onRefresh) onRefresh();
     },
   });
 
   const handleRemove = (e, itemId) => {
     e.stopPropagation();
-    removeMutation.mutate(itemId);
+    removeMutation.mutate({ itemId, watchlistId: watchlistData.id });
   };
 
   if (!items || items.length === 0) {

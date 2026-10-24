@@ -19,10 +19,12 @@ from sqlalchemy import func
 
 from ..database import SessionLocal
 from ..domain.scanning.models import (
+    WARNING_STORED_SYMBOL_SAMPLE,
     FreshnessDecision,
     FreshnessOmissionWarning,
     ScanFreshnessPolicy,
     ScanWarningCode,
+    warning_symbol_sample,
 )
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse
@@ -319,11 +321,11 @@ def _build_omission_warning(
     return FreshnessOmissionWarning(
         code=ScanWarningCode.STALE_TAIL_OMITTED.value,
         message=(
-            f"Omitted {omitted_count} stale symbols from this broad scan "
-            f"({freshness_rate:.2%} fresh)."
+            f"Omitted {omitted_count} stale {'symbol' if omitted_count == 1 else 'symbols'} "
+            f"from this scan ({freshness_rate:.2%} fresh): {warning_symbol_sample(omitted_symbols)}"
         ),
         markets=tuple(sorted(expected_dates)),
-        omitted_symbols=omitted_symbols,
+        omitted_symbols=omitted_symbols[:WARNING_STORED_SYMBOL_SAMPLE],
         omitted_count=omitted_count,
         total_symbols=total_symbols,
         fresh_count=fresh_count,
@@ -365,7 +367,8 @@ def _decide_scan_freshness(
         and not unresolved_symbols
         and not hard_block
         and omitted_count > 0
-        and omitted_count <= policy.max_omitted_symbols
+        and fresh_count > 0
+        and (policy.max_omitted_symbols is None or omitted_count <= policy.max_omitted_symbols)
         and freshness_rate >= policy.min_freshness_rate
     )
     if can_omit_tail:

@@ -22,7 +22,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import StopIcon from '@mui/icons-material/Stop';
 import ScanProgress from '../../../components/Scan/ScanProgress';
 import { formatScanDropdownLabel } from '../../../utils/scanLabel';
-import { SCREENER_OPTIONS } from '../constants';
+import { SCREENER_OPTIONS, WATCHLIST_MARKET } from '../constants';
 import { selectRuntimeUniverseOption } from '../runtimeUniverseSelections';
 import { getSelectionCount } from '../universeSelection';
 
@@ -86,6 +86,7 @@ function ScanControlBar({
   onCompositeMethodChange,
   createScanPending,
   scanStatus,
+  scanRequestReady,
   onStartScan,
   onCancelScan,
   cancelScanPending,
@@ -112,11 +113,16 @@ function ScanControlBar({
     scopeOption: selectedScopeOption,
   } = selectRuntimeUniverseOption(universeSelections, universeMarket, universeScope);
   const hasCustomSymbols = customSymbols.length > 0;
+  const scopeLabel = universeMarket === WATCHLIST_MARKET ? 'Watchlist' : 'Universe';
   const needsScope = universeMarket && universeMarket !== 'TEST' && !hasCustomSymbols;
+  // A stale error that names no market falls back to the picked market only
+  // when the scan was that market's own universe.
+  const refreshableMarket = hasCustomSymbols || universeMarket === 'TEST' || universeMarket === WATCHLIST_MARKET
+    ? null
+    : universeMarket;
   const startDisabled =
     createScanPending
-    || (!hasCustomSymbols && !universeMarket)
-    || (needsScope && !universeScope)
+    || !scanRequestReady
     || Boolean(selectedMarketOption?.disabled)
     || Boolean(selectedScopeOption?.disabled)
     || Boolean(refreshConflict);
@@ -127,8 +133,7 @@ function ScanControlBar({
     // Starting another scan now would stop tracking the user's own scan.
     || scanStatus === 'running'
     || scanStatus === 'queued'
-    || (!hasCustomSymbols && !universeMarket)
-    || (needsScope && !universeScope)
+    || !scanRequestReady
     || (!refreshConflict && (
       Boolean(selectedMarketOption?.disabled) || Boolean(selectedScopeOption?.disabled)
     ));
@@ -145,10 +150,8 @@ function ScanControlBar({
         ? refreshStaleDataErrorDetail
         : refreshStaleDataErrorDetail?.message)
       || refreshStaleDataError?.message;
-  const staleMarket = staleRefreshMarket(createScanError, universeMarket);
-  const staleTailWarnings = scanWarnings.filter(
-    (warning) => warning?.code === 'market_data_stale_tail_omitted' && warning?.message
-  );
+  const staleMarket = staleRefreshMarket(createScanError, refreshableMarket);
+  const displayedWarnings = scanWarnings.filter((warning) => warning?.message);
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -205,11 +208,11 @@ function ScanControlBar({
 
         {needsScope && (
           <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel id="universe-scope-label">Universe</InputLabel>
+            <InputLabel id="universe-scope-label">{scopeLabel}</InputLabel>
             <Select
               labelId="universe-scope-label"
               value={universeScope ?? ''}
-              label="Universe"
+              label={scopeLabel}
               onChange={(event) => onUniverseScopeChange(event.target.value || null)}
               disabled={controlsDisabled}
             >
@@ -453,9 +456,9 @@ function ScanControlBar({
           Error: {refreshStaleDataErrorMessage}
         </Alert>
       )}
-      {staleTailWarnings.map((warning, index) => (
+      {displayedWarnings.map((warning, index) => (
         <Alert
-          key={`${warning.code}-${warning.omitted_count ?? index}`}
+          key={`${warning.code}-${index}`}
           severity="warning"
           sx={{ mt: 1 }}
         >
