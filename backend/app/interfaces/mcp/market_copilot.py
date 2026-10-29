@@ -38,6 +38,7 @@ from app.use_cases.feature_store.compare_runs import (
     CompareRunsQuery,
 )
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
+from app.utils.market_hours import to_eastern_date
 from app.wiring.bootstrap import (
     get_group_rank_service,
     get_market_calendar_service,
@@ -512,7 +513,8 @@ class MarketCopilotService:
 
         * ``available`` answers "is there a usable observation", not "is a date
           known": a fresh observation that knows of no upcoming date is
-          ``available=True`` with ``reasons=["no_upcoming_earnings_date"]``.
+          ``available=True`` with
+          ``reasons=["no_upcoming_earnings_date", "date_confirmation_unrecorded"]``.
         * ``date_confirmation`` stays ``unknown``: ``stock_fundamentals`` stores
           no confirmation proof, so neither ``confirmed`` nor ``estimated`` can
           be claimed.
@@ -524,7 +526,10 @@ class MarketCopilotService:
 
         rules = yahoo_earnings_calendar
         now = self._now()
-        reference = now.date()
+        # Same reference the scanners use: the Eastern calendar date, not the
+        # UTC one - otherwise a 22:00 ET lookup on the 15th would already judge
+        # the 15th as past once UTC has rolled over.
+        reference = to_eastern_date(now)
 
         payload: dict[str, Any] = {
             "symbol": args.symbol,

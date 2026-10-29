@@ -325,6 +325,68 @@ def test_the_canonical_service_confirms_the_expected_date_semantics(session_fact
         assert payload["expected_trading_date"] == expected, context
 
 
+def test_before_the_open_the_expected_date_is_still_today(session_factory):
+    """The gateway contract says "trading today", not "session already open".
+
+    At 08:00 in New York the calendar day trades, so the run published today is
+    the expected one; ``last_completed_trading_day`` still names yesterday by
+    design. Changing this would silently redefine the consumer's freshness
+    check, so the behaviour is pinned here instead.
+    """
+    pre_open = datetime(2026, 10, 15, 8, 0, tzinfo=NEW_YORK)
+    service = _service(
+        session_factory,
+        FixedCalendar(
+            market_now=pre_open,
+            is_trading_day=True,
+            last_completed=date(2026, 10, 14),
+        ),
+        now=pre_open.astimezone(UTC),
+    )
+
+    payload = _payload(service, "market_calendar_status", {"market": "US"})
+
+    assert payload["market_date"] == "2026-10-15"
+    assert payload["is_trading_day"] is True
+    assert payload["expected_trading_date"] == "2026-10-15"
+    assert payload["last_completed_trading_day"] == "2026-10-14"
+
+
+def test_the_earnings_reference_date_is_the_eastern_date(session_factory):
+    """22:00 in New York is already the next day in UTC.
+
+    The stored date is still today's, so it must not be called past.
+    """
+    _seed_fundamentals(
+        session_factory,
+        [
+            {
+                "symbol": "AAPL",
+                "next_earnings_date": date(2026, 10, 15),
+                "event_calendar_as_of_date": date(2026, 10, 14),
+            }
+        ],
+    )
+    after_midnight_utc = datetime(2026, 10, 16, 2, 0, tzinfo=UTC)  # 22:00 ET, Oct 15
+    service = _service(session_factory, now=after_midnight_utc)
+
+    payload = _payload(service, "earnings_lookup", {"symbol": "AAPL"})
+
+    assert payload["freshness_status"] == "ok"
+    assert payload["next_earnings_date"] == "2026-10-15"
+    assert payload["observation_age_days"] == 1
+
+
+def test_a_padded_symbol_is_normalized_before_the_length_check(session_factory):
+    _seed_earnings_rows(session_factory)
+    service = _service(session_factory)
+
+    payload = _payload(service, "earnings_lookup", {"symbol": "   aapl   "})
+
+    assert payload["symbol"] == "AAPL"
+    assert payload["freshness_status"] == "ok"
+
+
 # ---------------------------------------------------------------------------
 # earnings_lookup
 # ---------------------------------------------------------------------------

@@ -60,7 +60,7 @@ same names:
 ```
 
 `expected_trading_date` keeps the gateway's meaning: the market-calendar day while the market
-trades — **mid-session included** — otherwise the last completed session. It is deliberately not
+trades — **mid-session and pre-open included** — otherwise the last completed session. It is deliberately not
 `last_completed_trading_day` during a running session; that value only moves after the close and
 would make today's run look stale.
 
@@ -100,7 +100,8 @@ Rules, taken from `app.services.yahoo_earnings_calendar` (no second implementati
   observation lies in the future beyond tolerance or the stored date is unusable, `unknown` when
   there is no observation to judge.
 - `available` answers "is there a usable observation": a current observation that reports **no**
-  upcoming date is `available: true` with `reasons: ["no_upcoming_earnings_date"]`.
+  upcoming date is `available: true` with
+  `reasons: ["no_upcoming_earnings_date", "date_confirmation_unrecorded"]`.
 - `date_confirmation` is always `unknown`. The table stores no confirmation proof, so neither
   `confirmed` nor `estimated` can be claimed; a current date is not a confirmed date.
 - Missing or stale facts are named in `reasons` instead of being filled in.

@@ -78,10 +78,17 @@ class EarningsLookupArgs(BaseModel):
 
     symbol: str = Field(min_length=1, max_length=10)
 
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def strip_symbol(cls, value: object) -> object:
+        # max_length runs before a plain validator, so "  AAPL  " would be
+        # rejected on width before it is ever normalized.
+        return value.strip() if isinstance(value, str) else value
+
     @field_validator("symbol")
     @classmethod
     def normalize_symbol(cls, value: str) -> str:
-        normalized = value.strip().upper()
+        normalized = value.upper()
         if not _SYMBOL_RE.match(normalized):
             raise ValueError("symbol must look like a US ticker (A-Z, 0-9, '.', '-')")
         return normalized
