@@ -96,10 +96,31 @@ class FixedCalendar:
 
 
 class RaisingCalendar(FixedCalendar):
-    """A calendar whose provider fails - coverage expired, provider drift."""
+    """A calendar whose provider fails at one lookup - coverage, catalog drift."""
+
+    def __init__(self, fail_on: str = "market_now", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._fail_on = fail_on
+
+    def _fail(self, lookup: str) -> None:
+        if lookup == self._fail_on:
+            raise RuntimeError(f"calendar lookup failed: {lookup}")
 
     def market_now(self, market: str, now: datetime | None = None) -> datetime:
-        raise RuntimeError("calendar coverage expired for this day")
+        self._fail("market_now")
+        return super().market_now(market, now)
+
+    def is_trading_day(self, market: str, day: date | None = None) -> bool:
+        self._fail("is_trading_day")
+        return super().is_trading_day(market, day)
+
+    def last_completed_trading_day(self, market: str, now: datetime | None = None) -> date:
+        self._fail("last_completed_trading_day")
+        return super().last_completed_trading_day(market, now)
+
+    def market_timezone(self, market: str) -> ZoneInfo:
+        self._fail("market_timezone")
+        return super().market_timezone(market)
 
 
 def _factory():
@@ -267,10 +288,20 @@ def test_an_unsupported_market_is_rejected_as_bad_arguments(session_factory):
     assert "expected_trading_date" not in error["details"]
 
 
-def test_an_unavailable_calendar_fails_closed(session_factory):
+@pytest.mark.parametrize(
+    "fail_on",
+    ["market_now", "is_trading_day", "last_completed_trading_day", "market_timezone"],
+)
+def test_an_unavailable_calendar_fails_closed(session_factory, fail_on):
+    """Every lookup inside the block maps to the same code.
+
+    A regression that narrowed the ``try`` block, or that let a later lookup
+    raise something else, must fail this test.
+    """
     service = _service(
         session_factory,
         RaisingCalendar(
+            fail_on=fail_on,
             market_now=FIXED_NOW.astimezone(NEW_YORK),
             is_trading_day=True,
             last_completed=date(2026, 10, 14),
@@ -284,7 +315,7 @@ def test_an_unavailable_calendar_fails_closed(session_factory):
     assert payload["error"]["code"] == "calendar_unavailable"
     # No half-filled success payload: there is no date to read.
     assert "expected_trading_date" not in payload
-    assert "calendar coverage" not in payload["error"]["message"]
+    assert "calendar lookup failed" not in payload["error"]["message"]
 
 
 def test_the_calendar_payload_keeps_the_gateway_keys(session_factory):
@@ -340,6 +371,28 @@ def test_the_canonical_service_confirms_the_expected_date_semantics(
     assert payload["expected_trading_date"] == (market_date if trading else last_completed)
 
 
+def test_a_non_us_market_uses_its_own_timezone(session_factory):
+    """Tokyo's date differs from New York's at this moment.
+
+    The double answers with New York for every market, so only the real service
+    can show that the handler does not hardcode a zone. The expected trading
+    date of another market is not asserted here - that needs the exchange
+    calendar checked separately.
+    """
+    moment = datetime(2026, 10, 15, 22, 0, tzinfo=UTC)  # 07:00 next day in Tokyo
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
+        now_provider=lambda: moment,
+    )
+
+    payload = _payload(service, "market_calendar_status", {"market": "JP"})
+
+    assert payload["market"] == "JP"
+    assert payload["market_timezone"] == "Asia/Tokyo"
+    assert payload["market_date"] == "2026-10-16"
+
+
 # ---------------------------------------------------------------------------
 # earnings_lookup
 # ---------------------------------------------------------------------------
@@ -384,13 +437,24 @@ EARNINGS_ROWS = [
 ]
 
 EARNINGS_CASES = [
-    pytest.param("aapl", "ok", True, "date_confirmation_unrecorded", "2026-11-05", id="current-with-date"),
-    pytest.param("MSFT", "ok", True, "no_upcoming_earnings_date", None, id="current-no-date"),
-    pytest.param("ZZZZ", "unknown", False, "symbol_not_found", None, id="unknown-symbol"),
-    pytest.param("NVDA", "stale", False, "observation_stale", None, id="stale-observation"),
-    pytest.param("PANW", "invalid", False, "observation_date_in_future", None, id="future-observation"),
-    pytest.param("SNOW", "invalid", False, "earnings_date_in_past", None, id="past-stored-date"),
-    pytest.param("AVGO", "unknown", False, "observation_date_missing", None, id="missing-observation"),
+    pytest.param(
+        "aapl", "ok", True, ["date_confirmation_unrecorded"], "2026-11-05", id="current-with-date"
+    ),
+    pytest.param(
+        "MSFT",
+        "ok",
+        True,
+        ["no_upcoming_earnings_date", "date_confirmation_unrecorded"],
+        None,
+        id="current-no-date",
+    ),
+    pytest.param("ZZZZ", "unknown", False, ["symbol_not_found"], None, id="unknown-symbol"),
+    pytest.param("NVDA", "stale", False, ["observation_stale"], None, id="stale-observation"),
+    pytest.param(
+        "PANW", "invalid", False, ["observation_date_in_future"], None, id="future-observation"
+    ),
+    pytest.param("SNOW", "invalid", False, ["earnings_date_in_past"], None, id="past-stored-date"),
+    pytest.param("AVGO", "unknown", False, ["observation_date_missing"], None, id="missing-observation"),
 ]
 
 
@@ -401,9 +465,9 @@ def earnings_factory():
     return factory
 
 
-@pytest.mark.parametrize(("symbol", "freshness", "available", "reason", "next_date"), EARNINGS_CASES)
+@pytest.mark.parametrize(("symbol", "freshness", "available", "reasons", "next_date"), EARNINGS_CASES)
 def test_the_stored_observation_is_reported_with_its_freshness(
-    earnings_factory, symbol, freshness, available, reason, next_date
+    earnings_factory, symbol, freshness, available, reasons, next_date
 ):
     """Every state keeps a date unconfirmed and names what is missing."""
     payload = _payload(_service(earnings_factory), "earnings_lookup", {"symbol": symbol})
@@ -411,7 +475,8 @@ def test_the_stored_observation_is_reported_with_its_freshness(
     assert payload["symbol"] == symbol.upper()
     assert payload["freshness_status"] == freshness
     assert payload["available"] is available
-    assert reason in payload["reasons"]
+    # Exact list: an extra or dropped reason must fail the test.
+    assert payload["reasons"] == reasons
     # A stored or current date is never a confirmation.
     assert payload["date_confirmation"] == "unknown"
     assert payload["next_earnings_date"] == next_date
@@ -494,6 +559,17 @@ def test_the_earnings_payload_keeps_the_gateway_keys(earnings_factory):
 
     assert EARNINGS_GATEWAY_KEYS <= set(payload)
     assert payload["source"] == "xang_yahoo_calendar"
+    fact_keys = {fact["key"] for fact in payload["facts"]}
+    assert {
+        "symbol",
+        "freshness_status",
+        "date_confirmation",
+        "available",
+        "event_calendar_as_of_date",
+        "next_earnings_date",
+        "observation_age_days",
+    } <= fact_keys
+    assert all(fact["source"] == "xang_yahoo_calendar" for fact in payload["facts"])
 
 
 def test_the_lookup_only_emits_select_statements():
