@@ -450,7 +450,7 @@ class MarketCopilotService:
             )
             if last_completed != market_date:
                 summary += (
-                    " The session is still running, so the expected date is today's session, "
+                    " Today's session already counts, so the expected date is that session, "
                     "not the last completed one."
                 )
         else:
@@ -470,17 +470,15 @@ class MarketCopilotService:
             "calendar_source": _CALENDAR_SOURCE,
         }
 
-        facts = [
-            self._fact("market", market, _CALENDAR_SOURCE, market_date),
-            self._fact("market_timezone", market_timezone, _CALENDAR_SOURCE, market_date),
-            self._fact("market_now", market_now.isoformat(), _CALENDAR_SOURCE, market_date),
-            self._fact("market_date", market_date.isoformat(), _CALENDAR_SOURCE, market_date),
-            self._fact("is_trading_day", is_trading_day, _CALENDAR_SOURCE, market_date),
-            self._fact(
-                "last_completed_trading_day", last_completed.isoformat(), _CALENDAR_SOURCE, last_completed
-            ),
-            self._fact("expected_trading_date", expected.isoformat(), _CALENDAR_SOURCE, expected),
-        ]
+        facts = self._facts(
+            {key: value for key, value in payload.items() if key != "calendar_source"},
+            _CALENDAR_SOURCE,
+            as_of=market_date,
+            key_dates={
+                "last_completed_trading_day": last_completed,
+                "expected_trading_date": expected,
+            },
+        )
 
         return self._envelope(
             summary,
@@ -635,26 +633,19 @@ class MarketCopilotService:
                             f"date is {stored_next.isoformat()}, unconfirmed."
                         )
 
-        facts = [
-            self._fact("symbol", args.symbol, _EARNINGS_SOURCE),
-            self._fact("freshness_status", payload["freshness_status"], _EARNINGS_SOURCE),
-            self._fact("date_confirmation", payload["date_confirmation"], _EARNINGS_SOURCE),
-            self._fact("available", payload["available"], _EARNINGS_SOURCE),
-        ]
-        if payload["event_calendar_as_of_date"] is not None:
-            facts.append(
-                self._fact(
-                    "event_calendar_as_of_date", payload["event_calendar_as_of_date"], _EARNINGS_SOURCE
-                )
-            )
-        if payload["next_earnings_date"] is not None:
-            facts.append(
-                self._fact("next_earnings_date", payload["next_earnings_date"], _EARNINGS_SOURCE)
-            )
-        if "observation_age_days" in payload:
-            facts.append(
-                self._fact("observation_age_days", payload["observation_age_days"], _EARNINGS_SOURCE)
-            )
+        fact_keys = (
+            "symbol",
+            "freshness_status",
+            "date_confirmation",
+            "available",
+            "event_calendar_as_of_date",
+            "next_earnings_date",
+            "observation_age_days",
+        )
+        facts = self._facts(
+            {key: payload[key] for key in fact_keys if payload.get(key) is not None},
+            _EARNINGS_SOURCE,
+        )
 
         next_actions: list[str] = []
         if payload["freshness_status"] == "stale":
@@ -2300,6 +2291,20 @@ class MarketCopilotService:
             freshness=freshness,
             **extra,
         )
+
+    def _facts(
+        self,
+        values: dict[str, Any],
+        source: str,
+        *,
+        as_of: date | None = None,
+        key_dates: dict[str, date] | None = None,
+    ) -> list[ToolFact]:
+        """Build one fact per value, keeping the dictionary's order."""
+        return [
+            self._fact(key, value, source, (key_dates or {}).get(key, as_of))
+            for key, value in values.items()
+        ]
 
     def _fact(self, key: str, value: Any, source: str, as_of: date | None = None) -> ToolFact:
         return ToolFact(

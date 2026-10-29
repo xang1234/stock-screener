@@ -30,9 +30,9 @@ Every tool returns a structured envelope with `summary`, `facts`, `citations`, `
 
 ## Calendar and Earnings Facts
 
-Both tools are read-only and exist so that consumers (the Hermes watchlist scanner among them)
-do not need the temporary `xang-mcp-gateway` for these two facts. Neither tool writes, fetches a
-provider or derives its own rules.
+Both tools are read-only and replace the two facts consumers (the Hermes watchlist scanner among
+them) still take from the temporary `xang-mcp-gateway`. Neither writes, fetches a provider or
+derives its own rules.
 
 ### `market_calendar_status`
 
@@ -50,31 +50,22 @@ same names:
   "is_trading_day": true,
   "last_completed_trading_day": "2026-10-14",
   "expected_trading_date": "2026-10-15",
-  "calendar_source": "xang_market_calendar_service",
-  "summary": "...",
-  "facts": [],
-  "citations": [],
-  "freshness": {"generated_at": "...", "as_of_date": "2026-10-15", "sources": {}},
-  "next_actions": []
+  "calendar_source": "xang_market_calendar_service"
 }
 ```
 
 `expected_trading_date` keeps the gateway's meaning: the market-calendar day while the market
-trades — **mid-session and pre-open included** — otherwise the last completed session. It is deliberately not
-`last_completed_trading_day` during a running session; that value only moves after the close and
-would make today's run look stale.
-
-The values come from `app.services.market_calendar_service.MarketCalendarService`. If the service
-cannot answer (missing coverage, provider drift), the call is an `isError` response with
-`code: "calendar_unavailable"` and **no** `expected_trading_date` — there is no half-filled success
-payload.
+trades (**mid-session and pre-open included**), otherwise the last completed session. It is
+deliberately not `last_completed_trading_day` during a running session — that value only moves
+after the close and would make today's run look stale. Values come from
+`app.services.market_calendar_service.MarketCalendarService`; if the service cannot answer, the
+call is `isError` with `code: "calendar_unavailable"` and **no** `expected_trading_date`.
 
 ### `earnings_lookup`
 
 Input: `{"symbol": "AAPL"}`. The ticker shape is validated first (`A-Z`, digits, `.`, `-`); a
-malformed symbol is `invalid_arguments` before any query runs.
-
-The answer keeps the gateway contract per row of `public.stock_fundamentals`:
+malformed symbol is `invalid_arguments` before any query runs. The answer keeps the gateway
+contract per row of `public.stock_fundamentals`:
 
 ```json
 {
@@ -107,9 +98,9 @@ Rules, taken from `app.services.yahoo_earnings_calendar` (no second implementati
 - Missing or stale facts are named in `reasons` instead of being filled in.
 
 Deviations from the gateway, on purpose: a malformed symbol and a failing database are `isError`
-responses (`invalid_arguments`, `database_unavailable`) rather than a success payload with an
-`invalid`/`unknown` status, because a consumer must not read an envelope off a failed lookup. The
-error message never contains connection strings or driver text.
+(`invalid_arguments`, `database_unavailable`) rather than a success payload, because a consumer
+must not read an envelope off a failed lookup. Neither message carries connection strings or
+driver text.
 
 ## Example Workflows
 
