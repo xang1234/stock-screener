@@ -371,26 +371,31 @@ def test_the_canonical_service_confirms_the_expected_date_semantics(
     assert payload["expected_trading_date"] == (market_date if trading else last_completed)
 
 
-def test_a_non_us_market_uses_its_own_timezone(session_factory):
-    """Tokyo's date differs from New York's at this moment.
+def test_a_non_us_market_uses_its_own_timezone_and_sessions(session_factory):
+    """Japan is closed on 2026-09-23 while the US trades.
 
     The double answers with New York for every market, so only the real service
-    can show that the handler does not hardcode a zone. The expected trading
-    date of another market is not asserted here - that needs the exchange
-    calendar checked separately.
+    can show that the handler passes the market to every lookup instead of
+    hardcoding one calendar. The expected trading date is not asserted for JP -
+    that needs the exchange calendar checked separately.
     """
-    moment = datetime(2026, 10, 15, 22, 0, tzinfo=UTC)  # 07:00 next day in Tokyo
+    moment = datetime(2026, 9, 23, 4, 0, tzinfo=UTC)  # 13:00 JST, 00:00 EDT
     service = MarketCopilotService(
         session_factory,
         SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
         now_provider=lambda: moment,
     )
 
-    payload = _payload(service, "market_calendar_status", {"market": "JP"})
+    japan = _payload(service, "market_calendar_status", {"market": "JP"})
+    states = _payload(service, "market_calendar_status", {"market": "US"})
 
-    assert payload["market"] == "JP"
-    assert payload["market_timezone"] == "Asia/Tokyo"
-    assert payload["market_date"] == "2026-10-16"
+    assert japan["market_timezone"] == "Asia/Tokyo"
+    assert japan["market_date"] == "2026-09-23"
+    assert japan["is_trading_day"] is False
+    assert japan["last_completed_trading_day"] == "2026-09-18"
+    # The same moment, the other calendar: a hardcoded market would match here.
+    assert states["is_trading_day"] is True
+    assert states["last_completed_trading_day"] == "2026-09-22"
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +439,12 @@ EARNINGS_ROWS = [
         "next_earnings_date": date(2026, 12, 1),
         "event_calendar_as_of_date": None,
     },
+    # exactly at the future tolerance (reference 2026-10-15 + 3): still fresh
+    {
+        "symbol": "TJX",
+        "next_earnings_date": date(2026, 11, 10),
+        "event_calendar_as_of_date": date(2026, 10, 18),
+    },
 ]
 
 EARNINGS_CASES = [
@@ -455,6 +466,9 @@ EARNINGS_CASES = [
     ),
     pytest.param("SNOW", "invalid", False, ["earnings_date_in_past"], None, id="past-stored-date"),
     pytest.param("AVGO", "unknown", False, ["observation_date_missing"], None, id="missing-observation"),
+    pytest.param(
+        "TJX", "ok", True, ["date_confirmation_unrecorded"], "2026-11-10", id="at-future-tolerance"
+    ),
 ]
 
 
@@ -570,6 +584,9 @@ def test_the_earnings_payload_keeps_the_gateway_keys(earnings_factory):
         "observation_age_days",
     } <= fact_keys
     assert all(fact["source"] == "xang_yahoo_calendar" for fact in payload["facts"])
+    # Values, not just keys: _facts must copy what the payload says.
+    for fact in payload["facts"]:
+        assert fact["value"] == payload[fact["key"]]
 
 
 def test_the_lookup_only_emits_select_statements():
