@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Literal
 
@@ -50,6 +51,40 @@ class MarketOverviewArgs(BaseModel):
     """Arguments for market_overview."""
 
     as_of_date: date | None = None
+
+
+# The ticker shape the temporary gateway accepted: letters plus the digits and
+# separators that occur in real US listings (BRK.B, RDS-A). Anchored, so a
+# partial match cannot slip through.
+_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+
+
+class MarketCalendarStatusArgs(BaseModel):
+    """Arguments for market_calendar_status."""
+
+    market: str = Field("US", min_length=1, max_length=8)
+
+    @field_validator("market")
+    @classmethod
+    def normalize_market(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("market must not be empty")
+        return normalized
+
+
+class EarningsLookupArgs(BaseModel):
+    """Arguments for earnings_lookup."""
+
+    symbol: str = Field(min_length=1, max_length=10)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not _SYMBOL_RE.match(normalized):
+            raise ValueError("symbol must look like a US ticker (A-Z, 0-9, '.', '-')")
+        return normalized
 
 
 class CompareFeatureRunsArgs(BaseModel):

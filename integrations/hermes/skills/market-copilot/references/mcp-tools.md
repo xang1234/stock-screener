@@ -23,6 +23,8 @@ Hermes prefixes MCP tools as `mcp_<server>_<tool>`, so the expected tool names a
 - `mcp_stockscreen_market_stock_snapshot`
 - `mcp_stockscreen_market_breadth_snapshot`
 - `mcp_stockscreen_market_daily_digest`
+- `mcp_stockscreen_market_market_calendar_status`
+- `mcp_stockscreen_market_earnings_lookup`
 
 If you rename the Hermes MCP server key, these prefixed names will change too.
 
@@ -35,6 +37,23 @@ Every tool returns:
 - `citations`: stable internal references
 - `freshness`: generated-at timestamp plus source freshness
 - `next_actions`: concrete follow-up steps when data is stale, missing, or actionable
+
+## Calendar and earnings facts
+
+Both tools are read-only and replace the two facts that used to come from the
+temporary `xang-mcp-gateway`.
+
+- `market_calendar_status({"market": "US"})` returns `market_date`,
+  `is_trading_day`, `last_completed_trading_day`, `expected_trading_date`,
+  `market_timezone` and `market_now`. Use `expected_trading_date` as the day a
+  published run should carry: while the market trades it is **today's session**,
+  not `last_completed_trading_day`. A failed calendar answers `isError` with
+  `calendar_unavailable`; there is no date to read then.
+- `earnings_lookup({"symbol": "AAPL"})` returns the stored observation with
+  `freshness_status` (`ok`/`stale`/`invalid`/`unknown`), `available`,
+  `date_confirmation` (always `unknown`) and `reasons`. A current observation
+  that reports no upcoming date is `available: true` with
+  `no_upcoming_earnings_date`; a stale or missing one is not evidence.
 
 ## Tool selection guide
 

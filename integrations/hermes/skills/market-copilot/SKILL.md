@@ -37,6 +37,8 @@ Read `references/mcp-tools.md` when you need the exact MCP tool names or the wor
    - watchlist review: `mcp_stockscreen_market_watchlist_snapshot`
    - theme review: `mcp_stockscreen_market_theme_state`
    - pipeline health: `mcp_stockscreen_market_task_status`
+   - run freshness: `mcp_stockscreen_market_market_calendar_status`
+   - event risk: `mcp_stockscreen_market_earnings_lookup`
 3. Build the answer from structured fields first: `summary`, `facts`, `freshness`, `citations`, and `next_actions`.
 4. Treat stale freshness and failed scheduled tasks as gating signals. Lead with those caveats before making recommendations.
 5. Keep the workflow deterministic at the tool layer and do the synthesis in prose only after the needed tool calls are done.
