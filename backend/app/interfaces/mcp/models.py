@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Literal
 
@@ -50,6 +51,48 @@ class MarketOverviewArgs(BaseModel):
     """Arguments for market_overview."""
 
     as_of_date: date | None = None
+
+
+# Accepted ticker shape: a letter or a digit first, because HK codes start with
+# one (0700.HK), then up to 19 further characters of the provider suffixes that
+# occur in stored symbols (7203.T, 2330.TW, BRK.B, RDS-A). Anchored, so a
+# partial match cannot slip through.
+_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
+
+
+class MarketCalendarStatusArgs(BaseModel):
+    """Arguments for market_calendar_status."""
+
+    market: str = Field("US", min_length=1, max_length=8)
+
+    @field_validator("market")
+    @classmethod
+    def normalize_market(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("market must not be empty")
+        return normalized
+
+
+class EarningsLookupArgs(BaseModel):
+    """Arguments for earnings_lookup."""
+
+    symbol: str = Field(min_length=1, max_length=20)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def strip_symbol(cls, value: object) -> object:
+        # max_length runs before a plain validator, so "  AAPL  " would be
+        # rejected on width before it is ever normalized.
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.upper()
+        if not _SYMBOL_RE.match(normalized):
+            raise ValueError("symbol must look like a ticker (A-Z, 0-9, '.', '-')")
+        return normalized
 
 
 class CompareFeatureRunsArgs(BaseModel):

@@ -54,6 +54,9 @@ def test_lists_expected_tools(read_only_service):
         "stock_snapshot",
         "breadth_snapshot",
         "daily_digest",
+        # Read-only facts that used to come from the temporary gateway.
+        "market_calendar_status",
+        "earnings_lookup",
     }
 
 

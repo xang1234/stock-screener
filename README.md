@@ -142,7 +142,7 @@ Optional web-search keys (`TAVILY_API_KEY`, `SERPER_API_KEY`) are read by the He
 | [Development Guide](docs/DEVELOPMENT.md) | Contributors, developers |
 | [Architecture](docs/ARCHITECTURE.md) | Understanding the system design |
 | [Environment Variables](docs/ENVIRONMENT.md) | Configuration reference |
-| [MCP Integration](docs/MCP_INTEGRATION.md) | AI copilot workflows (12 tools via stdio / Streamable HTTP) |
+| [MCP Integration](docs/MCP_INTEGRATION.md) | AI copilot workflows (15 tools via stdio / Streamable HTTP) |
 | [Backend API & Architecture](backend/README.md) | Backend developers |
 | [Frontend Components](frontend/README.md) | Frontend developers |
 | [Contributing](CONTRIBUTING.md) | Getting started as a contributor |
