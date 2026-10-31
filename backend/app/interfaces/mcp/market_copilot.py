@@ -16,6 +16,7 @@ from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.feature_store.models import FeatureRunDomain, RunStatus
 from app.domain.feature_store.run_metadata import feature_run_market
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.scoring import is_core_scored
 from app.infra.db.models.feature_store import FeatureRun
@@ -126,8 +127,9 @@ _SUPPORTED_SORT_FIELDS = {
 }
 _MARKET_OVERVIEW_TASK_LIMIT = max(5, len(SUPPORTED_MARKETS))
 
-# Reported by earnings_lookup next to the stored observation. The values come
-# from the canonical backend module, never from a constant in this file.
+# Names reported next to the stored observation. They identify the canonical
+# modules to a consumer; neither module exports a source constant, so the values
+# are literals here and have to be kept in step with the module names.
 _EARNINGS_SOURCE = "xang_yahoo_calendar"
 _CALENDAR_SOURCE = "xang_market_calendar_service"
 
@@ -314,7 +316,18 @@ class MarketCopilotService:
             return self._tool_error(
                 f"Invalid arguments for {name}",
                 code="invalid_arguments",
-                details={"errors": exc.errors()},
+                # loc/msg/type only: ctx carries the original exception object,
+                # which the JSON envelope cannot serialise.
+                details={
+                    "errors": [
+                        {
+                            "loc": list(error.get("loc", ())),
+                            "msg": error.get("msg"),
+                            "type": error.get("type"),
+                        }
+                        for error in exc.errors()
+                    ]
+                },
             )
 
         try:
@@ -354,8 +367,12 @@ class MarketCopilotService:
                 details={"message": str(exc)},
             )
         except ToolSourceUnavailable as exc:
-            # The message is written for the caller; the cause stays in the log.
-            logger.warning("%s unavailable (%s)", name, exc.code)
+            # The message is written for the caller; the cause belongs in the
+            # log, otherwise an expired calendar and a missing data root look
+            # identical from the outside.
+            logger.warning(
+                "%s unavailable (%s)", name, exc.code, exc_info=exc.__cause__ or exc
+            )
             return self._tool_error(exc.message, code=exc.code)
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.exception("Unhandled MCP tool failure for %s", name)
@@ -377,28 +394,61 @@ class MarketCopilotService:
     # ------------------------------------------------------------------
     # Canonical calendar and stored earnings facts (read-only)
     # ------------------------------------------------------------------
+    @staticmethod
+    def _calendar_unavailable(
+        message: str = "The canonical market calendar could not be loaded.",
+    ) -> ToolSourceUnavailable:
+        """Build the one error every calendar failure reports."""
+        return ToolSourceUnavailable("calendar_unavailable", message)
+
+    @staticmethod
+    def _runtime_services_missing(exc: RuntimeError) -> bool:
+        # resolve_runtime_services raises a plain RuntimeError with this text.
+        # Checked by exact type and message on purpose: CalendarCoverageExpired
+        # and provider drift also subclass RuntimeError, and falling back for
+        # those would hide a broken calendar behind a private instance.
+        return type(exc) is RuntimeError and "RuntimeServices are not initialized" in str(exc)
+
     def _calendar(self) -> Any:
         """Return the canonical calendar service, resolved once per process."""
         if self._calendar_service is None:
             try:
                 self._calendar_service = get_market_calendar_service()
-            except RuntimeError:
+            except RuntimeError as exc:
+                if not self._runtime_services_missing(exc):
+                    raise self._calendar_unavailable() from exc
                 # The stdio MCP process never runs the FastAPI startup, so no
                 # process-scoped instance exists there. Same canonical class,
                 # built on first use - not a second implementation.
                 try:
                     self._calendar_service = MarketCalendarService()
-                except Exception as exc:  # noqa: BLE001 - fail closed, never emulate
-                    raise ToolSourceUnavailable(
-                        "calendar_unavailable",
-                        "The canonical market calendar could not be loaded.",
-                    ) from exc
+                except Exception as build_exc:  # noqa: BLE001 - fail closed
+                    raise self._calendar_unavailable() from build_exc
             except Exception as exc:  # noqa: BLE001 - fail closed, never emulate
-                raise ToolSourceUnavailable(
-                    "calendar_unavailable",
-                    "The canonical market calendar could not be loaded.",
-                ) from exc
+                raise self._calendar_unavailable() from exc
         return self._calendar_service
+
+    def _earnings_reference_date(self, symbol: str, now: datetime) -> date:
+        """Calendar date the earnings freshness is measured against.
+
+        The suffix registry maps the stored provider suffix (``.HK``, ``.T``,
+        ``.TW``, ...) to its market; a plain ticker is a US listing and keeps
+        the Eastern date. An unavailable calendar falls back to the Eastern date
+        with a warning rather than failing the read.
+        """
+        market = market_symbol_suffix_registry.market_for_symbol(symbol)
+        if market is None:
+            return to_eastern_date(now)
+        try:
+            return self._calendar().market_now(market, now=now).date()
+        except Exception as exc:  # noqa: BLE001 - the read must stay available
+            logger.warning(
+                "market date for %s (%s) unavailable, using the Eastern date: %s",
+                symbol,
+                market,
+                type(exc).__name__,
+            )
+            return to_eastern_date(now)
 
     def _now(self) -> datetime:
         current = self._now_provider()
@@ -419,12 +469,9 @@ class MarketCopilotService:
             market = calendar.normalize_market(args.market)
         except ValueError as exc:
             raise ValueError(f"Unsupported market: {args.market}") from exc
-        except ToolSourceUnavailable:
-            raise
         except Exception as exc:  # noqa: BLE001 - provider/catalog drift
-            raise ToolSourceUnavailable(
-                "calendar_unavailable",
-                "The canonical market calendar could not answer for this market.",
+            raise self._calendar_unavailable(
+                "The canonical market calendar could not answer for this market."
             ) from exc
 
         now = self._now()
@@ -434,25 +481,42 @@ class MarketCopilotService:
             is_trading_day = bool(calendar.is_trading_day(market, market_date))
             last_completed = calendar.last_completed_trading_day(market, now=now)
             market_timezone = str(calendar.market_timezone(market))
+            is_open = bool(calendar.is_market_open(market, now=now))
         except Exception as exc:  # noqa: BLE001 - missing coverage, provider drift
-            logger.warning("calendar lookup failed for %s: %s", market, type(exc).__name__)
-            raise ToolSourceUnavailable(
-                "calendar_unavailable",
-                "The canonical market calendar could not answer for this market.",
+            logger.warning(
+                "calendar lookup failed for %s: %s",
+                market,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            raise self._calendar_unavailable(
+                "The canonical market calendar could not answer for this market."
             ) from exc
 
-        expected = market_date if is_trading_day else last_completed
+        # Today's session only counts once it is running. Before the open the
+        # freshest bars any cache can hold belong to the last completed session;
+        # pointing at a session that has not traded would make an up-to-date
+        # cache look stale for the rest of the day.
+        session_open = is_trading_day and is_open
+        session_complete = is_trading_day and last_completed == market_date
+        expected = market_date if (session_open or session_complete) else last_completed
 
-        if is_trading_day:
+        if session_open:
             summary = (
-                f"{market} trades on {market_date.isoformat()}; the expected trading date is "
+                f"{market} trades on {market_date.isoformat()} and the session is open; the "
+                f"expected trading date is {expected.isoformat()}."
+            )
+        elif session_complete:
+            summary = (
+                f"{market} traded on {market_date.isoformat()} and the session is complete; the "
+                f"expected trading date is that session, {expected.isoformat()}."
+            )
+        elif is_trading_day:
+            summary = (
+                f"{market} trades on {market_date.isoformat()}, but the session has not opened "
+                f"yet; the expected trading date is the last completed session, "
                 f"{expected.isoformat()}."
             )
-            if last_completed != market_date:
-                summary += (
-                    " Today's session already counts, so the expected date is that session, "
-                    "not the last completed one."
-                )
         else:
             summary = (
                 f"{market} has no session on {market_date.isoformat()}; the expected trading date "
@@ -524,10 +588,10 @@ class MarketCopilotService:
 
         rules = yahoo_earnings_calendar
         now = self._now()
-        # Same reference the scanners use: the Eastern calendar date, not the
-        # UTC one - otherwise a 22:00 ET lookup on the 15th would already judge
-        # the 15th as past once UTC has rolled over.
-        reference = to_eastern_date(now)
+        # Freshness is judged in the symbol's own market date: 0700.HK at 08:00
+        # HKT must not be measured against the previous Eastern date. A plain
+        # US ticker has no suffix and keeps the Eastern date the scanners use.
+        reference = self._earnings_reference_date(args.symbol, now)
 
         payload: dict[str, Any] = {
             "symbol": args.symbol,
@@ -601,19 +665,16 @@ class MarketCopilotService:
                         as_of_date=reference,
                     )
                     if not is_evidence:
-                        # The canonical helper folds "unreadable" and "in the
-                        # past" into one False; a consumer needs them apart.
-                        raw_next = row.next_earnings_date
-                        payload["freshness_status"] = "invalid"
-                        if raw_next is None:
-                            payload["reasons"].append("earnings_date_missing")
-                        elif raw_next < reference:
-                            payload["reasons"].append("earnings_date_in_past")
-                        else:
-                            payload["reasons"].append("earnings_date_unusable")
+                        # The column is a SQL date and the canonical helper
+                        # treats a missing date as usable evidence, so the only
+                        # remaining cause is a date before the reference date.
+                        # With a weekly producer cadence that is a normal state,
+                        # not damaged storage: report it as stale.
+                        payload["freshness_status"] = "stale"
+                        payload["reasons"].append("earnings_date_in_past")
                         summary = (
                             f"The earnings observation for {args.symbol} is current, but its stored "
-                            "date cannot be used."
+                            f"date {row.next_earnings_date.isoformat()} has already passed."
                         )
                     elif stored_next is None:
                         payload["available"] = True

@@ -53,10 +53,11 @@ class MarketOverviewArgs(BaseModel):
     as_of_date: date | None = None
 
 
-# The ticker shape the temporary gateway accepted: letters plus the digits and
-# separators that occur in real US listings (BRK.B, RDS-A). Anchored, so a
+# Accepted ticker shape: a letter or a digit first, because HK codes start with
+# one (0700.HK), then up to 19 further characters of the provider suffixes that
+# occur in stored symbols (7203.T, 2330.TW, BRK.B, RDS-A). Anchored, so a
 # partial match cannot slip through.
-_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
 
 
 class MarketCalendarStatusArgs(BaseModel):
@@ -76,7 +77,7 @@ class MarketCalendarStatusArgs(BaseModel):
 class EarningsLookupArgs(BaseModel):
     """Arguments for earnings_lookup."""
 
-    symbol: str = Field(min_length=1, max_length=10)
+    symbol: str = Field(min_length=1, max_length=20)
 
     @field_validator("symbol", mode="before")
     @classmethod
@@ -90,7 +91,7 @@ class EarningsLookupArgs(BaseModel):
     def normalize_symbol(cls, value: str) -> str:
         normalized = value.upper()
         if not _SYMBOL_RE.match(normalized):
-            raise ValueError("symbol must look like a US ticker (A-Z, 0-9, '.', '-')")
+            raise ValueError("symbol must look like a ticker (A-Z, 0-9, '.', '-')")
         return normalized
 
 

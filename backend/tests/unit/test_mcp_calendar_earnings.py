@@ -21,7 +21,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import event
 
-from app.interfaces.mcp.market_copilot import MarketCopilotService
+from app.interfaces.mcp import market_copilot as market_copilot_module
+from app.interfaces.mcp.market_copilot import MarketCopilotService, ToolSourceUnavailable
+from app.services.market_calendar_service import CalendarCoverageExpired
 from app.models.stock import StockFundamental
 from app.services import yahoo_earnings_calendar
 from tests.helpers.mcp_fixture import (
@@ -30,6 +32,7 @@ from tests.helpers.mcp_fixture import (
 )
 
 NEW_YORK = ZoneInfo("America/New_York")
+HONG_KONG = ZoneInfo("Asia/Hong_Kong")
 FIXED_NOW = datetime(2026, 10, 15, 15, 0, tzinfo=UTC)  # 11:00 in New York
 
 CALENDAR_GATEWAY_KEYS = {
@@ -70,11 +73,15 @@ class FixedCalendar:
         is_trading_day: bool,
         last_completed: date,
         supported: tuple[str, ...] = ("US",),
+        is_open: bool | None = None,
     ) -> None:
         self._market_now = market_now
         self._is_trading_day = is_trading_day
         self._last_completed = last_completed
         self._supported = supported
+        # Default: an open session exactly when the day trades, which is the
+        # mid-session case; the pre-open case sets this to False.
+        self._is_open = is_trading_day if is_open is None else is_open
 
     def normalize_market(self, market: str | None) -> str:
         normalized = (market or "US").strip().upper()
@@ -93,6 +100,25 @@ class FixedCalendar:
 
     def last_completed_trading_day(self, market: str, now: datetime | None = None) -> date:
         return self._last_completed
+
+    def is_market_open(self, market: str, now: datetime | None = None) -> bool:
+        return self._is_open
+
+
+class MarketAwareCalendar(FixedCalendar):
+    """One market moment per market code, for the non-US reference date."""
+
+    def __init__(self, moments: dict[str, datetime]) -> None:
+        super().__init__(
+            market_now=next(iter(moments.values())),
+            is_trading_day=False,
+            last_completed=date(2026, 10, 9),
+            supported=tuple(moments),
+        )
+        self._moments = moments
+
+    def market_now(self, market: str, now: datetime | None = None) -> datetime:
+        return self._moments[market]
 
 
 class RaisingCalendar(FixedCalendar):
@@ -121,6 +147,10 @@ class RaisingCalendar(FixedCalendar):
     def market_timezone(self, market: str) -> ZoneInfo:
         self._fail("market_timezone")
         return super().market_timezone(market)
+
+    def is_market_open(self, market: str, now: datetime | None = None) -> bool:
+        self._fail("is_market_open")
+        return super().is_market_open(market, now)
 
 
 def _factory():
@@ -198,7 +228,7 @@ def test_calendar_tool_defaults_to_the_us_market(session_factory):
 # ---------------------------------------------------------------------------
 
 CALENDAR_CASES = [
-    # moment in UTC, trading day?, last completed session, market date, expected
+    # moment UTC, trading day?, last completed, market date, expected, open?, phase
     pytest.param(
         datetime(2026, 10, 15, 15, 0, tzinfo=UTC),  # 11:00 ET, session running
         True,
@@ -206,6 +236,7 @@ CALENDAR_CASES = [
         "2026-10-15",
         "2026-10-15",
         True,
+        "is open",
         id="trading-day-mid-session",
     ),
     pytest.param(
@@ -213,9 +244,20 @@ CALENDAR_CASES = [
         True,
         date(2026, 10, 14),
         "2026-10-15",
-        "2026-10-15",
-        True,
+        "2026-10-14",
+        False,
+        "has not opened yet",
         id="trading-day-pre-open",
+    ),
+    pytest.param(
+        datetime(2026, 10, 15, 22, 0, tzinfo=UTC),  # 18:00 ET, after the close
+        True,
+        date(2026, 10, 15),
+        "2026-10-15",
+        "2026-10-15",
+        False,
+        "is complete",
+        id="trading-day-after-close",
     ),
     pytest.param(
         datetime(2026, 10, 17, 12, 0, tzinfo=UTC),  # Saturday
@@ -224,6 +266,7 @@ CALENDAR_CASES = [
         "2026-10-17",
         "2026-10-16",
         False,
+        "has no session",
         id="weekend",
     ),
     pytest.param(
@@ -233,37 +276,48 @@ CALENDAR_CASES = [
         "2026-11-26",
         "2026-11-25",
         False,
+        "has no session",
         id="exchange-holiday",
     ),
     pytest.param(
         datetime(2026, 10, 15, 1, 30, tzinfo=UTC),  # 21:30 ET on the 14th
         True,
-        date(2026, 10, 13),
+        date(2026, 10, 14),
         "2026-10-14",
         "2026-10-14",
-        True,
+        False,
+        "is complete",
         id="market-timezone-boundary",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("moment_utc", "trading", "last_completed", "market_date", "expected", "session_running"),
+    ("moment_utc", "trading", "last_completed", "market_date", "expected", "open_session", "phase"),
     CALENDAR_CASES,
 )
 def test_the_calendar_reports_the_expected_trading_date(
-    session_factory, moment_utc, trading, last_completed, market_date, expected, session_running
+    session_factory,
+    moment_utc,
+    trading,
+    last_completed,
+    market_date,
+    expected,
+    open_session,
+    phase,
 ):
-    """``expected_trading_date`` is today's session, not yesterday's close.
+    """``expected_trading_date`` names the session whose bars can exist.
 
-    On a trading day - mid-session and pre-open alike, matching the gateway
-    contract - the expected date is the market's own calendar day. Only on a
-    day without a session does it fall back to the last completed one.
+    Mid-session that is today, because the session is producing bars. Before
+    the open it is the last completed session - otherwise an up-to-date cache
+    would look stale until the session trades. After the close the last
+    completed session is today again.
     """
     calendar = FixedCalendar(
         market_now=moment_utc.astimezone(NEW_YORK),
         is_trading_day=trading,
         last_completed=last_completed,
+        is_open=open_session,
     )
     service = _service(session_factory, calendar, now=moment_utc)
 
@@ -277,8 +331,8 @@ def test_the_calendar_reports_the_expected_trading_date(
     assert payload["last_completed_trading_day"] == last_completed.isoformat()
     assert payload["expected_trading_date"] == expected
     assert payload["calendar_source"] == "xang_market_calendar_service"
-    # A consumer must be able to tell "today's session counts" from "closed".
-    assert ("not the last completed one" in payload["summary"]) is session_running
+    # A consumer must be able to tell the phase from the summary.
+    assert phase in payload["summary"]
 
 
 def test_an_unsupported_market_is_rejected_as_bad_arguments(session_factory):
@@ -464,7 +518,7 @@ EARNINGS_CASES = [
     pytest.param(
         "PANW", "invalid", False, ["observation_date_in_future"], None, id="future-observation"
     ),
-    pytest.param("SNOW", "invalid", False, ["earnings_date_in_past"], None, id="past-stored-date"),
+    pytest.param("SNOW", "stale", False, ["earnings_date_in_past"], None, id="past-stored-date"),
     pytest.param("AVGO", "unknown", False, ["observation_date_missing"], None, id="missing-observation"),
     pytest.param(
         "TJX", "ok", True, ["date_confirmation_unrecorded"], "2026-11-10", id="at-future-tolerance"
@@ -536,6 +590,105 @@ def test_bad_arguments_are_refused_before_any_lookup(session_factory, arguments)
     error = _error(_service(session_factory), "earnings_lookup", arguments)
 
     assert error["code"] == "invalid_arguments"
+
+
+@pytest.mark.parametrize("symbol", ["0700.HK", "7203.T", "2330.TW", "BRK.B"])
+def test_stored_provider_symbols_are_accepted(earnings_factory, symbol):
+    """HK/JP/TW codes start with a digit or carry a suffix - all valid."""
+    result = _service(earnings_factory).call_tool("earnings_lookup", {"symbol": symbol})
+
+    assert result.get("isError") is not True, result["content"][0]["text"]
+    assert result["structuredContent"]["symbol"] == symbol
+
+
+def test_the_earnings_reference_date_follows_the_symbol_market(session_factory):
+    """08:00 HKT on the 11th is not judged against the Eastern 10th."""
+    calendar = MarketAwareCalendar(
+        {
+            "US": datetime(2026, 10, 10, 20, 0, tzinfo=NEW_YORK),
+            "HK": datetime(2026, 10, 11, 8, 0, tzinfo=HONG_KONG),
+            "JP": datetime(2026, 10, 11, 9, 0, tzinfo=ZoneInfo("Asia/Tokyo")),
+            "TW": datetime(2026, 10, 11, 9, 0, tzinfo=ZoneInfo("Asia/Taipei")),
+        }
+    )
+    service = _service(session_factory, calendar)
+
+    # No suffix: the Eastern calendar date of the lookup moment.
+    assert service._earnings_reference_date("AAPL", FIXED_NOW) == date(2026, 10, 15)
+    assert service._earnings_reference_date("0700.HK", FIXED_NOW) == date(2026, 10, 11)
+    assert service._earnings_reference_date("7203.T", FIXED_NOW) == date(2026, 10, 11)
+    assert service._earnings_reference_date("2330.TW", FIXED_NOW) == date(2026, 10, 11)
+
+
+def test_a_broken_runtime_calendar_is_not_masked_by_a_private_instance(
+    session_factory, monkeypatch
+):
+    """Only 'services not initialised' may fall back; expired coverage may not."""
+    built: list[int] = []
+
+    def exploding_resolver():
+        raise CalendarCoverageExpired(
+            market="US",
+            requested_date=date(2026, 10, 15),
+            verified_through=date(2026, 10, 1),
+            source_url="fixture",
+            operations_doc="fixture",
+        )
+
+    monkeypatch.setattr(market_copilot_module, "get_market_calendar_service", exploding_resolver)
+    monkeypatch.setattr(
+        market_copilot_module, "MarketCalendarService", lambda *a, **k: built.append(1)
+    )
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
+        now_provider=lambda: FIXED_NOW,
+    )
+
+    with pytest.raises(ToolSourceUnavailable) as caught:
+        service._calendar()
+
+    # The canonical failure is reported as its own cause, and no private
+    # instance was built to hide it.
+    assert isinstance(caught.value.__cause__, CalendarCoverageExpired)
+    assert built == []
+
+
+def test_missing_runtime_services_still_build_the_canonical_calendar(
+    session_factory, monkeypatch
+):
+    """The stdio process has no FastAPI startup, so it builds the same class."""
+    built: list[object] = []
+    calendar = FixedCalendar(
+        market_now=FIXED_NOW.astimezone(NEW_YORK),
+        is_trading_day=True,
+        last_completed=date(2026, 10, 14),
+    )
+
+    def no_runtime_services():
+        raise RuntimeError(
+            "RuntimeServices are not initialized for this context. "
+            "Use the FastAPI lifespan or runtime_context.use_runtime_services()."
+        )
+
+    monkeypatch.setattr(
+        market_copilot_module, "get_market_calendar_service", no_runtime_services
+    )
+    monkeypatch.setattr(
+        market_copilot_module,
+        "MarketCalendarService",
+        lambda *a, **k: built.append(calendar) or calendar,
+    )
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
+        now_provider=lambda: FIXED_NOW,
+    )
+
+    payload = _payload(service, "market_calendar_status", {"market": "US"})
+
+    assert built == [calendar]
+    assert payload["market"] == "US"
 
 
 def test_a_database_failure_fails_closed(session_factory):

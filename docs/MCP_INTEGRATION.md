@@ -54,18 +54,22 @@ same names:
 }
 ```
 
-`expected_trading_date` keeps the gateway's meaning: the market-calendar day while the market
-trades (**mid-session and pre-open included**), otherwise the last completed session. It is
-deliberately not `last_completed_trading_day` during a running session — that value only moves
-after the close and would make today's run look stale. Values come from
+`expected_trading_date` names the session whose bars can exist right now. While the session is
+**open** that is the market-calendar day; before the open, and on a day without a session, it is
+the last completed one — pointing at a session that has not traded yet would make an up-to-date
+cache look stale for the rest of the day. After the close the two dates are the same again.
+Values come from
 `app.services.market_calendar_service.MarketCalendarService`; if the service cannot answer, the
 call is `isError` with `code: "calendar_unavailable"` and **no** `expected_trading_date`.
 
 ### `earnings_lookup`
 
-Input: `{"symbol": "AAPL"}`. The ticker shape is validated first (`A-Z`, digits, `.`, `-`); a
-malformed symbol is `invalid_arguments` before any query runs. The answer keeps the gateway
-contract per row of `public.stock_fundamentals`:
+Input: `{"symbol": "AAPL"}`. The ticker shape is validated first (a letter or digit, then `A-Z`,
+digits, `.` and `-`, up to 20 characters), so the stored provider forms `0700.HK`, `7203.T` and
+`2330.TW` are accepted as well as `BRK.B`; a malformed symbol is `invalid_arguments` before any
+query runs. Freshness is measured in the symbol's own market date, taken from the suffix registry
+(`.HK`, `.T`, `.TW`, ...); a plain ticker keeps the Eastern date the scanners use. The answer keeps
+the gateway contract per row of `public.stock_fundamentals`:
 
 ```json
 {
@@ -87,9 +91,11 @@ contract per row of `public.stock_fundamentals`:
 
 Rules, taken from `app.services.yahoo_earnings_calendar` (no second implementation):
 
-- `freshness_status`: `ok` inside the observation window, `stale` past it, `invalid` when the
-  observation lies in the future beyond tolerance or the stored date is unusable, `unknown` when
-  there is no observation to judge.
+- `freshness_status`: `ok` inside the observation window, `stale` past it or when the stored
+  earnings date has already passed, `invalid` when the observation itself lies in the future
+  beyond tolerance, `unknown` when there is no observation to judge. A past earnings date is a
+  normal state of the weekly producer cadence, not damaged storage, and is named
+  `earnings_date_in_past`.
 - `available` answers "is there a usable observation": a current observation that reports **no**
   upcoming date is `available: true` with
   `reasons: ["no_upcoming_earnings_date", "date_confirmation_unrecorded"]`.
