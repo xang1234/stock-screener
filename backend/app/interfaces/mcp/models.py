@@ -92,6 +92,12 @@ class FindCandidatesArgs(BaseModel):
     """Arguments for find_candidates."""
 
     filters: CandidateFilters = Field(default_factory=CandidateFilters)
+    market: str | None = Field(
+        None,
+        description="Select the canonical published run for this market (e.g. US or DE). "
+        "Missing or invalid market publication fails closed; no global fallback. "
+        "Omit for the existing global latest-run behavior.",
+    )
     universe: str | None = Field(
         None,
         description="Optional scope. Omit or use 'all' for the latest published run, or pass a watchlist name to restrict the search.",

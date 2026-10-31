@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
-from app.domain.feature_store.models import FeatureRunDomain
+from app.domain.feature_store.models import FeatureRunDomain, RunStatus
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
@@ -123,6 +123,14 @@ class ToolSpec:
     description: str
     args_model: type
     handler: Callable[[Any], ToolEnvelope]
+
+
+class StoredFeatureRunInvalid(RuntimeError):
+    """A stored run row cannot be read: broken enum values, not a bad request."""
+
+
+class CandidateMarketRunUnavailable(RuntimeError):
+    """An explicitly requested candidate market has no trustworthy publication."""
 
 
 class MarketCopilotService:
@@ -267,6 +275,19 @@ class MarketCopilotService:
                         for error in exc.errors()
                     ]
                 },
+            )
+        except StoredFeatureRunInvalid as exc:
+            logger.warning("Stored feature run rejected in %s: %s", name, exc)
+            return self._tool_error(
+                f"{name} could not read the stored feature run",
+                code="invalid_stored_data",
+                details={"message": str(exc)},
+            )
+        except CandidateMarketRunUnavailable as exc:
+            return self._tool_error(
+                "Requested candidate market publication is unavailable",
+                code="market_run_unavailable",
+                details={"message": str(exc)},
             )
         except ValueError as exc:
             return self._tool_error(
@@ -484,8 +505,14 @@ class MarketCopilotService:
         )
 
     def _find_candidates(self, args: FindCandidatesArgs) -> ToolEnvelope:
+        market = args.market.strip().upper() if args.market is not None else None
+        if market is not None and market not in SUPPORTED_MARKETS:
+            raise ValueError("Unsupported candidate market")
         with self._session_scope() as db:
-            latest_run = self._latest_published_run(db)
+            latest_run = (
+                self._published_candidate_market_run(db, market)
+                if market is not None else self._latest_published_run(db)
+            )
             if latest_run is None:
                 return self._envelope(
                     "No published feature run is available for candidate search.",
@@ -514,7 +541,19 @@ class MarketCopilotService:
         else:
             symbols = self._find_candidates_for_run(latest_run.id, args)
 
-        scope_label = watchlist_scope.name if watchlist_scope is not None else "latest published run"
+        scope_label = (
+            watchlist_scope.name if watchlist_scope is not None
+            else f"published {market} market run" if market is not None
+            else "latest published run"
+        )
+        run_record = self._run_record(latest_run)
+        scope = {"type": "watchlist" if watchlist_scope is not None else "published_run", "value": scope_label}
+        if market is not None:
+            # The selector verified the stored run metadata against this market.
+            run_record["market"] = market
+            run_record["universe_type"] = "market"
+            run_record["pointer_key"] = f"latest_published_market:{market}"
+            scope["market"] = market
         next_actions: list[str] = []
         if not symbols:
             next_actions.append("Broaden the filter thresholds or use a wider universe scope.")
@@ -530,8 +569,8 @@ class MarketCopilotService:
             ],
             next_actions=next_actions,
             freshness=self._freshness(as_of_date=latest_run.as_of_date, feature_run=latest_run.published_at.isoformat() if latest_run.published_at else None),
-            run=self._run_record(latest_run),
-            scope={"type": "watchlist" if watchlist_scope is not None else "published_run", "value": scope_label},
+            run=run_record,
+            scope=scope,
             symbols=symbols,
         )
 
@@ -1572,6 +1611,41 @@ class MarketCopilotService:
             .order_by(FeatureRun.as_of_date.desc(), FeatureRun.id.desc())
             .first()
         )
+
+    def _published_candidate_market_run(self, db: Session, market: str) -> FeatureRun:
+        """Read only the canonical market publication; never substitute another run."""
+        with self._uow_scope() as uow:
+            try:
+                published = uow.feature_runs.get_latest_published(
+                    pointer_key=f"latest_published_market:{market}"
+                )
+            except ValueError as exc:
+                # RunStatus/RunType reject stored values outside the enum. The
+                # request was valid, the row is not: report stored-data damage
+                # instead of letting the generic ValueError branch call it an
+                # argument error.
+                raise StoredFeatureRunInvalid(
+                    f"Stored run for market {market} has an unknown status or run type"
+                ) from exc
+        if published is None or published.status != RunStatus.PUBLISHED:
+            raise CandidateMarketRunUnavailable("Requested market has no valid published pointer")
+        run = db.get(FeatureRun, published.id)
+        if run is None or run.status != "published":
+            raise CandidateMarketRunUnavailable("Requested market publication is unavailable")
+        config = run.config_json
+        if not isinstance(config, dict) or config.get("universe_type") != "market":
+            raise CandidateMarketRunUnavailable("Market publication lacks a verified market universe")
+        universe = config.get("universe")
+        if universe is not None and not isinstance(universe, dict):
+            raise CandidateMarketRunUnavailable("Market publication has invalid universe metadata")
+        evidence = [config.get("market"), (universe or {}).get("market")]
+        evidence = [value for value in evidence if value is not None]
+        if not evidence or any(
+            not isinstance(value, str) or value.strip().upper() != market
+            for value in evidence
+        ):
+            raise CandidateMarketRunUnavailable("Stored publication market is missing or inconsistent")
+        return run
 
     def _latest_published_run(self, db: Session) -> FeatureRun | None:
         return (
