@@ -24,6 +24,7 @@ from sqlalchemy import event
 from app.interfaces.mcp import market_copilot as market_copilot_module
 from app.interfaces.mcp.market_copilot import MarketCopilotService, ToolSourceUnavailable
 from app.services.market_calendar_service import CalendarCoverageExpired
+from app.utils.market_hours import to_eastern_date
 from app.models.stock import StockFundamental
 from app.services import yahoo_earnings_calendar
 from tests.helpers.mcp_fixture import (
@@ -116,8 +117,10 @@ class MarketAwareCalendar(FixedCalendar):
             supported=tuple(moments),
         )
         self._moments = moments
+        self.lookups: list[tuple[str, datetime | None]] = []
 
     def market_now(self, market: str, now: datetime | None = None) -> datetime:
+        self.lookups.append((market, now))
         return self._moments[market]
 
 
@@ -447,6 +450,8 @@ def test_a_non_us_market_uses_its_own_timezone_and_sessions(session_factory):
     assert japan["market_date"] == "2026-09-23"
     assert japan["is_trading_day"] is False
     assert japan["last_completed_trading_day"] == "2026-09-18"
+    # Closed day: the expected date is the last completed session, not the day.
+    assert japan["expected_trading_date"] == "2026-09-18"
     # The same moment, the other calendar: a hardcoded market would match here.
     assert states["is_trading_day"] is True
     assert states["last_completed_trading_day"] == "2026-09-22"
@@ -601,6 +606,24 @@ def test_stored_provider_symbols_are_accepted(earnings_factory, symbol):
     assert result["structuredContent"]["symbol"] == symbol
 
 
+def test_a_suffixed_symbol_matches_its_stored_row(earnings_factory):
+    """Acceptance is not enough: the row must actually be found and read."""
+    _seed(earnings_factory, [
+        {
+            "symbol": "0700.HK",
+            "next_earnings_date": date(2026, 11, 12),
+            "event_calendar_as_of_date": date(2026, 10, 10),
+        }
+    ])
+    service = _service(earnings_factory)
+
+    payload = _payload(service, "earnings_lookup", {"symbol": "0700.HK"})
+
+    assert payload["next_earnings_date"] == "2026-11-12"
+    assert payload["freshness_status"] == "ok"
+    assert payload["available"] is True
+
+
 def test_the_earnings_reference_date_follows_the_symbol_market(session_factory):
     """08:00 HKT on the 11th is not judged against the Eastern 10th."""
     calendar = MarketAwareCalendar(
@@ -614,10 +637,31 @@ def test_the_earnings_reference_date_follows_the_symbol_market(session_factory):
     service = _service(session_factory, calendar)
 
     # No suffix: the Eastern calendar date of the lookup moment.
-    assert service._earnings_reference_date("AAPL", FIXED_NOW) == date(2026, 10, 15)
-    assert service._earnings_reference_date("0700.HK", FIXED_NOW) == date(2026, 10, 11)
-    assert service._earnings_reference_date("7203.T", FIXED_NOW) == date(2026, 10, 11)
-    assert service._earnings_reference_date("2330.TW", FIXED_NOW) == date(2026, 10, 11)
+    assert service._earnings_reference_date("AAPL", FIXED_NOW) == (date(2026, 10, 15), "eastern")
+    assert service._earnings_reference_date("0700.HK", FIXED_NOW) == (date(2026, 10, 11), "market")
+    assert service._earnings_reference_date("7203.T", FIXED_NOW) == (date(2026, 10, 11), "market")
+    assert service._earnings_reference_date("2330.TW", FIXED_NOW) == (date(2026, 10, 11), "market")
+    # Every non-US lookup is made with the caller's moment, not the clock.
+    assert calendar.lookups == [("HK", FIXED_NOW), ("JP", FIXED_NOW), ("TW", FIXED_NOW)]
+
+
+def test_the_reference_basis_names_an_eastern_fallback(earnings_factory):
+    """A suffixed symbol whose calendar fails says so in the payload."""
+    class BrokenMarketCalendar(FixedCalendar):
+        def market_now(self, market: str, now: datetime | None = None) -> datetime:
+            raise RuntimeError("coverage expired")
+
+    service = _service(earnings_factory, BrokenMarketCalendar(
+        market_now=FIXED_NOW.astimezone(NEW_YORK),
+        is_trading_day=True,
+        last_completed=date(2026, 10, 14),
+        supported=("HK",),
+    ))
+
+    payload = _payload(service, "earnings_lookup", {"symbol": "0700.HK"})
+
+    assert payload["freshness_reference_basis"] == "eastern_fallback"
+    assert payload["freshness_reference_date"] == to_eastern_date(FIXED_NOW).isoformat()
 
 
 def test_a_broken_runtime_calendar_is_not_masked_by_a_private_instance(

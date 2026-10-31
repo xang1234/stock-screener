@@ -68,8 +68,12 @@ Input: `{"symbol": "AAPL"}`. The ticker shape is validated first (a letter or di
 digits, `.` and `-`, up to 20 characters), so the stored provider forms `0700.HK`, `7203.T` and
 `2330.TW` are accepted as well as `BRK.B`; a malformed symbol is `invalid_arguments` before any
 query runs. Freshness is measured in the symbol's own market date, taken from the suffix registry
-(`.HK`, `.T`, `.TW`, ...); a plain ticker keeps the Eastern date the scanners use. The answer keeps
-the gateway contract per row of `public.stock_fundamentals`:
+(`.HK`, `.T`, `.TW`, ...); a plain ticker keeps the Eastern date the scanners use. When a suffixed
+symbol's calendar cannot answer, the Eastern date is used instead and the payload says so in
+`freshness_reference_basis: "eastern_fallback"` - a successful answer is then not market-local
+evidence. The field is `"market"` for a suffixed symbol served by its own calendar and
+`"eastern"` for a plain ticker; `freshness_reference_date` names the date actually used. The answer
+keeps the gateway contract per row of `public.stock_fundamentals`:
 
 ```json
 {
@@ -82,6 +86,8 @@ the gateway contract per row of `public.stock_fundamentals`:
   "available": true,
   "reasons": ["date_confirmation_unrecorded"],
   "observation_age_days": 5,
+  "freshness_reference_date": "2026-10-15",
+  "freshness_reference_basis": "eastern",
   "event_calendar_max_age_days": 14,
   "event_calendar_producer_refresh_after_days": 7,
   "event_calendar_future_tolerance_days": 3,

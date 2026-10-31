@@ -428,19 +428,20 @@ class MarketCopilotService:
                 raise self._calendar_unavailable() from exc
         return self._calendar_service
 
-    def _earnings_reference_date(self, symbol: str, now: datetime) -> date:
+    def _earnings_reference_date(self, symbol: str, now: datetime) -> tuple[date, str]:
         """Calendar date the earnings freshness is measured against.
 
-        The suffix registry maps the stored provider suffix (``.HK``, ``.T``,
-        ``.TW``, ...) to its market; a plain ticker is a US listing and keeps
-        the Eastern date. An unavailable calendar falls back to the Eastern date
-        with a warning rather than failing the read.
+        Returns the date and the basis it came from: ``market`` when the
+        symbol's own market answered, ``eastern`` for a plain US ticker, and
+        ``eastern_fallback`` when a suffixed symbol's calendar was unavailable
+        and the Eastern date had to stand in. The basis travels to the caller so
+        a successful answer cannot be mistaken for market-local evidence.
         """
         market = market_symbol_suffix_registry.market_for_symbol(symbol)
         if market is None:
-            return to_eastern_date(now)
+            return to_eastern_date(now), "eastern"
         try:
-            return self._calendar().market_now(market, now=now).date()
+            market_date = self._calendar().market_now(market, now=now).date()
         except Exception as exc:  # noqa: BLE001 - the read must stay available
             logger.warning(
                 "market date for %s (%s) unavailable, using the Eastern date: %s",
@@ -448,7 +449,8 @@ class MarketCopilotService:
                 market,
                 type(exc).__name__,
             )
-            return to_eastern_date(now)
+            return to_eastern_date(now), "eastern_fallback"
+        return market_date, "market"
 
     def _now(self) -> datetime:
         current = self._now_provider()
@@ -591,7 +593,7 @@ class MarketCopilotService:
         # Freshness is judged in the symbol's own market date: 0700.HK at 08:00
         # HKT must not be measured against the previous Eastern date. A plain
         # US ticker has no suffix and keeps the Eastern date the scanners use.
-        reference = self._earnings_reference_date(args.symbol, now)
+        reference, reference_basis = self._earnings_reference_date(args.symbol, now)
 
         payload: dict[str, Any] = {
             "symbol": args.symbol,
@@ -603,6 +605,8 @@ class MarketCopilotService:
             "available": False,
             "reasons": [],
             "generated_at": now.isoformat(),
+            "freshness_reference_date": reference.isoformat(),
+            "freshness_reference_basis": reference_basis,
             "event_calendar_max_age_days": rules.EVENT_CALENDAR_MAX_AGE_DAYS,
             "event_calendar_producer_refresh_after_days": (
                 rules.EVENT_CALENDAR_PRODUCER_REFRESH_AFTER_DAYS
