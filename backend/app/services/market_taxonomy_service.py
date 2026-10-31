@@ -12,8 +12,10 @@ from __future__ import annotations
 import csv
 import logging
 import re
+import threading
+import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -53,6 +55,55 @@ _CA_EXCHANGE_ALIASES = {
 }
 
 _EMPTY_TOKENS = {"", "-", "N/A", "NA", "NAN", "NONE", "NULL"}
+# A skipped file may still arrive later (a mounted data directory is filled
+# after start). Re-check at most this often instead of on every lookup, so a
+# partial load is not latched for the life of the process.
+_MISSING_FILE_RETRY_SECONDS = 300.0
+
+_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE", "SG", "MY")
+
+_OPTIONAL_CSV_FILES = frozenset({"canada-deep.csv"})
+
+_CSV_TO_MARKET = {
+    "IBD_industry_group.csv": "US",
+    "hk-deep.csv": "HK",
+    "india-deep.csv": "IN",
+    "kabutan_themes_en.csv": "JP",
+    "taiwan-deep.csv": "TW",
+    "korea-deep.csv": "KR",
+    "china-deep.csv": "CN",
+    "canada-deep.csv": "CA",
+}
+
+
+def _file_signature(path: Path) -> tuple[int, int] | None:
+    """Size plus modification time, or None when the file is not readable."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+@dataclass
+class _TaxonomyLoad:
+    """Accumulates one load; published only after every loader succeeded."""
+
+    entries: dict[str, dict[str, "MarketTaxonomyEntry"]] = field(
+        default_factory=lambda: {market: {} for market in _MARKETS}
+    )
+    row_counts: dict[str, int] = field(
+        default_factory=lambda: {market: 0 for market in _MARKETS}
+    )
+    # path -> market, so a reload can carry the previous bucket over.
+    skipped: dict[Path, str] = field(default_factory=dict)
+    # Signatures taken immediately before each file was opened.
+    signatures: dict[Path, tuple[int, int] | None] = field(default_factory=dict)
+    # Files that arrived late and may still have been copied while they were
+    # parsed: path -> (market, signature at parse time).
+    watched: dict[Path, tuple[str, tuple[int, int] | None]] = field(
+        default_factory=dict
+    )
 _LOAD_EXCEPTIONS = (OSError, csv.Error, UnicodeError)
 
 
@@ -80,8 +131,16 @@ class MarketTaxonomyService:
     """Load market-aware group/theme mappings from committed CSV files."""
 
     def __init__(self, *, data_dir: Path | None = None) -> None:
+        self._data_dir_explicit = data_dir is not None
         self._data_dir = data_dir or self._default_data_dir()
         self._loaded = False
+        self._skipped_files: set[Path] = set()
+        self._watched: dict[Path, tuple[str, tuple[int, int] | None]] = {}
+        self._retry_at = 0.0
+        self._reloading = False
+        # A retry can now reload while other threads are reading, and two
+        # threads can pass the deadline together: serialise the whole load.
+        self._load_lock = threading.RLock()
         self._entries: dict[str, dict[str, MarketTaxonomyEntry]] = {
             "US": {},
             "HK": {},
@@ -136,26 +195,72 @@ class MarketTaxonomyService:
         )
         return best_candidate
 
+    def _pending_changed(self) -> bool:
+        """True when a skipped file appeared or a watched file changed."""
+        for path in self._skipped_files:
+            if path.exists():
+                return True
+        for path, (_market, signature) in self._watched.items():
+            if not path.exists() or _file_signature(path) != signature:
+                return True
+        return False
+
     def refresh(self) -> None:
-        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}, "CN": {}, "CA": {}, "DE": {}, "SG": {}, "MY": {}}
-        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0, "CN": 0, "CA": 0, "DE": 0, "SG": 0, "MY": 0}
+        with self._load_lock:
+            self._reloading = True
+            try:
+                self._refresh_locked()
+            finally:
+                self._reloading = False
+
+    def _refresh_locked(self) -> None:
+        # The retry exists for a data directory that fills up after start,
+        # so re-resolve the candidate instead of trusting the one chosen
+        # when the CSVs were all absent. An explicit data_dir is pinned.
+        if not self._data_dir_explicit:
+            self._data_dir = self._default_data_dir()
+        pending_before = set(self._skipped_files) | set(self._watched)
+        load = _TaxonomyLoad()
         try:
-            self._load_us()
-            self._load_hk()
-            self._load_in()
-            self._load_jp()
-            self._load_kr()
-            self._load_tw()
-            self._load_cn()
-            self._load_ca()
+            self._load_us(load)
+            self._load_hk(load)
+            self._load_in(load)
+            self._load_jp(load)
+            self._load_kr(load)
+            self._load_tw(load)
+            self._load_cn(load)
+            self._load_ca(load)
         except TaxonomyLoadError:
-            self._loaded = False
             raise
         except _LOAD_EXCEPTIONS as exc:
-            self._loaded = False
             raise TaxonomyLoadError(
                 f"Unable to load market taxonomy from {self._data_dir}: {exc}"
             ) from exc
+        # A file that is missing right now may simply be unavailable, not
+        # gone: keep what the previous load produced for that market
+        # instead of publishing an empty bucket. It stays in ``skipped``,
+        # so the retry still waits for the file to come back.
+        for market in load.skipped.values():
+            previous = self._entries.get(market)
+            if previous:
+                load.entries[market] = previous
+                load.row_counts[market] = self._loaded_row_counts.get(market, 0)
+        # A file that arrived after an earlier skip may have been copied
+        # while it was parsed, so a complete header with truncated rows
+        # would pass silently. Watch its signature for one retry interval
+        # and read it again if it kept growing.
+        load.watched = {
+            path: (_CSV_TO_MARKET.get(path.name, ""), load.signatures.get(path))
+            for path in pending_before
+            if path.exists()
+        }
+        # Publish atomically: a failed load above leaves the previous
+        # taxonomy in place, so readers keep the last good snapshot.
+        self._entries = load.entries
+        self._loaded_row_counts = load.row_counts
+        self._skipped_files = load.skipped
+        self._watched = load.watched
+        self._retry_at = time.monotonic() + _MISSING_FILE_RETRY_SECONDS
         self._loaded = True
 
     def get(
@@ -171,7 +276,10 @@ class MarketTaxonomyService:
             normalized_market = security_master_resolver.infer_market(symbol or "", exchange)
 
         candidates = self._candidate_symbols(symbol, market=normalized_market, exchange=exchange)
-        market_entries = self._entries.get(normalized_market, {})
+        # Snapshot the published mapping: a concurrent refresh replaces it
+        # wholesale, so this reference never turns into a half-built dict.
+        entries = self._entries
+        market_entries = entries.get(normalized_market, {})
         for candidate in candidates:
             entry = market_entries.get(candidate)
             if entry is not None:
@@ -243,9 +351,61 @@ class MarketTaxonomyService:
         normalized = security_master_resolver.normalize_market(market) or market.upper()
         return self._loaded_row_counts.get(normalized, 0)
 
+    def _retry_due(self) -> bool:
+        """Whether the retry interval elapsed; safe to read without the lock."""
+        return bool(self._skipped_files or self._watched) and (
+            time.monotonic() >= self._retry_at
+        )
+
     def _ensure_loaded(self) -> None:
-        if not self._loaded:
-            self.refresh()
+        # The published snapshot is always complete, so a lookup never waits
+        # for a reload another thread is running - not even for the retry
+        # check, which only needs the current immutable references.
+        if self._loaded and (self._reloading or not self._retry_due()):
+            return
+        with self._load_lock:
+            if not self._loaded:
+                self.refresh()
+                return
+            if not self._retry_due():
+                return
+            # Cheap re-check first: only a file that appeared, vanished or
+            # changed is worth a full reload (and a new round of log lines).
+            if not self._pending_changed():
+                self._retry_at = time.monotonic() + _MISSING_FILE_RETRY_SECONDS
+                return
+            try:
+                self.refresh()
+            except TaxonomyLoadError as exc:
+                # A file that arrived half-written must not cost the taxonomy
+                # that is already serving lookups.
+                logger.warning(
+                    "Taxonomy reload failed; keeping the previous data: %s", exc
+                )
+                self._retry_at = time.monotonic() + _MISSING_FILE_RETRY_SECONDS
+
+    def _skip_if_missing(self, load: _TaxonomyLoad, path: Path, market: str) -> bool:
+        """Record a missing CSV and report whether the loader must stop.
+
+        One helper for all eight loaders: a missing file used to be fatal, so
+        silence would be the wrong register - this is a warning that names the
+        market and the path.
+        """
+        if path.exists():
+            # Taken before the file is opened: the copy may finish while a
+            # later loader runs, and a signature read afterwards would record
+            # the complete file as the one that was parsed.
+            load.signatures[path] = _file_signature(path)
+            return False
+        log = logger.info if path.name in _OPTIONAL_CSV_FILES else logger.warning
+        log(
+            "%s taxonomy CSV not found at %s; skipping. Symbol-level "
+            "classification will fall back to universe fields.",
+            market,
+            path,
+        )
+        load.skipped[path] = market
+        return True
 
     @staticmethod
     def _normalize_text(value: object) -> str | None:
@@ -267,6 +427,7 @@ class MarketTaxonomyService:
 
     def _merge_entry(
         self,
+        load: _TaxonomyLoad,
         *,
         market: str,
         symbol: str,
@@ -276,8 +437,8 @@ class MarketTaxonomyService:
         sub_industry: str | None = None,
         themes: Iterable[str],
     ) -> None:
-        self._loaded_row_counts[market] = self._loaded_row_counts.get(market, 0) + 1
-        bucket = self._entries[market]
+        load.row_counts[market] = load.row_counts.get(market, 0) + 1
+        bucket = load.entries[market]
         normalized_themes = []
         for theme in themes:
             normalized = self._normalize_text(theme)
@@ -307,8 +468,10 @@ class MarketTaxonomyService:
             themes=merged_themes,
         )
 
-    def _load_us(self) -> None:
+    def _load_us(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "IBD_industry_group.csv"
+        if self._skip_if_missing(load, path, "US"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.reader(handle)
             for row in reader:
@@ -319,6 +482,7 @@ class MarketTaxonomyService:
                 if not symbol or industry_group is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="US",
                     symbol=symbol,
                     industry_group=industry_group,
@@ -327,8 +491,10 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
-    def _load_hk(self) -> None:
+    def _load_hk(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "hk-deep.csv"
+        if self._skip_if_missing(load, path, "HK"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -341,6 +507,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="HK",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("EM Industry (EN)")),
@@ -349,9 +516,9 @@ class MarketTaxonomyService:
                     themes=[row.get("Theme (EN)") or ""],
                 )
 
-    def _load_in(self) -> None:
+    def _load_in(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "india-deep.csv"
-        if not path.exists():
+        if self._skip_if_missing(load, path, "IN"):
             return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -368,6 +535,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="IN",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Subgroup (Theme)")),
@@ -376,8 +544,10 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
-    def _load_jp(self) -> None:
+    def _load_jp(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "kabutan_themes_en.csv"
+        if self._skip_if_missing(load, path, "JP"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -390,6 +560,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="JP",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("TSE 33-Sector")),
@@ -398,8 +569,10 @@ class MarketTaxonomyService:
                     themes=[row.get("Theme (EN)") or ""],
                 )
 
-    def _load_tw(self) -> None:
+    def _load_tw(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "taiwan-deep.csv"
+        if self._skip_if_missing(load, path, "TW"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(path, reader, ("Symbol", "Market", "Industry (EN)"))
@@ -411,6 +584,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="TW",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Industry (EN)")),
@@ -419,8 +593,10 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
-    def _load_kr(self) -> None:
+    def _load_kr(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "korea-deep.csv"
+        if self._skip_if_missing(load, path, "KR"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -436,6 +612,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="KR",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Industry Group")),
@@ -445,8 +622,10 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
-    def _load_cn(self) -> None:
+    def _load_cn(self, load: _TaxonomyLoad) -> None:
         path = self._data_dir / "china-deep.csv"
+        if self._skip_if_missing(load, path, "CN"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -462,6 +641,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="CN",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Industry Group")),
@@ -471,19 +651,13 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
-    def _load_ca(self) -> None:
+    def _load_ca(self, load: _TaxonomyLoad) -> None:
         # CA taxonomy CSV is not yet shipped; fall back to whatever sector/
         # industry the universe ingestion adapter captured from TMX so the
         # market is still usable for breadth/group-rank calculations even
         # when no curated GICS file is present.
         path = self._data_dir / "canada-deep.csv"
-        if not path.exists():
-            logger.info(
-                "CA taxonomy CSV not found at %s; symbol-level GICS sector/"
-                "industry will fall back to TMX ingestion fields. Add "
-                "canada-deep.csv to enrich classification.",
-                path,
-            )
+        if self._skip_if_missing(load, path, "CA"):
             return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -500,6 +674,7 @@ class MarketTaxonomyService:
                 if symbol is None:
                     continue
                 self._merge_entry(
+                    load,
                     market="CA",
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Industry Group")),
