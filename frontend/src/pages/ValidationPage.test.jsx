@@ -303,4 +303,35 @@ describe('ValidationPage', () => {
     resolveHk({ ...emptyOverview('HK'), benchmark_symbol: '2800.HK' });
     expect(await screen.findByRole('columnheader', { name: '5S vs 2800.HK' })).toBeInTheDocument();
   });
+
+  it("shows the loading state, not the previous source's scorecard, while Replay loads", async () => {
+    let resolveReplay;
+    getValidationOverview.mockImplementation((sourceKind) => (
+      sourceKind === 'replay_pick'
+        ? new Promise((resolve) => { resolveReplay = resolve; })
+        : Promise.resolve({ ...emptyOverview('US'), benchmark_symbol: 'SPY' })
+    ));
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('columnheader', { name: '5S vs SPY' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Replay (Minervini)' }));
+    await waitFor(() => {
+      expect(getValidationOverview).toHaveBeenLastCalledWith('replay_pick', 90, 'US');
+    });
+
+    expect(screen.queryByRole('columnheader', { name: '5S vs SPY' })).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    resolveReplay({
+      ...emptyOverview('US'),
+      source_kind: 'replay_pick',
+      benchmark_symbol: 'IVV',
+      freshness: { latest_replay_as_of_date: '2026-10-29' },
+    });
+    expect(await screen.findByRole('columnheader', { name: '5S vs IVV' })).toBeInTheDocument();
+  });
 });
