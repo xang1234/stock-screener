@@ -14,6 +14,7 @@ from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.portability import json_text
 from app.models.stock_universe import StockUniverse
@@ -55,6 +56,14 @@ def _scored_by(field: str):
             json_text(StockFeatureDaily.details_json, (field,)).is_not(None),
         ),
     )
+
+
+# Runs before 2026-04-26 carry only universe.market; a run with neither counts as US.
+RUN_MARKET = func.coalesce(
+    json_text(FeatureRun.config_json, ("market",)),
+    json_text(FeatureRun.config_json, ("universe", "market")),
+    DEFAULT_MARKET,
+)
 
 
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
@@ -222,11 +231,18 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _symbol_markets(db: Session, symbols: set[str]) -> dict[str, str]:
-    return dict(
+    """Each symbol's listed market, else the one its suffix names, else US."""
+    listed = dict(
         db.query(StockUniverse.symbol, StockUniverse.market)
         .filter(StockUniverse.symbol.in_(symbols))
         .all()
     )
+    return {
+        symbol: listed.get(symbol)
+        or market_symbol_suffix_registry.market_for_symbol(symbol)
+        or DEFAULT_MARKET
+        for symbol in symbols
+    }
 
 
 class ScanPickValidationSource:
@@ -260,11 +276,12 @@ class ScanPickValidationSource:
                 rank_expr,
             )
             .join(StockFeatureDaily, StockFeatureDaily.run_id == FeatureRun.id)
-            .join(StockUniverse, StockUniverse.symbol == StockFeatureDaily.symbol)
+            # Outer: the universe sync drops delisted symbols, and their past picks still count.
+            .outerjoin(StockUniverse, StockUniverse.symbol == StockFeatureDaily.symbol)
             .filter(
                 FeatureRun.status == "published",
                 FeatureRun.as_of_date >= cutoff_date,
-                StockUniverse.market == market,
+                RUN_MARKET == market,
                 SCAN_PICK_ELIGIBILITY,
             )
             .subquery()
@@ -370,7 +387,7 @@ class ThemeAlertValidationSource:
                 )
 
         markets = _symbol_markets(db, {event.symbol for event in events})
-        events = [event for event in events if markets.get(event.symbol, DEFAULT_MARKET) == market]
+        events = [event for event in events if markets[event.symbol] == market]
         if not events:
             return [], ["no_matching_theme_alerts"]
         return events, []
@@ -626,7 +643,7 @@ class ValidationService:
         as_of_date: date | None = None,
     ) -> StockValidationResponse:
         symbol = symbol.upper()
-        market = _symbol_markets(db, {symbol}).get(symbol, DEFAULT_MARKET)
+        market = _symbol_markets(db, {symbol})[symbol]
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         source_breakdown: list[ValidationSourceBreakdown] = []
         merged_events: list[ValidationEvent] = []
