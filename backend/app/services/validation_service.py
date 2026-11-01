@@ -224,9 +224,10 @@ def _excess_return_pct(
     if entry_day not in benchmark.index or close_day not in benchmark.index:
         return None
     benchmark_open = float(benchmark.at[entry_day, "Open"])
-    if benchmark_open <= 0:
+    benchmark_close = float(benchmark.at[close_day, "Close"])
+    if not (benchmark_open > 0 and benchmark_close > 0):
         return None
-    benchmark_return_pct = (float(benchmark.at[close_day, "Close"]) / benchmark_open - 1.0) * 100.0
+    benchmark_return_pct = (benchmark_close / benchmark_open - 1.0) * 100.0
     return event_return_pct - benchmark_return_pct
 
 
@@ -572,8 +573,7 @@ def _horizon_outcomes(
         values = window[column].to_numpy(dtype=float)
         return np.where(values > 0, values, np.nan)
 
-    opens, lows = prices("Open"), prices("Low")
-    closes = window["Close"].to_numpy(dtype=float)
+    opens, lows, closes = prices("Open"), prices("Low"), prices("Close")
     # Seeded with the entry price, so a bad tick on the entry bar still leaves an extreme.
     peaks = np.fmax.accumulate(np.fmax(prices("High"), entry_price))
     troughs = np.fmin.accumulate(np.fmin(lows, entry_price))
@@ -587,9 +587,10 @@ def _horizon_outcomes(
 
     outcomes: dict[int, HorizonOutcome] = {}
     for horizon in HORIZONS:
-        if horizon > len(window):
-            continue
         last = horizon - 1
+        # A bad closing tick leaves the window unscored rather than a -100% return.
+        if horizon > len(window) or np.isnan(closes[last]):
+            continue
         return_pct = pct(closes[last])
         stopped_out = stop_day <= last
         outcomes[horizon] = HorizonOutcome(
