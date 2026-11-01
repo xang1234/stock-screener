@@ -37,7 +37,14 @@ class ValidationHorizonSummary(BaseModel):
     median_excess_return_pct: float | None = None
     # Events with a benchmark bar on both dates; the excess figures average over these.
     excess_sample_size: int = 0
+    avg_stopped_return_pct: float | None = None
+    median_stopped_return_pct: float | None = None
+    # Share of the sample whose stop triggered within the horizon.
+    stopped_out_rate: float | None = None
+    # Closed windows the cache cannot score: no history, a missing session or no entry price.
     skipped_missing_history: int = 0
+    # Windows whose last session falls after the last completed one.
+    pending_windows: int = 0
     suppressed_overlapping: int = 0
 
 
@@ -51,12 +58,16 @@ class ValidationEvent(BaseModel):
     entry_price: float | None = None
     return_1s_pct: float | None = None
     return_5s_pct: float | None = None
+    return_20s_pct: float | None = None
+    return_60s_pct: float | None = None
     mfe_5s_pct: float | None = None
     mae_5s_pct: float | None = None
     excess_return_1s_pct: float | None = None
     excess_return_5s_pct: float | None = None
     # False for a repeat inside an earlier counted event's 5-session window.
     counted: bool = True
+    # The horizons whose summaries count this event; a repeat at one horizon can count at another.
+    counted_horizons: list[int]
     attributes: dict[str, Any]
 
 
@@ -87,6 +98,7 @@ class ValidationOverviewResponse(BaseModel):
     lookback_days: int
     market: str
     benchmark_symbol: str | None = None
+    stop_loss_pct: float
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
     failure_clusters: list[ValidationFailureCluster]
@@ -99,6 +111,7 @@ class StockValidationResponse(BaseModel):
 
     symbol: str
     lookback_days: int
+    stop_loss_pct: float
     source_breakdown: list[ValidationSourceBreakdown]
     recent_events: list[ValidationEvent]
     failure_clusters: list[ValidationFailureCluster]

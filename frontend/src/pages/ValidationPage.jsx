@@ -99,6 +99,7 @@ function ValidationPage() {
           recentEvents={data.recent_events}
           failureClusters={data.failure_clusters}
           benchmarkSymbol={data.benchmark_symbol}
+          stopLossPct={data.stop_loss_pct}
         />
       )}
     </Stack>

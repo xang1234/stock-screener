@@ -97,6 +97,9 @@ class _AllSessionsCompleted:
     def last_completed_trading_day(self, market):
         return datetime.now(UTC).date() + timedelta(days=30)
 
+    def trading_days(self, market, start, end):
+        return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+
 
 def _service_with_histories(histories):
     class _TestValidationService(ValidationService):
@@ -212,8 +215,13 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
     payload = response.json()
     assert payload["source_kind"] == "scan_pick"
     assert payload["market"] == "US"
+    assert ([h["horizon_sessions"] for h in payload["horizons"]], payload["stop_loss_pct"]) == (
+        [1, 5, 20, 60],
+        7.0,
+    )
     assert payload["horizons"][0]["sample_size"] == 1
     assert payload["horizons"][1]["skipped_missing_history"] == 1
+    assert [h["pending_windows"] for h in payload["horizons"]] == [0, 0, 0, 2]
     assert payload["recent_events"][0]["attributes"]["symbol"] == "NVDA"
     assert payload["benchmark_symbol"] == "SPY"
     assert (
@@ -221,6 +229,22 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
         payload["recent_events"][0]["excess_return_5s_pct"],
     ) == (2.0, 8.0)
     assert "missing_price_cache" in payload["degraded_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_validation_overview_endpoint_serves_a_pick_whose_entry_bar_has_a_zero_high(client, session):
+    today = _seed_validation_data(session)
+    bars = [(100, 0, 99, 103), (103, 105, 101, 104), (104, 108, 103, 107), (107, 109, 104, 108), (108, 111, 107, 110)]
+    histories = {"NVDA": _history_frame(today - timedelta(days=2), bars), "MSFT": None, "SPY": None}
+    app.dependency_overrides[get_db] = _override_db(session)
+    app.dependency_overrides[_get_validation_service] = lambda: _service_with_histories(histories)
+
+    response = await client.get("/api/v1/validation/overview", params={"source_kind": "scan_pick", "lookback_days": 90})
+
+    assert response.status_code == 200
+    assert [(h["avg_mfe_pct"], h["avg_mae_pct"]) for h in response.json()["horizons"]] == [
+        (0.0, -1.0), (11.0, -1.0), (None, None), (None, None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -243,10 +267,13 @@ async def test_validation_overview_endpoint_filters_by_requested_market(client, 
 @pytest.mark.asyncio
 async def test_validation_overview_endpoint_returns_theme_alert_metrics(client, session):
     today = _seed_validation_data(session)
+    # The alert fires two days before now, so its entry session is one to three days back.
     histories = {
         "NVDA": _history_frame(
-            today - timedelta(days=1),
+            today - timedelta(days=3),
             [
+                (48, 50, 47, 49),
+                (49, 51, 48, 50),
                 (50, 52, 49, 51),
                 (51, 53, 50, 52),
                 (52, 54, 51, 53),
@@ -255,8 +282,10 @@ async def test_validation_overview_endpoint_returns_theme_alert_metrics(client, 
             ],
         ),
         "AVGO": _history_frame(
-            today - timedelta(days=1),
+            today - timedelta(days=3),
             [
+                (82, 83, 80, 81),
+                (81, 82, 79, 80),
                 (80, 81, 78, 79),
                 (79, 82, 77, 78),
                 (78, 80, 76, 77),
@@ -304,7 +333,7 @@ async def test_stock_validation_endpoint_returns_both_source_breakdowns(client, 
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["symbol"] == "NVDA"
+    assert (payload["symbol"], payload["stop_loss_pct"]) == ("NVDA", 7.0)
     assert [item["source_kind"] for item in payload["source_breakdown"]] == [
         "scan_pick",
         "theme_alert",

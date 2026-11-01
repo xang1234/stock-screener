@@ -165,6 +165,7 @@ describe('StockDetails', () => {
     getStockValidation.mockResolvedValue({
       symbol: 'NVDA',
       lookback_days: 365,
+      stop_loss_pct: 7,
       source_breakdown: [
         {
           source_kind: 'scan_pick',
@@ -235,6 +236,7 @@ describe('StockDetails', () => {
     expect(screen.getByText('Data Center')).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
     expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
+    expect(screen.getAllByText('Avg with 7% stop')).toHaveLength(4);
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();
   }, 20000);
