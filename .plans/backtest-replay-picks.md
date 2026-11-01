@@ -32,7 +32,7 @@ Replay dates that also have published runs (2026-10-09 onward) are kept. They le
 ## Shape
 
 - **Storage.** `backtest_replay_picks(market, as_of_date, rank, symbol, minervini_score, rs_rating, stage, definition_version, market_rs_run_id, created_at)`, unique on `(market, as_of_date, definition_version, rank)`. Picks only, not every scored row.
-- **Runner.** `backend/app/scripts/replay_scan_picks.py --market M [--start D] [--end D] [--dry-run]`. It loads each symbol's OHLCV once from `stock_prices`, slices it per date, and never goes through `DataPreparationLayer` or the price cache service. One date's picks are written in one transaction that replaces that date's rows, so reruns converge and an interrupted run resumes by date.
+- **Runner.** `backend/app/scripts/replay_scan_picks.py --market M [--start D] [--end D] [--dry-run]`. It loads each symbol's OHLCV once from `stock_prices`, slices it per date, and never goes through `DataPreparationLayer` or the price cache service. One date's picks are written in one transaction that replaces that date's rows, so reruns converge and an interrupted run resumes by date. A date where any symbol errors, or where no benchmark candidate has a bar, writes nothing and fails the run.
 - **Backtest page.** A new source kind `replay_pick` reads the table and feeds the existing outcome calculator unchanged. The page shows it as "Replay (Minervini)" with a note that it is price-only and survivor-biased.
 
 ## Mid-session behaviour
@@ -41,4 +41,4 @@ The runner only replays dates that have a completed Market RS run. Those dates a
 
 ## Cost
 
-Minervini scoring measured 6.0 ms per symbol-date on one process. US at about 8.5k eligible symbols × about 145 dates is roughly 2 CPU-hours (inferred). The owner runs it, because it writes to the live database.
+Measured on 2026-11-01: a US session scores about 5.4k non-fund symbols in about 30 s on one process, after about 25 s loading prices once, so all 145 US sessions take about 1 to 1.5 hours. The owner runs it, one market at a time and from a worker container, because it writes to the live database.
