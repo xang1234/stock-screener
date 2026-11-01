@@ -853,6 +853,7 @@ class ValidationService:
             median_excess_return_pct=(
                 round(float(median(excess_values)), 4) if excess_values else None
             ),
+            excess_sample_size=len(excess_values),
             skipped_missing_history=skipped_missing_history,
             suppressed_overlapping=suppressed_overlapping,
         )

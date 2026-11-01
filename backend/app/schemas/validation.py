@@ -35,6 +35,8 @@ class ValidationHorizonSummary(BaseModel):
     avg_mae_pct: float | None = None
     avg_excess_return_pct: float | None = None
     median_excess_return_pct: float | None = None
+    # Events with a benchmark bar on both dates; the excess figures average over these.
+    excess_sample_size: int = 0
     skipped_missing_history: int = 0
     suppressed_overlapping: int = 0
 
