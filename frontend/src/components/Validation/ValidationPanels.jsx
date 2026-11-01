@@ -37,7 +37,7 @@ function formatDate(value) {
   return date.toLocaleDateString();
 }
 
-function MetricCard({ title, horizon, benchmarkLabel }) {
+function MetricCard({ title, horizon, benchmarkLabel, stopLossPct }) {
   const excessSample = horizon?.excess_sample_size ?? 0;
   return (
     <Card variant="outlined">
@@ -52,8 +52,11 @@ function MetricCard({ title, horizon, benchmarkLabel }) {
           <MetricRow label="Median" value={formatPercentValue(horizon?.median_return_pct)} />
           <MetricRow label={`Avg vs ${benchmarkLabel} (n=${excessSample})`} value={formatPercentValue(horizon?.avg_excess_return_pct)} />
           <MetricRow label={`Median vs ${benchmarkLabel} (n=${excessSample})`} value={formatPercentValue(horizon?.median_excess_return_pct)} />
+          <MetricRow label={`Avg with ${stopLossPct}% stop`} value={formatPercentValue(horizon?.avg_stopped_return_pct)} />
+          <MetricRow label={`Median with ${stopLossPct}% stop`} value={formatPercentValue(horizon?.median_stopped_return_pct)} />
           <MetricRow label="Avg MFE" value={formatPercentValue(horizon?.avg_mfe_pct)} />
           <MetricRow label="Avg MAE" value={formatPercentValue(horizon?.avg_mae_pct)} />
+          <MetricRow label="Stopped out" value={formatRate(horizon?.stopped_out_rate)} />
           <MetricRow label="Skipped" value={horizon?.skipped_missing_history ?? 0} />
         </Box>
       </CardContent>
@@ -74,14 +77,18 @@ function MetricRow({ label, value }) {
   );
 }
 
-export function ValidationSummaryCards({ horizons, benchmarkSymbol }) {
-  const oneSession = horizons?.find((item) => item.horizon_sessions === 1);
-  const fiveSessions = horizons?.find((item) => item.horizon_sessions === 5);
-
+export function ValidationSummaryCards({ horizons, benchmarkSymbol, stopLossPct }) {
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5 }}>
-      <MetricCard title="1 Session" horizon={oneSession} benchmarkLabel={benchmarkSymbol || 'Benchmark'} />
-      <MetricCard title="5 Sessions" horizon={fiveSessions} benchmarkLabel={benchmarkSymbol || 'Benchmark'} />
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(4, 1fr)' }, gap: 1.5 }}>
+      {(horizons || []).map((horizon) => (
+        <MetricCard
+          key={horizon.horizon_sessions}
+          title={`${horizon.horizon_sessions} ${horizon.horizon_sessions === 1 ? 'Session' : 'Sessions'}`}
+          horizon={horizon}
+          benchmarkLabel={benchmarkSymbol || 'Benchmark'}
+          stopLossPct={stopLossPct}
+        />
+      ))}
     </Box>
   );
 }
@@ -98,6 +105,8 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
             <TableCell>Entry</TableCell>
             <TableCell align="right">1S</TableCell>
             <TableCell align="right">5S</TableCell>
+            <TableCell align="right">20S</TableCell>
+            <TableCell align="right">60S</TableCell>
             <TableCell align="right">5S vs {benchmarkSymbol || 'Benchmark'}</TableCell>
             <TableCell align="right">MFE</TableCell>
             <TableCell align="right">MAE</TableCell>
@@ -134,6 +143,8 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
               <TableCell>{formatDate(event.entry_at)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.return_1s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.return_5s_pct)}</TableCell>
+              <TableCell align="right">{formatPercentValue(event.return_20s_pct)}</TableCell>
+              <TableCell align="right">{formatPercentValue(event.return_60s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.excess_return_5s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.mfe_5s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.mae_5s_pct)}</TableCell>
@@ -142,7 +153,7 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
           })}
           {(!events || events.length === 0) && (
             <TableRow>
-              <TableCell colSpan={showSourceKind ? 9 : 8} align="center">
+              <TableCell colSpan={showSourceKind ? 11 : 10} align="center">
                 <Typography variant="body2" color="text.secondary">
                   No validation events are available for this selection.
                 </Typography>
@@ -203,7 +214,7 @@ export function ValidationDegradedAlert({ degradedReasons }) {
   );
 }
 
-export function ValidationSection({ title, degradedReasons, horizons, recentEvents, failureClusters, showSourceKind = true, benchmarkSymbol }) {
+export function ValidationSection({ title, degradedReasons, horizons, recentEvents, failureClusters, showSourceKind = true, benchmarkSymbol, stopLossPct }) {
   return (
     <Stack spacing={1.5}>
       {title && (
@@ -212,7 +223,7 @@ export function ValidationSection({ title, degradedReasons, horizons, recentEven
         </Typography>
       )}
       <ValidationDegradedAlert degradedReasons={degradedReasons} />
-      <ValidationSummaryCards horizons={horizons} benchmarkSymbol={benchmarkSymbol} />
+      <ValidationSummaryCards horizons={horizons} benchmarkSymbol={benchmarkSymbol} stopLossPct={stopLossPct} />
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
           Recent Events

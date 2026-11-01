@@ -724,7 +724,7 @@ function StockDetails() {
                       </Typography>
                       <Stack spacing={1.5}>
                         <ValidationDegradedAlert degradedReasons={section.degraded_reasons} />
-                        <ValidationSummaryCards horizons={section.horizons} />
+                        <ValidationSummaryCards horizons={section.horizons} stopLossPct={validationData.stop_loss_pct} />
                       </Stack>
                     </Box>
                   ))}
