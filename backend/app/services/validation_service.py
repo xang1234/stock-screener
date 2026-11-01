@@ -494,14 +494,6 @@ class PriceOutcomeCalculator:
             ).items()
         }
         calendar = pd.DatetimeIndex(sessions)
-        newest_bar = max(
-            (history.index[-1] for history in histories.values() if history is not None),
-            default=None,
-        )
-        if newest_bar is not None:
-            # The calendar counts a session completed before the after-close refresh caches
-            # it; a window past every cached bar is still pending, not missing history.
-            calendar = calendar[calendar <= newest_bar]
         cached_benchmarks = [
             (candidate, histories[candidate])
             for candidate in benchmark_candidates
@@ -524,6 +516,10 @@ class PriceOutcomeCalculator:
         benchmark: pd.DataFrame | None,
         calendar: pd.DatetimeIndex,
     ) -> EvaluatedValidationEvent:
+        if history is not None and len(calendar) > 1 and history.index[-1] == calendar[-2]:
+            # The calendar counts a session completed before the after-close refresh reaches
+            # this symbol's batch; its window past that session is pending, not missing history.
+            calendar = calendar[:-1]
         start = _entry_session_index(event.event_at, calendar)
         sessions = calendar[start : start + max(HORIZONS)]
         exits = {
