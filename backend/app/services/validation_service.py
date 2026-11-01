@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import and_, case, exists, func
 from sqlalchemy.orm import Session
@@ -525,7 +526,7 @@ class PriceOutcomeCalculator:
         window = history.loc[trading_days[: max(HORIZONS)]]
         entry_at = trading_days[0].date()
         entry_price = float(window["Open"].iloc[0])
-        if entry_price <= 0:
+        if not entry_price > 0:
             return EvaluatedValidationEvent(raw=event, entry_at=entry_at, entry_price=None)
         return EvaluatedValidationEvent(
             raw=event,
@@ -543,14 +544,19 @@ def _horizon_outcomes(
     def pct(price: float) -> float:
         return (price / entry_price - 1.0) * 100.0
 
-    opens = window["Open"].to_numpy(dtype=float)
+    def prices(column: str) -> np.ndarray:
+        # A zero or missing price is a bad tick: it neither triggers the stop nor sets an extreme.
+        values = window[column].to_numpy(dtype=float)
+        return np.where(values > 0, values, np.nan)
+
+    opens, lows = prices("Open"), prices("Low")
     closes = window["Close"].to_numpy(dtype=float)
-    peaks = window["High"].cummax().to_numpy(dtype=float)
-    troughs = window["Low"].cummin().to_numpy(dtype=float)
+    peaks = np.fmax.accumulate(prices("High"))
+    troughs = np.fmin.accumulate(lows)
     stop_price = entry_price * (100.0 - STOP_LOSS_PCT) / 100.0
     # The entry session opens at the entry price, above the stop, so only its low can trigger.
     gapped = opens <= stop_price
-    hit = gapped | (window["Low"].to_numpy(dtype=float) <= stop_price)
+    hit = gapped | (lows <= stop_price)
     stop_day = int(hit.argmax()) if hit.any() else len(window)
     gapped_through = stop_day < len(window) and gapped[stop_day]
     stop_return_pct = pct(opens[stop_day]) if gapped_through else -STOP_LOSS_PCT
