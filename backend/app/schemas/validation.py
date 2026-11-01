@@ -53,6 +53,8 @@ class ValidationEvent(BaseModel):
     mae_5s_pct: float | None = None
     excess_return_1s_pct: float | None = None
     excess_return_5s_pct: float | None = None
+    # False for a repeat inside an earlier counted event's 5-session window.
+    counted: bool = True
     attributes: dict[str, Any]
 
 

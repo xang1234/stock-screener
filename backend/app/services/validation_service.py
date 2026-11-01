@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
 from typing import Any
@@ -104,6 +104,7 @@ class EvaluatedValidationEvent:
     exit_at: date | None = None
     excess_return_1s_pct: float | None = None
     excess_return_5s_pct: float | None = None
+    counted: bool = True
 
     def to_response(self) -> ValidationEvent:
         return ValidationEvent(
@@ -118,6 +119,7 @@ class EvaluatedValidationEvent:
             mae_5s_pct=_round_or_none(self.mae_5s_pct),
             excess_return_1s_pct=_round_or_none(self.excess_return_1s_pct),
             excess_return_5s_pct=_round_or_none(self.excess_return_5s_pct),
+            counted=self.counted,
             attributes=self.raw.attributes,
         )
 
@@ -194,13 +196,14 @@ def _excess_return_pct(
     return event_return_pct - benchmark_return_pct
 
 
-def drop_overlapping_windows(
+def mark_overlapping_windows(
     events: list[EvaluatedValidationEvent],
-) -> tuple[list[EvaluatedValidationEvent], int]:
-    """Keep one event per (source, symbol) window, in input order; also return the suppressed count.
+) -> list[EvaluatedValidationEvent]:
+    """Return ``events`` in input order, each marking whether its 5-session window counts.
 
-    An event counts only when it enters strictly after the previous kept event's
-    fifth session. A kept event whose window is still open blocks every later one.
+    An event counts only when it enters strictly after the previous counted event's
+    fifth session for the same source and symbol. A counted event whose window is
+    still open blocks every later one.
     """
     suppressed: set[int] = set()
     blocked_through: dict[tuple[ValidationSourceKind, str], date] = {}
@@ -221,8 +224,10 @@ def drop_overlapping_windows(
             suppressed.add(index)
             continue
         blocked_through[key] = event.exit_at or date.max
-    kept = [event for index, event in enumerate(events) if index not in suppressed]
-    return kept, len(suppressed)
+    return [
+        replace(event, counted=False) if index in suppressed else event
+        for index, event in enumerate(events)
+    ]
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -738,12 +743,12 @@ class ValidationService:
             )
         )
         degraded_reasons.extend(calculator_degraded)
-        kept_events, suppressed_overlapping = drop_overlapping_windows(evaluated_events)
+        events = mark_overlapping_windows(evaluated_events)
 
         recent_events = [
             event.to_response()
             for event in sorted(
-                kept_events,
+                events,
                 key=lambda item: (_serialize_temporal(item.raw.event_at), item.raw.source_ref),
                 reverse=True,
             )[:RECENT_EVENTS_LIMIT]
@@ -751,15 +756,13 @@ class ValidationService:
 
         return {
             "horizons": [
-                self._summarize_horizon(
-                    kept_events,
-                    horizon_sessions=horizon_sessions,
-                    suppressed_overlapping=suppressed_overlapping,
-                )
+                self._summarize_horizon(events, horizon_sessions=horizon_sessions)
                 for horizon_sessions in (1, 5)
             ],
             "recent_events": recent_events,
-            "failure_clusters": self._failure_cluster_builder.build(kept_events),
+            "failure_clusters": self._failure_cluster_builder.build(
+                [event for event in events if event.counted]
+            ),
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
         }
@@ -769,15 +772,17 @@ class ValidationService:
         events: list[EvaluatedValidationEvent],
         *,
         horizon_sessions: int,
-        suppressed_overlapping: int,
     ) -> ValidationHorizonSummary:
+        # Only 5-session windows can overlap a repeat pick's; 1-session outcomes never do.
+        counted = events if horizon_sessions == 1 else [event for event in events if event.counted]
+        suppressed_overlapping = len(events) - len(counted)
         returns: list[float] = []
         mfe_values: list[float] = []
         mae_values: list[float] = []
         excess_values: list[float] = []
         skipped_missing_history = 0
 
-        for event in events:
+        for event in counted:
             if horizon_sessions in event.missing_horizons or event.entry_price is None:
                 skipped_missing_history += 1
                 continue
