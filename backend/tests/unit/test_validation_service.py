@@ -966,6 +966,12 @@ def test_a_zero_open_or_low_mid_window_is_a_bad_tick_not_a_stop():
     assert _stop_figures(zero_low) == [(1, 0.0, False, 3.125, -3.125), (5, 0.0, False, 3.125, -3.125)]
 
 
+def test_a_missing_entry_open_scores_nothing():
+    event = _evaluate_rows([(float("nan"), 66, 62, 64)] + [FLAT_ROW] * 4)
+
+    assert (event.entry_at, event.entry_price, event.outcomes) == (date(2026, 1, 2), None, {})
+
+
 def test_a_missing_low_does_not_stop_and_a_later_low_below_the_stop_does():
     rows = [FLAT_ROW] * 20
     rows[3] = (64, 66, float("nan"), 64)
