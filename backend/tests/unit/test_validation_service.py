@@ -23,7 +23,7 @@ from app.services.validation_service import (
     ScanPickValidationSource,
     ThemeAlertValidationSource,
     ValidationService,
-    drop_overlapping_windows,
+    mark_overlapping_windows,
 )
 from tests.helpers.taxonomy_authority import set_economic_authority
 
@@ -961,11 +961,16 @@ def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
         as_of_date=FIXED_TODAY,
     )
 
-    assert [event.attributes["run_as_of_date"] for event in payload.recent_events] == [
-        "2026-03-07",
-        "2026-03-02",
+    assert [(event.attributes["run_as_of_date"], event.counted) for event in payload.recent_events] == [
+        ("2026-03-07", True),
+        ("2026-03-06", False),
+        ("2026-03-04", False),
+        ("2026-03-03", False),
+        ("2026-03-02", True),
     ]
-    assert [(h.sample_size, h.suppressed_overlapping) for h in payload.horizons] == [(2, 3), (2, 3)]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
+    ] == [(1, 5, 0), (5, 2, 3)]
 
 
 def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None):
@@ -998,7 +1003,12 @@ def test_an_incomplete_window_blocks_later_events_for_the_same_source_and_symbol
         _evaluated(alert, "AAA", "alert:1", date(2026, 3, 30)),
     ]
 
-    kept, suppressed = drop_overlapping_windows(events)
+    marked = mark_overlapping_windows(events)
 
-    assert sorted(event.raw.source_ref for event in kept) == ["alert:1", "run:1", "run:3", "run:4"]
-    assert suppressed == 1
+    assert [(event.raw.source_ref, event.counted) for event in marked] == [
+        ("run:2", False),
+        ("run:1", True),
+        ("run:3", True),
+        ("run:4", True),
+        ("alert:1", True),
+    ]
