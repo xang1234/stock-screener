@@ -27,9 +27,11 @@ function ValidationPage() {
     queryKey: ['validationOverview', sourceKind, lookbackDays, market],
     queryFn: () => getValidationOverview(sourceKind, lookbackDays, market),
     staleTime: 60_000,
-    // Keep the last scorecard while a toggle refetches, never across a market switch.
+    // Keep the page while a toggle refetches, never across a market switch.
     placeholderData: (previousData) => (previousData?.market === market ? previousData : undefined),
   });
+  // Placeholder data from another source must not be shown under this source's label.
+  const overview = data?.source_kind === sourceKind ? data : null;
 
   if (isLoading && !data) {
     return (
@@ -89,17 +91,17 @@ function ValidationPage() {
             <Alert severity="info">
               Price-only Minervini replay: the top 10 per session among stocks passing the template.
               Survivor-biased (today&apos;s universe) and not the live composite score.
-              {data?.source_kind === 'replay_pick' && (
+              {overview && (
                 <>
                   {' '}
-                  {data.freshness?.latest_replay_as_of_date
-                    ? `Replayed through ${data.freshness.latest_replay_as_of_date}.`
+                  {overview.freshness?.latest_replay_as_of_date
+                    ? `Replayed through ${overview.freshness.latest_replay_as_of_date}.`
                     : 'Nothing replayed for this market yet.'}
                 </>
               )}
             </Alert>
           )}
-          {isLoading && data && (
+          {((isLoading && data) || (data && !overview)) && (
             <Box display="flex" justifyContent="center">
               <CircularProgress size={24} />
             </Box>
@@ -107,14 +109,14 @@ function ValidationPage() {
         </Stack>
       </Paper>
 
-      {data && (
+      {overview && (
         <ValidationSection
-          degradedReasons={data.degraded_reasons}
-          horizons={data.horizons}
-          recentEvents={data.recent_events}
-          failureClusters={data.failure_clusters}
-          benchmarkSymbol={data.benchmark_symbol}
-          stopLossPct={data.stop_loss_pct}
+          degradedReasons={overview.degraded_reasons}
+          horizons={overview.horizons}
+          recentEvents={overview.recent_events}
+          failureClusters={overview.failure_clusters}
+          benchmarkSymbol={overview.benchmark_symbol}
+          stopLossPct={overview.stop_loss_pct}
         />
       )}
     </Stack>
