@@ -574,8 +574,9 @@ def _horizon_outcomes(
 
     opens, lows = prices("Open"), prices("Low")
     closes = window["Close"].to_numpy(dtype=float)
-    peaks = np.fmax.accumulate(prices("High"))
-    troughs = np.fmin.accumulate(lows)
+    # Seeded with the entry price, so a bad tick on the entry bar still leaves an extreme.
+    peaks = np.fmax.accumulate(np.fmax(prices("High"), entry_price))
+    troughs = np.fmin.accumulate(np.fmin(lows, entry_price))
     stop_price = entry_price * (100.0 - STOP_LOSS_PCT) / 100.0
     # The entry session opens at the entry price, above the stop, so only its low can trigger.
     gapped = opens <= stop_price
