@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.services.validation_service as validation_service_module
 from app.database import Base
+from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
@@ -49,6 +50,7 @@ def session():
             StockUniverse.__table__,
             ThemeCluster.__table__,
             ThemeAlert.__table__,
+            BacktestReplayPick.__table__,
         ],
     )
     db = TestingSessionLocal()
@@ -59,6 +61,7 @@ def session():
         Base.metadata.drop_all(
             engine,
             tables=[
+                BacktestReplayPick.__table__,
                 ThemeAlert.__table__,
                 ThemeCluster.__table__,
                 StockUniverse.__table__,
@@ -1732,3 +1735,86 @@ def test_an_entry_without_a_price_does_not_block_a_window():
         ("run:1", frozenset()),
         ("run:2", frozenset()),
     ]
+
+
+def _add_replay_pick(session, as_of_date, rank, symbol, *, score, rs, market="US", version=DEFINITION_VERSION):
+    session.add(
+        BacktestReplayPick(
+            market=market,
+            as_of_date=as_of_date,
+            rank=rank,
+            symbol=symbol,
+            minervini_score=score,
+            rs_rating=rs,
+            stage=2,
+            definition_version=version,
+            market_rs_run_id=41,
+        )
+    )
+
+
+def test_replay_picks_of_the_current_definition_are_scored_as_their_own_source(session):
+    replayed = date(2026, 3, 27)
+    _add_replay_pick(session, replayed, 1, "NVDA", score=91.5, rs=95)
+    _add_replay_pick(session, replayed, 2, "AMD", score=88.25, rs=82)
+    _add_replay_pick(session, replayed, 1, "MU", score=99.0, rs=99, market="HK")
+    _add_replay_pick(session, replayed, 1, "MU", score=99.0, rs=99, version="minervini-top10-v0")
+    session.commit()
+    start = date(2026, 3, 28)
+    service = _service(
+        {
+            "NVDA": _history_frame(start, NVDA_ROWS),
+            "AMD": _history_frame(start, [(50, 51, 49, 50)] * 4 + [(50, 51, 48, 49)]),
+            "MU": _history_frame(start, [(200, 211, 199, 210)] * 5),
+            "SPY": _history_frame(start, BENCHMARK_ROWS),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.REPLAY_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert (payload.source_kind, payload.benchmark_symbol, payload.degraded_reasons) == (
+        ValidationSourceKind.REPLAY_PICK,
+        "SPY",
+        [],
+    )
+    assert [
+        (event.source_ref, event.attributes, event.return_5s_pct, event.excess_return_5s_pct)
+        for event in payload.recent_events
+    ] == [
+        (
+            "replay:US:2026-03-27",
+            {"symbol": "NVDA", "rank": 1, "minervini_score": 91.5, "rs_rating": 95, "rs_band": "90-99", "stage": 2},
+            12.0,
+            10.0,
+        ),
+        (
+            "replay:US:2026-03-27",
+            {"symbol": "AMD", "rank": 2, "minervini_score": 88.25, "rs_rating": 82, "rs_band": "80-89", "stage": 2},
+            -2.0,
+            -4.0,
+        ),
+    ]
+    assert [h.sample_size for h in payload.horizons] == [2, 2, 0, 0]
+    assert [(c.cluster_key, c.label, c.sample_size) for c in payload.failure_clusters] == [
+        ("rs_band:80-89", "Rs Band: 80-89", 1),
+        ("stage:2", "Stage: 2", 1),
+    ]
+
+
+def test_replay_overview_without_stored_picks_reports_none_match(session):
+    _add_replay_pick(session, date(2026, 3, 27), 1, "NVDA", score=91.5, rs=95, market="HK")
+    session.commit()
+
+    payload = _service().get_overview(
+        session,
+        source_kind=ValidationSourceKind.REPLAY_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert (payload.recent_events, payload.degraded_reasons) == ([], ["no_matching_replay_picks"])
