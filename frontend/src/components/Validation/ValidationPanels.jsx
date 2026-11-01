@@ -50,14 +50,15 @@ function MetricCard({ title, horizon, benchmarkLabel, stopLossPct }) {
           <MetricRow label="Positive" value={formatRate(horizon?.positive_rate)} />
           <MetricRow label="Avg Return" value={formatPercentValue(horizon?.avg_return_pct)} />
           <MetricRow label="Median" value={formatPercentValue(horizon?.median_return_pct)} />
-          <MetricRow label={`Avg vs ${benchmarkLabel} (n=${excessSample})`} value={formatPercentValue(horizon?.avg_excess_return_pct)} />
-          <MetricRow label={`Median vs ${benchmarkLabel} (n=${excessSample})`} value={formatPercentValue(horizon?.median_excess_return_pct)} />
+          <MetricRow label={`Avg vs ${benchmarkLabel} (no stop, n=${excessSample})`} value={formatPercentValue(horizon?.avg_excess_return_pct)} />
+          <MetricRow label={`Median vs ${benchmarkLabel} (no stop, n=${excessSample})`} value={formatPercentValue(horizon?.median_excess_return_pct)} />
           <MetricRow label={`Avg with ${stopLossPct}% stop`} value={formatPercentValue(horizon?.avg_stopped_return_pct)} />
           <MetricRow label={`Median with ${stopLossPct}% stop`} value={formatPercentValue(horizon?.median_stopped_return_pct)} />
-          <MetricRow label="Avg MFE" value={formatPercentValue(horizon?.avg_mfe_pct)} />
-          <MetricRow label="Avg MAE" value={formatPercentValue(horizon?.avg_mae_pct)} />
+          <MetricRow label="Avg MFE (no stop)" value={formatPercentValue(horizon?.avg_mfe_pct)} />
+          <MetricRow label="Avg MAE (no stop)" value={formatPercentValue(horizon?.avg_mae_pct)} />
           <MetricRow label="Stopped out" value={formatRate(horizon?.stopped_out_rate)} />
           <MetricRow label="Skipped" value={horizon?.skipped_missing_history ?? 0} />
+          <MetricRow label="Pending" value={horizon?.pending_windows ?? 0} />
         </Box>
       </CardContent>
     </Card>
