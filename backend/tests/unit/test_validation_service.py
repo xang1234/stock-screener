@@ -201,12 +201,9 @@ def _add_legacy_pick(session, run, symbol, composite_score, **scores):
     )
 
 
-def test_scan_picks_read_core_scores_from_details_on_legacy_rows(session):
+def test_legacy_rows_yield_no_picks_and_flag_the_window(session):
     run = _add_run(session, FIXED_TODAY)
-    for symbol in ("OLD", "HALF", "IPOX"):
-        _add_universe(session, symbol)
-    _add_legacy_pick(session, run, "IPOX", 99.0)
-    _add_legacy_pick(session, run, "HALF", 98.0, minervini_score=80.0)
+    _add_universe(session, "OLD")
     _add_legacy_pick(session, run, "OLD", 90.0, minervini_score=80.0, canslim_score=70.0)
     session.commit()
 
@@ -214,7 +211,22 @@ def test_scan_picks_read_core_scores_from_details_on_legacy_rows(session):
         session, cutoff_date=FIXED_TODAY - timedelta(days=1), market="US"
     )
 
-    assert (degraded, [event.symbol for event in events]) == ([], ["OLD"])
+    assert (events, degraded) == ([], ["legacy_runs_without_typed_scores"])
+
+
+def test_legacy_runs_outside_the_window_or_market_are_not_flagged(session):
+    _add_universe(session, "OLD")
+    _add_legacy_pick(session, _add_run(session, FIXED_TODAY - timedelta(days=5)), "OLD", 90.0)
+    _add_legacy_pick(session, _add_run(session, FIXED_TODAY, market="HK"), "OLD", 90.0)
+    _add_universe(session, "NEW")
+    _add_pick(session, _add_run(session, FIXED_TODAY), "NEW", 90.0)
+    session.commit()
+
+    events, degraded = ScanPickValidationSource().collect(
+        session, cutoff_date=FIXED_TODAY - timedelta(days=1), market="US"
+    )
+
+    assert ([event.symbol for event in events], degraded) == (["NEW"], [])
 
 
 def test_scan_picks_are_filtered_to_the_requested_market(session):
