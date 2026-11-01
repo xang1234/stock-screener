@@ -912,6 +912,45 @@ def test_overview_reports_benchmark_relative_returns(session):
     } == {"NVDA": (3.0, 10.0), "AMD": (-1.0, -4.0), "MU": (4.0, 1.0)}
 
 
+class _FixedCalendar:
+    def __init__(self, last_completed: date):
+        self._last_completed = last_completed
+
+    def last_completed_trading_day(self, market):
+        return self._last_completed
+
+
+def test_overview_ignores_bars_after_the_last_completed_session(session):
+    run = _add_run(session, date(2026, 3, 27))
+    _add_universe(session, "NVDA")
+    _add_pick(session, run, "NVDA", 95.0)
+    session.commit()
+    start = date(2026, 3, 28)
+    histories = {
+        "NVDA": _history_frame(start, NVDA_ROWS),
+        "SPY": _history_frame(start, BENCHMARK_ROWS[:4]),
+        "IVV": _history_frame(start, BENCHMARK_ROWS),
+    }
+    service = ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache(histories)),
+        market_calendar=_FixedCalendar(date(2026, 3, 31)),
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert payload.benchmark_symbol == "SPY"
+    assert [(h.horizon_sessions, h.sample_size, h.skipped_missing_history) for h in payload.horizons] == [
+        (1, 1, 0),
+        (5, 0, 1),
+    ]
+    assert payload.recent_events[0].return_5s_pct is None
+
+
 def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
     _add_universe(session, "NVDA")
     for as_of in (date(2026, 3, 2), date(2026, 3, 3), date(2026, 3, 4), date(2026, 3, 6), date(2026, 3, 7)):
