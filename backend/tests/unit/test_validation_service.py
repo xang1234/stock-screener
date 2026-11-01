@@ -167,6 +167,36 @@ def test_scan_pick_top_ten_is_taken_among_rows_scored_by_both_methods_and_not_fu
     ]
 
 
+def _add_legacy_pick(session, run, symbol, composite_score, **scores):
+    """A row written before 20261013_0066: scores only in details_json, typed columns NULL."""
+    session.execute(
+        StockFeatureDaily.__table__.insert().values(
+            run_id=run.id,
+            symbol=symbol,
+            as_of_date=run.as_of_date,
+            composite_score=composite_score,
+            overall_rating=5,
+            details_json={"stage": 2, **scores},
+        )
+    )
+
+
+def test_scan_picks_read_core_scores_from_details_on_legacy_rows(session):
+    run = _add_run(session, FIXED_TODAY)
+    for symbol in ("OLD", "HALF", "IPOX"):
+        _add_universe(session, symbol)
+    _add_legacy_pick(session, run, "IPOX", 99.0)
+    _add_legacy_pick(session, run, "HALF", 98.0, minervini_score=80.0)
+    _add_legacy_pick(session, run, "OLD", 90.0, minervini_score=80.0, canslim_score=70.0)
+    session.commit()
+
+    events, degraded = ScanPickValidationSource().collect(
+        session, cutoff_date=FIXED_TODAY - timedelta(days=1), market="US"
+    )
+
+    assert (degraded, [event.symbol for event in events]) == ([], ["OLD"])
+
+
 def test_scan_picks_are_filtered_to_the_requested_market(session):
     us_run = _add_run(session, FIXED_TODAY)
     hk_run = _add_run(session, FIXED_TODAY)
