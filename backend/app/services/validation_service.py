@@ -966,12 +966,23 @@ class ValidationService:
                 _, cutoff = eastern_day_bounds_utc(as_of_date)
                 alert_query = alert_query.filter(ThemeAlert.triggered_at < cutoff)
             latest_theme_alert_at = alert_query.scalar()
+
+        replay_query = db.query(func.max(BacktestReplayPick.as_of_date)).filter(
+            BacktestReplayPick.market == market,
+            BacktestReplayPick.definition_version == DEFINITION_VERSION,
+        )
+        if as_of_date is not None:
+            replay_query = replay_query.filter(BacktestReplayPick.as_of_date <= as_of_date)
+        latest_replay_as_of_date = replay_query.scalar()
         return ValidationFreshness(
             latest_feature_as_of_date=(
                 latest_feature_as_of_date.isoformat() if latest_feature_as_of_date else None
             ),
             latest_theme_alert_at=(
                 _serialize_temporal(latest_theme_alert_at) if latest_theme_alert_at else None
+            ),
+            latest_replay_as_of_date=(
+                latest_replay_as_of_date.isoformat() if latest_replay_as_of_date else None
             ),
             price_cache_period=PRICE_CACHE_PERIOD,
         )

@@ -89,6 +89,10 @@ function ValidationPage() {
             <Alert severity="info">
               Price-only Minervini replay: the top 10 per session among stocks passing the template.
               Survivor-biased (today&apos;s universe) and not the live composite score.
+              {' '}
+              {data?.freshness?.latest_replay_as_of_date
+                ? `Replayed through ${data.freshness.latest_replay_as_of_date}.`
+                : 'Nothing replayed for this market yet.'}
             </Alert>
           )}
           {isLoading && data && (
