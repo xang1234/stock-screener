@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -8,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base
+from app.database import Base, SessionLocal
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     BALANCED_RS_PRICE_BASIS,
@@ -26,10 +27,12 @@ from app.scanners.base_screener import DataRequirements
 from app.scanners.minervini_scanner import MinerviniScanner
 from app.scanners.scan_orchestrator import ScanOrchestrator
 from app.scanners.screener_registry import ScreenerRegistry
+from app.scripts import replay_scan_picks
 from app.services.backtest_replay_service import (
     NoFetchStockDataProvider,
     ProviderFetchAttempted,
     ReplayPick,
+    SessionReplay,
     replay_market,
     select_picks,
 )
@@ -285,3 +288,57 @@ def test_a_fetch_attempt_escapes_the_orchestrator_instead_of_becoming_an_error_r
 
     with pytest.raises(ProviderFetchAttempted, match="AAA"):
         orchestrator.scan_stock_multi("AAA", ["minervini"], pre_merged_requirements=DataRequirements())
+
+
+def _seed_two_leaders() -> int:
+    db = SessionLocal()
+    try:
+        run_id = _add_run(db, D1, {"AAA": 95, "BBB": 85})
+        _add_prices(db, "AAA", _uptrend(0.004))
+        _add_prices(db, "BBB", _uptrend(0.003))
+        _add_prices(db, "SPY", _uptrend(0.001))
+        return run_id
+    finally:
+        db.close()
+
+
+def _stored_symbols() -> list[str]:
+    db = SessionLocal()
+    try:
+        return [row.symbol for row in db.query(BacktestReplayPick).order_by(BacktestReplayPick.rank)]
+    finally:
+        db.close()
+
+
+def test_the_cli_dry_run_prints_each_sessions_picks_and_writes_nothing(capsys):
+    run_id = _seed_two_leaders()
+
+    exit_code = replay_scan_picks.main(["--market", "us", "--dry-run"])
+
+    lines = capsys.readouterr().out.splitlines()
+    assert (exit_code, lines[0], lines[2]) == (
+        0,
+        "Replaying US: dry run, nothing written",
+        "US: 1 sessions, 2 picks, 0 error rows",
+    )
+    assert re.fullmatch(
+        rf"{D1} run={run_id} scored=2 passed=2 errors=0 \d+\.\d\ds AAA:\d+\.\d BBB:\d+\.\d", lines[1]
+    )
+    assert _stored_symbols() == []
+
+
+def test_the_cli_writes_picks_without_dry_run():
+    _seed_two_leaders()
+
+    assert replay_scan_picks.main(["--market", "US", "--start", D1.isoformat()]) == 0
+    assert _stored_symbols() == ["AAA", "BBB"]
+
+
+def test_the_cli_exits_nonzero_when_a_session_had_error_rows(monkeypatch, capsys):
+    replay = SessionReplay(
+        as_of_date=D1, market_rs_run_id=7, scored=3, passed=0, errors=1, picks=(), seconds=0.5
+    )
+    monkeypatch.setattr(replay_scan_picks, "replay_market", lambda *args, **kwargs: iter([replay]))
+
+    assert replay_scan_picks.main(["--market", "US", "--dry-run"]) == 1
+    assert capsys.readouterr().out.splitlines()[-1] == "US: 1 sessions, 0 picks, 1 error rows"
