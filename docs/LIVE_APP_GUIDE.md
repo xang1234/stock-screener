@@ -421,7 +421,7 @@ Symbol-level research view:
 
 Deterministic follow-through check on the **top 10 fully scored stocks of each published scan run** and on **theme alerts** (breakout, velocity-spike). Outcomes come from cached OHLCV only, so results are reproducible.
 
-- **Scan picks** — the 10 highest composite scores in each published run, ranked only among stocks both Minervini and CANSLIM scored. Rows only the IPO screener scored, non-common stock, and Exchange Traded Funds are never picks. Rows written before the typed score columns (migration 0066) are judged by the scores in their stored details.
+- **Scan picks** — the 10 highest composite scores in each published run, ranked only among stocks both Minervini and CANSLIM scored. Rows only the IPO screener scored, non-common stock, and Exchange Traded Funds are never picks. Runs written before 2026-10-13 lack the typed score columns (migration 0066), so they yield no picks, and a window containing one reports the degraded reason `legacy_runs_without_typed_scores`. A backfill of the typed columns would restore them.
 - **Market** — follows the header market selector. Picks come from runs published for that market, including symbols since delisted from the stock universe.
 - **Theme alerts** — US only. Their entry timing follows the US session, so other markets show no alert events and the degraded reason `theme_alerts_us_only`. An alert ticker missing from the stock universe takes its market from its symbol suffix, else US.
 - **Lookback selector** — `30 / 90 / 180` days (default 90): which past signals to include.

@@ -10,7 +10,7 @@ from statistics import median
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, exists, func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING
@@ -57,17 +57,6 @@ NO_EVENTS_REASONS = {
 }
 
 
-def _scored_by(field: str):
-    """Whether the row carries ``field``; rows before 20261013_0066 hold it only in details_json."""
-    return or_(
-        getattr(StockFeatureDaily, field).is_not(None),
-        and_(
-            StockFeatureDaily.hot_fields_stored.is_(None),
-            json_text(StockFeatureDaily.details_json, (field,)).is_not(None),
-        ),
-    )
-
-
 # Runs before 2026-04-26 carry only universe.market; a run with neither counts as US.
 RUN_MARKET = func.coalesce(
     json_text(FeatureRun.config_json, ("market",)),
@@ -79,9 +68,11 @@ RUN_MARKET = func.coalesce(
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
 # (minervini/canslim NULL) and funds otherwise top the composite ranking.
 # is_common_stock alone misses ETFs: finviz marks them common stock.
+# Rows written before 20261013_0066 lack the typed scores and never qualify; reading
+# details_json instead costs a full JSON parse per row on Postgres.
 SCAN_PICK_ELIGIBILITY = and_(
-    _scored_by("minervini_score"),
-    _scored_by("canslim_score"),
+    StockFeatureDaily.minervini_score.is_not(None),
+    StockFeatureDaily.canslim_score.is_not(None),
     StockUniverse.is_common_stock.is_not(False),
     StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
 )
@@ -302,6 +293,13 @@ class ScanPickValidationSource:
                 StockFeatureDaily.symbol.asc(),
             ),
         ).label("run_rank")
+        in_window = [
+            FeatureRun.status == "published",
+            FeatureRun.as_of_date >= cutoff_date,
+            RUN_MARKET == market,
+        ]
+        if until_date is not None:
+            in_window.append(FeatureRun.as_of_date <= until_date)
         ranked_rows = (
             db.query(
                 FeatureRun.id.label("run_id"),
@@ -315,12 +313,7 @@ class ScanPickValidationSource:
             .join(StockFeatureDaily, StockFeatureDaily.run_id == FeatureRun.id)
             # Outer: the universe sync drops delisted symbols, and their past picks still count.
             .outerjoin(StockUniverse, StockUniverse.symbol == StockFeatureDaily.symbol)
-            .filter(
-                FeatureRun.status == "published",
-                FeatureRun.as_of_date >= cutoff_date,
-                RUN_MARKET == market,
-                SCAN_PICK_ELIGIBILITY,
-            )
+            .filter(*in_window, SCAN_PICK_ELIGIBILITY)
             .subquery()
         )
 
@@ -335,8 +328,6 @@ class ScanPickValidationSource:
         )
         if symbol:
             query = query.filter(ranked_rows.c.symbol == symbol)
-        if until_date is not None:
-            query = query.filter(ranked_rows.c.as_of_date <= until_date)
 
         events: list[RawValidationEvent] = []
         for row in query.all():
@@ -358,7 +349,12 @@ class ScanPickValidationSource:
                     },
                 )
             )
-        return events, []
+        legacy_rows = exists().where(
+            StockFeatureDaily.run_id == FeatureRun.id,
+            StockFeatureDaily.hot_fields_stored.is_(None),
+        )
+        has_legacy_runs = db.query(exists().where(*in_window, legacy_rows)).scalar()
+        return events, ["legacy_runs_without_typed_scores"] if has_legacy_runs else []
 
 
 class ThemeAlertValidationSource:
