@@ -36,6 +36,7 @@ class ValidationHorizonSummary(BaseModel):
     avg_excess_return_pct: float | None = None
     median_excess_return_pct: float | None = None
     skipped_missing_history: int = 0
+    suppressed_overlapping: int = 0
 
 
 class ValidationEvent(BaseModel):

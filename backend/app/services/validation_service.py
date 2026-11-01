@@ -167,6 +167,37 @@ def _excess_return_pct(
     return event_return_pct - benchmark_return_pct
 
 
+def drop_overlapping_windows(
+    events: list[EvaluatedValidationEvent],
+) -> tuple[list[EvaluatedValidationEvent], int]:
+    """Keep one event per (source, symbol) window, in input order; also return the suppressed count.
+
+    An event counts only when it enters strictly after the previous kept event's
+    fifth session. A kept event whose window is still open blocks every later one.
+    """
+    suppressed: set[int] = set()
+    blocked_through: dict[tuple[ValidationSourceKind, str], date] = {}
+    for index, event in sorted(
+        enumerate(events),
+        key=lambda pair: (
+            pair[1].raw.source_kind,
+            pair[1].raw.symbol,
+            pair[1].entry_at or date.min,
+            _serialize_temporal(pair[1].raw.event_at),
+            pair[1].raw.source_ref,
+        ),
+    ):
+        if event.entry_at is None:
+            continue
+        key = (event.raw.source_kind, event.raw.symbol)
+        if event.entry_at <= blocked_through.get(key, date.min):
+            suppressed.add(index)
+            continue
+        blocked_through[key] = event.exit_at or date.max
+    kept = [event for index, event in enumerate(events) if index not in suppressed]
+    return kept, len(suppressed)
+
+
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -663,38 +694,38 @@ class ValidationService:
             )
         )
         degraded_reasons.extend(calculator_degraded)
+        kept_events, suppressed_overlapping = drop_overlapping_windows(evaluated_events)
 
         recent_events = [
             event.to_response()
             for event in sorted(
-                evaluated_events,
+                kept_events,
                 key=lambda item: (_serialize_temporal(item.raw.event_at), item.raw.source_ref),
                 reverse=True,
             )[:RECENT_EVENTS_LIMIT]
         ]
 
         return {
-            "horizons": self._build_horizon_summaries(evaluated_events),
+            "horizons": [
+                self._summarize_horizon(
+                    kept_events,
+                    horizon_sessions=horizon_sessions,
+                    suppressed_overlapping=suppressed_overlapping,
+                )
+                for horizon_sessions in (1, 5)
+            ],
             "recent_events": recent_events,
-            "failure_clusters": self._failure_cluster_builder.build(evaluated_events),
+            "failure_clusters": self._failure_cluster_builder.build(kept_events),
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
         }
-
-    def _build_horizon_summaries(
-        self,
-        events: list[EvaluatedValidationEvent],
-    ) -> list[ValidationHorizonSummary]:
-        return [
-            self._summarize_horizon(events, horizon_sessions=1),
-            self._summarize_horizon(events, horizon_sessions=5),
-        ]
 
     def _summarize_horizon(
         self,
         events: list[EvaluatedValidationEvent],
         *,
         horizon_sessions: int,
+        suppressed_overlapping: int,
     ) -> ValidationHorizonSummary:
         returns: list[float] = []
         mfe_values: list[float] = []
@@ -757,6 +788,7 @@ class ValidationService:
                 round(float(median(excess_values)), 4) if excess_values else None
             ),
             skipped_missing_history=skipped_missing_history,
+            suppressed_overlapping=suppressed_overlapping,
         )
 
     def _build_freshness(self, db: Session, *, as_of_date: date | None = None) -> ValidationFreshness:
