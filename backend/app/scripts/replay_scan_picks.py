@@ -60,10 +60,14 @@ def _read_only_session_factory():
 
 
 def _session_line(replay: SessionReplay) -> str:
-    picks = " ".join(f"{pick.symbol}:{pick.minervini_score:.1f}" for pick in replay.picks)
+    outcome = (
+        f"FAILED: {replay.failure}"
+        if replay.failure
+        else " ".join(f"{pick.symbol}:{pick.minervini_score:.1f}" for pick in replay.picks)
+    )
     return (
         f"{replay.as_of_date} run={replay.market_rs_run_id} scored={replay.scored} "
-        f"passed={replay.passed} errors={replay.errors} {replay.seconds:.2f}s {picks}"
+        f"passed={replay.passed} errors={replay.errors} {replay.seconds:.2f}s {outcome}"
     ).rstrip()
 
 
@@ -72,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     session_factory = _read_only_session_factory() if options.dry_run else SessionLocal
     mode = "dry run, nothing written" if options.dry_run else "writing picks"
     print(f"Replaying {options.market}: {mode}", flush=True)
-    sessions = picks = errors = 0
+    sessions = picks = failed = 0
     for replay in replay_market(
         session_factory,
         options.market,
@@ -84,9 +88,9 @@ def main(argv: list[str] | None = None) -> int:
         print(_session_line(replay), flush=True)
         sessions += 1
         picks += len(replay.picks)
-        errors += replay.errors
-    print(f"{options.market}: {sessions} sessions, {picks} picks, {errors} error rows")
-    return 1 if errors else 0
+        failed += replay.failure is not None
+    print(f"{options.market}: {sessions} sessions, {picks} picks, {failed} failed sessions")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entrypoint

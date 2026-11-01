@@ -84,6 +84,8 @@ class SessionReplay:
     errors: int
     picks: tuple[ReplayPick, ...]
     seconds: float
+    # A failed session writes nothing and reports no picks, so its stored picks stay.
+    failure: str | None
 
 
 def select_picks(results: Iterable[Mapping]) -> tuple[ReplayPick, ...]:
@@ -123,7 +125,7 @@ def replay_market(
 
     Writing replaces one session's picks per transaction, so a rerun converges and an
     interrupted run resumes by redoing sessions or, with ``skip_existing``, skipping
-    the ones that have picks.
+    the ones that have picks. A session where any symbol errored writes nothing.
     """
     orchestrator = orchestrator or minervini_orchestrator()
     reader = SqlMarketRsReader(session_factory)
@@ -145,17 +147,23 @@ def replay_market(
                 market=market, symbols=symbols, as_of_date=as_of_date, run_id=run_id
             )
             results = list(_score_session(orchestrator, resolution, frames, benchmarks))
-            picks = select_picks(results)
-            if write:
+            # A screener's own error leaves the row's overall rating; only minervini_rating says so.
+            errors = sum(
+                "Error" in (result.get("rating"), result.get("minervini_rating"))
+                for result in results
+            )
+            picks = () if errors else select_picks(results)
+            if write and not errors:
                 _replace_picks(db, resolution, picks)
             yield SessionReplay(
                 as_of_date=as_of_date,
                 market_rs_run_id=run_id,
                 scored=len(results),
                 passed=sum(result.get("minervini_passes") is True for result in results),
-                errors=sum(result.get("rating") == "Error" for result in results),
+                errors=errors,
                 picks=picks,
                 seconds=perf_counter() - started,
+                failure="scan errors" if errors else None,
             )
     finally:
         db.close()
