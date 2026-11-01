@@ -82,6 +82,7 @@ class _FakeValidationService:
             source_kind=source_kind,
             lookback_days=lookback_days,
             market="US",
+            stop_loss_pct=7.0,
             horizons=horizons,
             recent_events=[],
             failure_clusters=[],

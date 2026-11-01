@@ -212,6 +212,10 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
     payload = response.json()
     assert payload["source_kind"] == "scan_pick"
     assert payload["market"] == "US"
+    assert ([h["horizon_sessions"] for h in payload["horizons"]], payload["stop_loss_pct"]) == (
+        [1, 5, 20, 60],
+        7.0,
+    )
     assert payload["horizons"][0]["sample_size"] == 1
     assert payload["horizons"][1]["skipped_missing_history"] == 1
     assert payload["recent_events"][0]["attributes"]["symbol"] == "NVDA"
@@ -304,7 +308,7 @@ async def test_stock_validation_endpoint_returns_both_source_breakdowns(client, 
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["symbol"] == "NVDA"
+    assert (payload["symbol"], payload["stop_loss_pct"]) == ("NVDA", 7.0)
     assert [item["source_kind"] for item in payload["source_breakdown"]] == [
         "scan_pick",
         "theme_alert",

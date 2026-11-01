@@ -18,6 +18,7 @@ from app.services.market_calendar_service import CalendarCoverageExpired
 from app.services.validation_service import (
     EvaluatedValidationEvent,
     FailureClusterBuilder,
+    HorizonOutcome,
     PriceOutcomeCalculator,
     RawValidationEvent,
     SCAN_PICK_TOP_N,
@@ -623,11 +624,10 @@ def test_price_outcome_calculator_rolls_to_next_trading_session_and_computes_win
     event = evaluated[0]
     assert event.entry_at == date(2026, 4, 6)
     assert event.entry_price == 100.0
-    assert event.return_1s_pct == pytest.approx(4.0)
-    assert event.return_5s_pct == pytest.approx(12.0)
-    assert event.mfe_5s_pct == pytest.approx(14.0)
-    assert event.mae_5s_pct == pytest.approx(-2.0)
-    assert event.missing_horizons == frozenset()
+    assert set(event.outcomes) == {1, 5}
+    one, five = event.outcomes[1], event.outcomes[5]
+    assert (one.return_pct, one.mfe_pct, one.mae_pct) == pytest.approx((4.0, 5.0, -1.0))
+    assert (five.return_pct, five.mfe_pct, five.mae_pct) == pytest.approx((12.0, 14.0, -2.0))
 
 
 def test_price_outcome_calculator_marks_missing_five_session_history():
@@ -650,9 +650,8 @@ def test_price_outcome_calculator_marks_missing_five_session_history():
 
     evaluated, _ = calculator.evaluate_many([event])
 
-    assert evaluated[0].return_1s_pct == pytest.approx(1.0)
-    assert evaluated[0].return_5s_pct is None
-    assert evaluated[0].missing_horizons == frozenset({5})
+    assert evaluated[0].outcomes[1].return_pct == pytest.approx(1.0)
+    assert set(evaluated[0].outcomes) == {1}
 
 
 def test_price_outcome_calculator_degrades_zero_open_entry_prices():
@@ -677,13 +676,11 @@ def test_price_outcome_calculator_degrades_zero_open_entry_prices():
 
     evaluated, _ = calculator.evaluate_many([event])
 
-    assert evaluated[0].entry_at == date(2026, 4, 2)
-    assert evaluated[0].entry_price is None
-    assert evaluated[0].return_1s_pct is None
-    assert evaluated[0].return_5s_pct is None
-    assert evaluated[0].mfe_5s_pct is None
-    assert evaluated[0].mae_5s_pct is None
-    assert evaluated[0].missing_horizons == frozenset({1, 5})
+    assert (evaluated[0].entry_at, evaluated[0].entry_price, evaluated[0].outcomes) == (
+        date(2026, 4, 2),
+        None,
+        {},
+    )
 
 
 def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only():
@@ -749,6 +746,17 @@ def test_price_outcome_calculator_uses_eastern_calendar_day_for_late_evening_the
     assert evaluated[0].entry_price == 100.0
 
 
+def _outcome(exit_at, return_pct=0.0):
+    return HorizonOutcome(
+        exit_at=exit_at,
+        return_pct=return_pct,
+        mfe_pct=0.0,
+        mae_pct=0.0,
+        stopped_return_pct=return_pct,
+        stopped_out=False,
+    )
+
+
 def test_failure_cluster_builder_uses_source_specific_bucket_fields():
     builder = FailureClusterBuilder()
     losing_scan_event = EvaluatedValidationEvent(
@@ -761,11 +769,7 @@ def test_failure_cluster_builder_uses_source_specific_bucket_fields():
         ),
         entry_at=FIXED_TODAY,
         entry_price=100.0,
-        return_1s_pct=-1.0,
-        return_5s_pct=-3.0,
-        mfe_5s_pct=1.0,
-        mae_5s_pct=-4.0,
-        missing_horizons=frozenset(),
+        outcomes={1: _outcome(FIXED_TODAY, -1.0), 5: _outcome(FIXED_TODAY, -3.0)},
     )
     losing_theme_event = EvaluatedValidationEvent(
         raw=RawValidationEvent(
@@ -777,11 +781,7 @@ def test_failure_cluster_builder_uses_source_specific_bucket_fields():
         ),
         entry_at=FIXED_TODAY,
         entry_price=100.0,
-        return_1s_pct=-0.5,
-        return_5s_pct=-2.0,
-        mfe_5s_pct=1.5,
-        mae_5s_pct=-2.5,
-        missing_horizons=frozenset(),
+        outcomes={1: _outcome(FIXED_TODAY, -0.5), 5: _outcome(FIXED_TODAY, -2.0)},
     )
 
     clusters = builder.build([losing_scan_event, losing_theme_event])
@@ -834,9 +834,9 @@ def test_price_outcome_calculator_measures_excess_over_the_first_cached_benchmar
     )
 
     assert benchmark_symbol == "IVV"
-    assert evaluated[0].exit_at == date(2026, 4, 10)
-    assert evaluated[0].excess_return_1s_pct == pytest.approx(3.0)
-    assert evaluated[0].excess_return_5s_pct == pytest.approx(10.0)
+    assert evaluated[0].outcomes[5].exit_at == date(2026, 4, 10)
+    assert evaluated[0].outcomes[1].excess_return_pct == pytest.approx(3.0)
+    assert evaluated[0].outcomes[5].excess_return_pct == pytest.approx(10.0)
 
 
 def test_price_outcome_calculator_prefers_the_benchmark_with_the_latest_bar():
@@ -858,6 +858,88 @@ def test_price_outcome_calculator_prefers_the_benchmark_with_the_latest_bar():
 
     assert benchmark_for({"SPY": stale, "IVV": current}) == "IVV"
     assert benchmark_for({"SPY": current, "IVV": current}) == "SPY"
+
+
+# An entry of 64 keeps every percentage exact in binary; its 7% stop sits at 59.52.
+FLAT_ROW = (64, 66, 62, 68)
+GAP_ROWS = [(64, 66, 62, 64), (48, 50, 46, 49), (49, 52, 48, 50), (50, 56, 50, 56), (56, 64, 56, 64)]
+ENTRY_DAY_STOP_ROWS = [(64, 66, 58, 62)] + [(62, 70, 62, 68)] * 4
+
+
+def _scan_event(symbol, event_at=date(2026, 1, 1)):
+    return RawValidationEvent(
+        symbol=symbol,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        source_ref="run:1",
+        event_at=event_at,
+        attributes={"symbol": symbol},
+    )
+
+
+def test_price_outcome_calculator_reports_twenty_and_sixty_session_outcomes():
+    rows = [(64, 64, 62, 64)] * 60
+    rows[19] = (64, 96, 62, 80)
+    rows[59] = (64, 64, 60, 72)
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache(
+            {
+                "NVDA": _history_frame(date(2026, 1, 2), rows),
+                "AMD": _history_frame(date(2026, 1, 2), rows[:25]),
+            }
+        )
+    )
+
+    nvda, amd = calculator.evaluate_many([_scan_event("NVDA"), _scan_event("AMD")])[0]
+
+    def unstopped(exit_at, return_pct, mfe_pct, mae_pct):
+        return HorizonOutcome(
+            exit_at=exit_at,
+            return_pct=return_pct,
+            mfe_pct=mfe_pct,
+            mae_pct=mae_pct,
+            stopped_return_pct=return_pct,
+            stopped_out=False,
+        )
+
+    assert nvda.outcomes == {
+        1: unstopped(date(2026, 1, 2), 0.0, 0.0, -3.125),
+        5: unstopped(date(2026, 1, 6), 0.0, 0.0, -3.125),
+        20: unstopped(date(2026, 1, 21), 25.0, 50.0, -3.125),
+        60: unstopped(date(2026, 3, 2), 12.5, 50.0, -6.25),
+    }
+    assert set(amd.outcomes) == {1, 5, 20}
+
+
+def test_price_outcome_calculator_exits_at_the_stop_or_the_open_that_gaps_through_it():
+    intraday_rows = [(64, 66, 62, 62), (62, 63, 61, 62), (62, 63, 58, 60), (60, 66, 60, 64), (64, 70, 63, 68)]
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache(
+            {
+                symbol: _history_frame(date(2026, 1, 2), rows)
+                for symbol, rows in (
+                    ("INTRADAY", intraday_rows),
+                    ("GAP", GAP_ROWS),
+                    ("ENTRYDAY", ENTRY_DAY_STOP_ROWS),
+                )
+            }
+        )
+    )
+
+    evaluated, _ = calculator.evaluate_many(
+        [_scan_event(symbol) for symbol in ("INTRADAY", "GAP", "ENTRYDAY")]
+    )
+
+    assert {
+        event.raw.symbol: [
+            (horizon, outcome.return_pct, outcome.stopped_return_pct, outcome.stopped_out)
+            for horizon, outcome in event.outcomes.items()
+        ]
+        for event in evaluated
+    } == {
+        "INTRADAY": [(1, -3.125, -3.125, False), (5, 6.25, -7.0, True)],
+        "GAP": [(1, 0.0, 0.0, False), (5, 0.0, -25.0, True)],
+        "ENTRYDAY": [(1, -3.125, -7.0, True), (5, 6.25, -7.0, True)],
+    }
 
 
 def test_overview_degrades_once_when_the_benchmark_lacks_a_window_bar(session):
@@ -918,7 +1000,7 @@ def test_overview_reports_benchmark_relative_returns(session):
     assert [
         (h.horizon_sessions, h.avg_excess_return_pct, h.median_excess_return_pct)
         for h in payload.horizons
-    ] == [(1, 2.0, 3.0), (5, 2.3333, 1.0)]
+    ] == [(1, 2.0, 3.0), (5, 2.3333, 1.0), (20, None, None), (60, None, None)]
     assert {
         event.attributes["symbol"]: (event.excess_return_1s_pct, event.excess_return_5s_pct)
         for event in payload.recent_events
@@ -946,7 +1028,7 @@ def test_overview_without_a_cached_benchmark_reports_returns_but_no_excess(sessi
     assert [
         (h.sample_size, h.avg_return_pct, h.avg_excess_return_pct, h.excess_sample_size)
         for h in payload.horizons
-    ] == [(1, 4.0, None, 0), (1, 12.0, None, 0)]
+    ] == [(1, 4.0, None, 0), (1, 12.0, None, 0), (0, None, None, 0), (0, None, None, 0)]
 
 
 def test_overview_reports_how_many_events_the_excess_figures_cover(session):
@@ -974,7 +1056,7 @@ def test_overview_reports_how_many_events_the_excess_figures_cover(session):
 
     assert [
         (h.horizon_sessions, h.sample_size, h.excess_sample_size) for h in payload.horizons
-    ] == [(1, 2, 1), (5, 2, 1)]
+    ] == [(1, 2, 1), (5, 2, 1), (20, 0, 0), (60, 0, 0)]
 
 
 def test_overview_ignores_bars_after_the_last_completed_session(session):
@@ -1003,6 +1085,8 @@ def test_overview_ignores_bars_after_the_last_completed_session(session):
     assert [(h.horizon_sessions, h.sample_size, h.skipped_missing_history) for h in payload.horizons] == [
         (1, 1, 0),
         (5, 0, 1),
+        (20, 0, 1),
+        (60, 0, 1),
     ]
     assert payload.recent_events[0].return_5s_pct is None
 
@@ -1046,6 +1130,8 @@ def test_overview_caps_prices_at_verified_coverage_when_the_calendar_expires(ses
     assert [(h.horizon_sessions, h.sample_size, h.skipped_missing_history) for h in payload.horizons] == [
         (1, 1, 0),
         (5, 0, 1),
+        (20, 0, 1),
+        (60, 0, 1),
     ]
     assert payload.degraded_reasons == ["calendar_coverage_expired"]
 
@@ -1073,7 +1159,7 @@ def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
     ]
     assert [
         (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
-    ] == [(1, 5, 0), (5, 2, 3)]
+    ] == [(1, 5, 0), (5, 2, 3), (20, 0, 4), (60, 0, 4)]
 
 
 def test_a_suppressed_repeat_does_not_degrade_the_benchmark_comparison(session):
@@ -1125,7 +1211,7 @@ def test_a_pick_just_before_the_lookback_still_blocks_repeats_after_it(session):
     ]
     assert [
         (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
-    ] == [(1, 1, 0), (5, 0, 1)]
+    ] == [(1, 1, 0), (5, 0, 1), (20, 0, 1), (60, 0, 1)]
     assert payload.degraded_reasons == []
 
 
@@ -1156,10 +1242,103 @@ def test_a_pick_before_a_long_holiday_still_blocks_repeats_after_the_lookback_st
     ]
     assert [
         (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
-    ] == [(1, 1, 0), (5, 0, 1)]
+    ] == [(1, 1, 0), (5, 0, 1), (20, 0, 1), (60, 0, 1)]
+
+
+def test_overview_summarizes_returns_with_the_stop(session):
+    run = _add_run(session, date(2026, 3, 27))
+    for symbol, score in (("NOSTOP", 95.0), ("GAP", 90.0), ("ENTRYDAY", 85.0)):
+        _add_universe(session, symbol)
+        _add_pick(session, run, symbol, score)
+    session.commit()
+    start = date(2026, 3, 28)
+    service = _service(
+        {
+            "NOSTOP": _history_frame(start, [(64, 66, 62, 64)] * 4 + [(64, 80, 62, 72)]),
+            "GAP": _history_frame(start, GAP_ROWS),
+            "ENTRYDAY": _history_frame(start, ENTRY_DAY_STOP_ROWS),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert payload.stop_loss_pct == 7.0
+    assert [
+        (
+            h.horizon_sessions,
+            h.avg_stopped_return_pct,
+            h.median_stopped_return_pct,
+            h.stopped_out_rate,
+        )
+        for h in payload.horizons
+    ] == [
+        (1, -2.3333, 0.0, 0.3333),
+        (5, -6.5, -7.0, 0.6667),
+        (20, None, None, None),
+        (60, None, None, None),
+    ]
+
+
+def test_a_repeat_ten_sessions_later_counts_at_five_sessions_but_not_at_twenty(session):
+    _add_universe(session, "NVDA")
+    for as_of in (date(2026, 2, 1), date(2026, 2, 11)):
+        _add_pick(session, _add_run(session, as_of), "NVDA", 90.0)
+    session.commit()
+    service = _service({"NVDA": _history_frame(date(2026, 2, 2), [FLAT_ROW] * 63)})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=90,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
+    ] == [(1, 2, 0), (5, 2, 0), (20, 1, 1), (60, 1, 1)]
+    assert [
+        (event.event_at, event.counted, event.return_20s_pct, event.return_60s_pct)
+        for event in payload.recent_events
+    ] == [("2026-02-11", True, 6.25, None), ("2026-02-01", True, 6.25, 6.25)]
+
+
+def test_a_pick_seventy_days_before_the_cutoff_blocks_repeats_inside_its_sixty_sessions(session):
+    _add_universe(session, "NVDA")
+    _add_pick(session, _add_run(session, date(2025, 12, 26)), "NVDA", 90.0)
+    _add_pick(session, _add_run(session, date(2026, 3, 10)), "NVDA", 90.0)
+    session.commit()
+    sessions = pd.bdate_range(date(2025, 12, 29), date(2026, 4, 3))
+    bars = pd.DataFrame(
+        [FLAT_ROW] * len(sessions), index=sessions, columns=["Open", "High", "Low", "Close"]
+    )
+    service = _service({"NVDA": bars})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [event.event_at for event in payload.recent_events] == ["2026-03-10"]
+    assert [
+        (
+            h.horizon_sessions,
+            h.sample_size,
+            h.skipped_missing_history,
+            h.suppressed_overlapping,
+        )
+        for h in payload.horizons
+    ] == [(1, 1, 0, 0), (5, 1, 0, 0), (20, 0, 1, 0), (60, 0, 0, 1)]
 
 
 def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry_price=10.0):
+    """An event whose 5-session window ends at ``exit_at``, or is still open without it."""
     return EvaluatedValidationEvent(
         raw=RawValidationEvent(
             symbol=symbol,
@@ -1170,12 +1349,7 @@ def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry
         ),
         entry_at=entry_at,
         entry_price=entry_price if entry_at else None,
-        return_1s_pct=1.0 if entry_at else None,
-        return_5s_pct=None,
-        mfe_5s_pct=None,
-        mae_5s_pct=None,
-        missing_horizons=frozenset({5}) if entry_at else frozenset({1, 5}),
-        exit_at=exit_at,
+        outcomes={5: _outcome(exit_at)} if exit_at else {},
     )
 
 
@@ -1191,12 +1365,12 @@ def test_an_incomplete_window_blocks_later_events_for_the_same_source_and_symbol
 
     marked = mark_overlapping_windows(events)
 
-    assert [(event.raw.source_ref, event.counted) for event in marked] == [
-        ("run:2", False),
-        ("run:1", True),
-        ("run:3", True),
-        ("run:4", True),
-        ("alert:1", True),
+    assert [(event.raw.source_ref, event.suppressed) for event in marked] == [
+        ("run:2", frozenset({5, 20, 60})),
+        ("run:1", frozenset()),
+        ("run:3", frozenset()),
+        ("run:4", frozenset()),
+        ("alert:1", frozenset()),
     ]
 
 
@@ -1209,7 +1383,7 @@ def test_an_entry_without_a_price_does_not_block_a_window():
 
     marked = mark_overlapping_windows(events)
 
-    assert [(event.raw.source_ref, event.counted) for event in marked] == [
-        ("run:1", True),
-        ("run:2", True),
+    assert [(event.raw.source_ref, event.suppressed) for event in marked] == [
+        ("run:1", frozenset()),
+        ("run:2", frozenset()),
     ]
