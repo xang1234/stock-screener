@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
+from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.portability import json_text
 from app.models.stock_universe import StockUniverse
@@ -63,6 +64,13 @@ OVERLAP_LOOKBEHIND = timedelta(days=math.ceil(max(HORIZONS) * 7 / 5) + 21)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
+    ValidationSourceKind.REPLAY_PICK: "no_matching_replay_picks",
+}
+# The event attributes each source's losing events are bucketed by.
+FAILURE_CLUSTER_FIELDS = {
+    ValidationSourceKind.SCAN_PICK: ("rating", "stage", "ibd_industry_group"),
+    ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "theme"),
+    ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band"),
 }
 
 
@@ -476,6 +484,54 @@ class ThemeAlertValidationSource:
         return [event for event in events if markets[event.symbol] == market], []
 
 
+def _rs_band(rating: int) -> str:
+    low = rating // 10 * 10
+    return f"{low}-{low + 9}"
+
+
+class ReplayPickValidationSource:
+    """Extract one validation event per stored replay pick of the current definition."""
+
+    def collect(
+        self,
+        db: Session,
+        *,
+        cutoff_date: date,
+        market: str,
+        until_date: date | None = None,
+        symbol: str | None = None,
+    ) -> tuple[list[RawValidationEvent], list[str]]:
+        query = db.query(BacktestReplayPick).filter(
+            BacktestReplayPick.market == market,
+            BacktestReplayPick.definition_version == DEFINITION_VERSION,
+            BacktestReplayPick.as_of_date >= cutoff_date,
+        )
+        if until_date is not None:
+            query = query.filter(BacktestReplayPick.as_of_date <= until_date)
+        if symbol:
+            query = query.filter(BacktestReplayPick.symbol == symbol)
+        rows = query.order_by(
+            BacktestReplayPick.as_of_date.desc(), BacktestReplayPick.rank.asc()
+        ).all()
+        return [
+            RawValidationEvent(
+                symbol=row.symbol,
+                source_kind=ValidationSourceKind.REPLAY_PICK,
+                source_ref=f"replay:{market}:{row.as_of_date.isoformat()}",
+                event_at=row.as_of_date,
+                attributes={
+                    "symbol": row.symbol,
+                    "rank": row.rank,
+                    "minervini_score": _round_or_none(row.minervini_score),
+                    "rs_rating": row.rs_rating,
+                    "rs_band": _rs_band(row.rs_rating),
+                    "stage": row.stage,
+                },
+            )
+            for row in rows
+        ], []
+
+
 class PriceOutcomeCalculator:
     """Compute the fixed validation horizons from cached OHLCV data."""
 
@@ -649,21 +705,9 @@ class FailureClusterBuilder:
         event: EvaluatedValidationEvent,
     ) -> list[tuple[tuple[str, str], str]]:
         attrs = event.raw.attributes
-        if event.raw.source_kind == ValidationSourceKind.SCAN_PICK:
-            mapping = {
-                "rating": attrs.get("rating"),
-                "stage": attrs.get("stage"),
-                "ibd_industry_group": attrs.get("ibd_industry_group"),
-            }
-        else:
-            mapping = {
-                "alert_type": attrs.get("alert_type"),
-                "severity": attrs.get("severity"),
-                "theme": attrs.get("theme"),
-            }
-
         clusters: list[tuple[tuple[str, str], str]] = []
-        for name, value in mapping.items():
+        for name in FAILURE_CLUSTER_FIELDS[event.raw.source_kind]:
+            value = attrs.get(name)
             if value is None or value == "":
                 continue
             normalized = str(value)
@@ -679,6 +723,7 @@ class ValidationService:
         *,
         scan_pick_source: ScanPickValidationSource | None = None,
         theme_alert_source: ThemeAlertValidationSource | None = None,
+        replay_pick_source: ReplayPickValidationSource | None = None,
         outcome_calculator: PriceOutcomeCalculator | None = None,
         failure_cluster_builder: FailureClusterBuilder | None = None,
         market_calendar: MarketCalendarService | None = None,
@@ -687,8 +732,11 @@ class ValidationService:
 
         price_cache = get_price_cache()
         self._market_calendar = market_calendar or get_market_calendar_service()
-        self._scan_pick_source = scan_pick_source or ScanPickValidationSource()
-        self._theme_alert_source = theme_alert_source or ThemeAlertValidationSource()
+        self._sources = {
+            ValidationSourceKind.SCAN_PICK: scan_pick_source or ScanPickValidationSource(),
+            ValidationSourceKind.THEME_ALERT: theme_alert_source or ThemeAlertValidationSource(),
+            ValidationSourceKind.REPLAY_PICK: replay_pick_source or ReplayPickValidationSource(),
+        }
         self._outcome_calculator = outcome_calculator or PriceOutcomeCalculator(price_cache)
         self._failure_cluster_builder = failure_cluster_builder or FailureClusterBuilder()
 
@@ -794,13 +842,8 @@ class ValidationService:
     ) -> dict[str, Any]:
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         cutoff_date = effective_as_of_date - timedelta(days=lookback_days)
-        source = (
-            self._scan_pick_source
-            if source_kind == ValidationSourceKind.SCAN_PICK
-            else self._theme_alert_source
-        )
         collect_from = cutoff_date - OVERLAP_LOOKBEHIND
-        raw_events, degraded_reasons = source.collect(
+        raw_events, degraded_reasons = self._sources[source_kind].collect(
             db,
             cutoff_date=collect_from,
             market=market,

@@ -13,6 +13,7 @@ class ValidationSourceKind(str, Enum):
 
     SCAN_PICK = "scan_pick"
     THEME_ALERT = "theme_alert"
+    REPLAY_PICK = "replay_pick"
 
 
 class ValidationFreshness(BaseModel):
