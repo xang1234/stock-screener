@@ -55,8 +55,10 @@ HORIZONS = (1, 5, 20, 60)
 STOP_LOSS_PCT = 7.0
 # Events this far before the cutoff join the overlap rule, so a pick before it still blocks
 # the repeats inside its window. ponytail: one longest-horizon window at 7 calendar days per
-# 5 sessions, plus 21 days for exchange holidays (TW Lunar New Year), not a longer chain of
-# overlapping picks; collect full history if that matters.
+# 5 sessions, plus 21 days for exchange holidays (TW Lunar New Year). Counting is exact only
+# while no symbol's chain of overlapping picks reaches further back: an older pick decides
+# whether the next one counts, and so whether that one blocks a pick in the lookback. Upgrade
+# path: replay every earlier pick of the window's symbols, which means ranking every earlier run.
 OVERLAP_LOOKBEHIND = timedelta(days=math.ceil(max(HORIZONS) * 7 / 5) + 21)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
