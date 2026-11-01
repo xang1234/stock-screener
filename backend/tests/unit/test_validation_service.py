@@ -942,6 +942,51 @@ def test_price_outcome_calculator_exits_at_the_stop_or_the_open_that_gaps_throug
     }
 
 
+def _evaluate_rows(rows):
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache({"NVDA": _history_frame(date(2026, 1, 2), rows)})
+    )
+    return calculator.evaluate_many([_scan_event("NVDA")])[0][0]
+
+
+def _stop_figures(event):
+    return [
+        (horizon, outcome.stopped_return_pct, outcome.stopped_out, outcome.mfe_pct, outcome.mae_pct)
+        for horizon, outcome in event.outcomes.items()
+    ]
+
+
+def test_a_zero_open_or_low_mid_window_is_a_bad_tick_not_a_stop():
+    flat = (64, 66, 62, 64)
+
+    zero_open = _evaluate_rows([flat, flat, (0, 66, 62, 64), flat, flat])
+    zero_low = _evaluate_rows([flat, flat, (64, 66, 0, 64), flat, flat])
+
+    assert _stop_figures(zero_open) == [(1, 0.0, False, 3.125, -3.125), (5, 0.0, False, 3.125, -3.125)]
+    assert _stop_figures(zero_low) == [(1, 0.0, False, 3.125, -3.125), (5, 0.0, False, 3.125, -3.125)]
+
+
+def test_a_missing_low_does_not_stop_and_a_later_low_below_the_stop_does():
+    rows = [FLAT_ROW] * 20
+    rows[3] = (64, 66, float("nan"), 64)
+    rows[5] = (62, 63, 58, 60)
+
+    event = _evaluate_rows(rows)
+
+    assert [
+        (horizon, outcome.stopped_return_pct, outcome.stopped_out)
+        for horizon, outcome in event.outcomes.items()
+    ] == [(1, 6.25, False), (5, 6.25, False), (20, -7.0, True)]
+
+
+def test_a_missing_high_or_low_on_the_last_bar_keeps_the_earlier_extremes():
+    rows = [(64, 66, 62, 64), (64, 72, 60, 64), (64, 66, 62, 64), (64, 66, 62, 64)]
+
+    event = _evaluate_rows(rows + [(64, float("nan"), float("nan"), 64)])
+
+    assert _stop_figures(event) == [(1, 0.0, False, 3.125, -3.125), (5, 0.0, False, 12.5, -6.25)]
+
+
 def test_overview_degrades_once_when_the_benchmark_lacks_a_window_bar(session):
     run = _add_run(session, date(2026, 3, 27))
     for symbol in ("NVDA", "AMD"):
