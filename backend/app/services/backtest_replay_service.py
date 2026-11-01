@@ -143,10 +143,30 @@ def replay_market(
         db.rollback()
         for as_of_date, run_id in runs:
             started = perf_counter()
+            benchmark_symbol = next(
+                (
+                    symbol
+                    for symbol in benchmarks
+                    if symbol in frames and pd.Timestamp(as_of_date) in frames[symbol].index
+                ),
+                None,
+            )
+            if benchmark_symbol is None:
+                yield SessionReplay(
+                    as_of_date=as_of_date,
+                    market_rs_run_id=run_id,
+                    scored=0,
+                    passed=0,
+                    errors=0,
+                    picks=(),
+                    seconds=perf_counter() - started,
+                    failure=f"no benchmark bar ({', '.join(benchmarks)})",
+                )
+                continue
             resolution = reader.get(
                 market=market, symbols=symbols, as_of_date=as_of_date, run_id=run_id
             )
-            results = list(_score_session(orchestrator, resolution, frames, benchmarks))
+            results = list(_score_session(orchestrator, resolution, frames, benchmark_symbol))
             # A screener's own error leaves the row's overall rating; only minervini_rating says so.
             errors = sum(
                 "Error" in (result.get("rating"), result.get("minervini_rating"))
@@ -237,19 +257,11 @@ def _score_session(
     orchestrator: ScanOrchestrator,
     resolution: MarketRsResolution,
     frames: Mapping[str, pd.DataFrame],
-    benchmark_candidates: list[str],
+    benchmark_symbol: str,
 ) -> Iterator[dict]:
     session = pd.Timestamp(resolution.as_of_date)
     window = slice(session - PRICE_WINDOW, session)
-    benchmark_symbol = next(
-        (
-            symbol
-            for symbol in benchmark_candidates
-            if symbol in frames and not frames[symbol].loc[window].empty
-        ),
-        None,
-    )
-    benchmark = frames[benchmark_symbol].loc[window] if benchmark_symbol else pd.DataFrame()
+    benchmark = frames[benchmark_symbol].loc[window]
     for symbol in sorted(resolution.ratings_by_symbol):
         if symbol not in frames:
             continue
