@@ -38,6 +38,7 @@ function formatDate(value) {
 }
 
 function MetricCard({ title, horizon, benchmarkLabel }) {
+  const excessSample = horizon?.excess_sample_size ?? 0;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -49,8 +50,8 @@ function MetricCard({ title, horizon, benchmarkLabel }) {
           <MetricRow label="Positive" value={formatRate(horizon?.positive_rate)} />
           <MetricRow label="Avg Return" value={formatPercentValue(horizon?.avg_return_pct)} />
           <MetricRow label="Median" value={formatPercentValue(horizon?.median_return_pct)} />
-          <MetricRow label={`Avg vs ${benchmarkLabel}`} value={formatPercentValue(horizon?.avg_excess_return_pct)} />
-          <MetricRow label={`Median vs ${benchmarkLabel}`} value={formatPercentValue(horizon?.median_excess_return_pct)} />
+          <MetricRow label={`Avg vs ${benchmarkLabel} (n=${excessSample})`} value={formatPercentValue(horizon?.avg_excess_return_pct)} />
+          <MetricRow label={`Median vs ${benchmarkLabel} (n=${excessSample})`} value={formatPercentValue(horizon?.median_excess_return_pct)} />
           <MetricRow label="Avg MFE" value={formatPercentValue(horizon?.avg_mfe_pct)} />
           <MetricRow label="Avg MAE" value={formatPercentValue(horizon?.avg_mae_pct)} />
           <MetricRow label="Skipped" value={horizon?.skipped_missing_history ?? 0} />
@@ -104,13 +105,24 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
         </TableHead>
         <TableBody>
           {(events || []).map((event, index) => (
-            <TableRow key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}:${index}`}>
+            <TableRow
+              key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}:${index}`}
+              sx={event.counted === false ? { opacity: 0.55 } : undefined}
+            >
               <TableCell>
                 {event.attributes?.symbol ? (
                   <Link component={RouterLink} to={`/stocks/${encodeURIComponent(event.attributes.symbol)}`} underline="hover">
                     {event.attributes.symbol}
                   </Link>
                 ) : '-'}
+                {event.counted === false && (
+                  <Chip
+                    size="small"
+                    label="repeat"
+                    title="Inside an earlier event's 5-session window; left out of the 5-session summary"
+                    sx={{ ml: 0.75 }}
+                  />
+                )}
               </TableCell>
               {showSourceKind && (
                 <TableCell>

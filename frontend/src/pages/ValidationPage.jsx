@@ -27,7 +27,8 @@ function ValidationPage() {
     queryKey: ['validationOverview', sourceKind, lookbackDays, market],
     queryFn: () => getValidationOverview(sourceKind, lookbackDays, market),
     staleTime: 60_000,
-    placeholderData: (previousData) => previousData,
+    // Keep the last scorecard while a toggle refetches, never across a market switch.
+    placeholderData: (previousData) => (previousData?.market === market ? previousData : undefined),
   });
 
   if (isLoading && !data) {
