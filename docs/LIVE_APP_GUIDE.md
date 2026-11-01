@@ -421,11 +421,15 @@ Symbol-level research view:
 
 Deterministic follow-through check on what the app actually published — **top-10 scan picks per run** and **theme alerts** (breakout, velocity-spike) — computed from cached OHLCV, so results are reproducible.
 
+- **Scan picks** — the 10 highest composite scores in each published run, ranked only among stocks both Minervini and CANSLIM scored. Rows only the IPO screener scored, non-common stock, and Exchange Traded Funds are never picks. Runs published before the typed score columns (migration 0066) have no eligible picks.
+- **Market** — follows the header market selector. Picks and theme-alert tickers are limited to symbols listed in that market; an alert ticker missing from the stock universe counts as US.
 - **Lookback selector** — `30 / 90 / 180` days (default 90): which past signals to include.
 - **Outcome horizons** — fixed **1-session** and **5-session** forward returns, entered at the next session's open, plus MFE/MAE over the 5-session window.
-- **Metrics** — sample size, positive rate (% of events with 5-session return ≥ 0), average and median return.
+- **Benchmark-relative returns** — each event's return minus the market benchmark's return over the same dates (benchmark open on the entry day to its close on the entry day, or on the event's fifth session). The benchmark is the first of the market's candidates with cached history (US: SPY, then IVV).
+- **One window per symbol** — a symbol picked on consecutive days counts once: an event counts only when it enters after the previous counted event's fifth session for the same source and symbol, and a still-open window blocks later events. The API reports the dropped count as `suppressed_overlapping`.
+- **Metrics** — per horizon: sample size, positive rate (share of events with a return > 0), average and median return, average and median excess over the benchmark.
 - **Failure clusters** — losers bucketed by rating/stage/group (picks) or type/severity/theme (alerts).
-- **Freshness** — degraded-reason flags when price history is missing.
+- **Freshness** — degraded-reason flags when price history is missing (`missing_price_cache`) or the benchmark lacks a bar on an event's dates (`missing_benchmark_prices`).
 
 ---
 
