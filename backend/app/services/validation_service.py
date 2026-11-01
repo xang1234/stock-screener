@@ -31,7 +31,10 @@ from app.schemas.validation import (
 )
 from app.services.benchmark_registry_service import benchmark_registry
 from app.services.economic_theme_read_service import EconomicThemeReader
-from app.services.market_calendar_service import CalendarCoverageExpired, MarketCalendarService
+from app.services.market_calendar_service import (
+    CalendarCoverageExpired,
+    MarketCalendarService,
+)
 from app.services.price_cache_service import PriceCacheService
 from app.utils.market_hours import (
     EASTERN,
