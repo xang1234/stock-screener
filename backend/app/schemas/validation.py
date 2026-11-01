@@ -76,6 +76,7 @@ class ValidationOverviewResponse(BaseModel):
 
     source_kind: ValidationSourceKind
     lookback_days: int
+    market: str
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
     failure_clusters: list[ValidationFailureCluster]

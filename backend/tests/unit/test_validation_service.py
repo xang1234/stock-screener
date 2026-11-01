@@ -110,9 +110,12 @@ def _add_pick(session, run, symbol, composite_score, *, minervini_score=80.0, ca
             composite_score=composite_score,
             overall_rating=5,
             passes_count=3,
-            minervini_score=minervini_score,
-            canslim_score=canslim_score,
-            details_json={"stage": 2, "ibd_industry_group": "Semis"},
+            details_json={
+                "stage": 2,
+                "ibd_industry_group": "Semis",
+                "minervini_score": minervini_score,
+                "canslim_score": canslim_score,
+            },
         )
     )
 
@@ -141,6 +144,8 @@ def test_scan_pick_top_ten_is_taken_among_rows_scored_by_both_methods_and_not_fu
     _add_pick(session, run, "IPOX", 99.0, minervini_score=None, canslim_score=None)
     _add_universe(session, "HALF")
     _add_pick(session, run, "HALF", 98.5, canslim_score=None)
+    _add_universe(session, "FLAH")
+    _add_pick(session, run, "FLAH", 98.4, minervini_score=None)
     _add_universe(session, "MRVU", industry="Exchange Traded Fund")
     _add_pick(session, run, "MRVU", 98.0)
     _add_universe(session, "PFD", is_common_stock=False)

@@ -9,11 +9,12 @@ from statistics import median
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import case, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import (
     StockValidationResponse,
@@ -40,6 +41,17 @@ RECENT_EVENTS_LIMIT = 25
 FAILURE_CLUSTERS_LIMIT = 5
 PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
+DEFAULT_MARKET = "US"
+
+# A pick is a stock both core methods scored. Rows only the IPO screener ran
+# (minervini/canslim NULL) and funds otherwise top the composite ranking.
+# is_common_stock alone misses ETFs: finviz marks them common stock.
+SCAN_PICK_ELIGIBILITY = and_(
+    StockFeatureDaily.minervini_score.is_not(None),
+    StockFeatureDaily.canslim_score.is_not(None),
+    StockUniverse.is_common_stock.is_not(False),
+    StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +154,14 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _symbol_markets(db: Session, symbols: set[str]) -> dict[str, str]:
+    return dict(
+        db.query(StockUniverse.symbol, StockUniverse.market)
+        .filter(StockUniverse.symbol.in_(symbols))
+        .all()
+    )
+
+
 class ScanPickValidationSource:
     """Extract one validation event per top scan pick in a published run."""
 
@@ -150,6 +170,7 @@ class ScanPickValidationSource:
         db: Session,
         *,
         cutoff_date: date,
+        market: str,
         until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
@@ -172,9 +193,12 @@ class ScanPickValidationSource:
                 rank_expr,
             )
             .join(StockFeatureDaily, StockFeatureDaily.run_id == FeatureRun.id)
+            .join(StockUniverse, StockUniverse.symbol == StockFeatureDaily.symbol)
             .filter(
                 FeatureRun.status == "published",
                 FeatureRun.as_of_date >= cutoff_date,
+                StockUniverse.market == market,
+                SCAN_PICK_ELIGIBILITY,
             )
             .subquery()
         )
@@ -228,6 +252,7 @@ class ThemeAlertValidationSource:
         db: Session,
         *,
         cutoff_date: date,
+        market: str,
         until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
@@ -277,6 +302,8 @@ class ThemeAlertValidationSource:
                     )
                 )
 
+        markets = _symbol_markets(db, {event.symbol for event in events})
+        events = [event for event in events if markets.get(event.symbol, DEFAULT_MARKET) == market]
         if not events:
             return [], ["no_matching_theme_alerts"]
         return events, []
@@ -479,17 +506,21 @@ class ValidationService:
         source_kind: ValidationSourceKind,
         lookback_days: int,
         as_of_date: date | None = None,
+        market: str = DEFAULT_MARKET,
     ) -> ValidationOverviewResponse:
+        market = market.strip().upper()
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         payload = self._build_source_payload(
             db,
             source_kind=source_kind,
             lookback_days=lookback_days,
             as_of_date=effective_as_of_date,
+            market=market,
         )
         return ValidationOverviewResponse(
             source_kind=source_kind,
             lookback_days=lookback_days,
+            market=market,
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
@@ -506,6 +537,7 @@ class ValidationService:
         as_of_date: date | None = None,
     ) -> StockValidationResponse:
         symbol = symbol.upper()
+        market = _symbol_markets(db, {symbol}).get(symbol, DEFAULT_MARKET)
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         source_breakdown: list[ValidationSourceBreakdown] = []
         merged_events: list[ValidationEvent] = []
@@ -518,6 +550,7 @@ class ValidationService:
                 source_kind=source_kind,
                 lookback_days=lookback_days,
                 as_of_date=effective_as_of_date,
+                market=market,
                 symbol=symbol,
             )
             source_breakdown.append(
@@ -559,15 +592,21 @@ class ValidationService:
         *,
         source_kind: ValidationSourceKind,
         lookback_days: int,
+        market: str,
         as_of_date: date | None = None,
         symbol: str | None = None,
     ) -> dict[str, Any]:
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         cutoff_date = effective_as_of_date - timedelta(days=lookback_days)
-        raw_events, degraded_reasons = self._collect_raw_events(
+        source = (
+            self._scan_pick_source
+            if source_kind == ValidationSourceKind.SCAN_PICK
+            else self._theme_alert_source
+        )
+        raw_events, degraded_reasons = source.collect(
             db,
-            source_kind=source_kind,
             cutoff_date=cutoff_date,
+            market=market,
             until_date=effective_as_of_date,
             symbol=symbol,
         )
@@ -589,29 +628,6 @@ class ValidationService:
             "failure_clusters": self._failure_cluster_builder.build(evaluated_events),
             "degraded_reasons": _dedupe(degraded_reasons),
         }
-
-    def _collect_raw_events(
-        self,
-        db: Session,
-        *,
-        source_kind: ValidationSourceKind,
-        cutoff_date: date,
-        until_date: date | None = None,
-        symbol: str | None = None,
-    ) -> tuple[list[RawValidationEvent], list[str]]:
-        if source_kind == ValidationSourceKind.SCAN_PICK:
-            return self._scan_pick_source.collect(
-                db,
-                cutoff_date=cutoff_date,
-                until_date=until_date,
-                symbol=symbol,
-            )
-        return self._theme_alert_source.collect(
-            db,
-            cutoff_date=cutoff_date,
-            until_date=until_date,
-            symbol=symbol,
-        )
 
     def _build_horizon_summaries(
         self,
