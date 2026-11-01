@@ -74,6 +74,7 @@ describe('ValidationPage', () => {
           mfe_5s_pct: 4.2,
           mae_5s_pct: -1.2,
           counted: true,
+          counted_horizons: [1, 5, 20, 60],
           attributes: { symbol: 'NVDA' },
         },
         {
@@ -86,6 +87,7 @@ describe('ValidationPage', () => {
           return_20s_pct: 2.0,
           return_60s_pct: null,
           counted: false,
+          counted_horizons: [1, 20],
           attributes: { symbol: 'AMD' },
         },
       ],
@@ -137,12 +139,11 @@ describe('ValidationPage', () => {
     expect(within(eventRow).queryByText('repeat')).not.toBeInTheDocument();
     const repeatRow = screen.getByRole('link', { name: 'AMD' }).closest('tr');
     expect(within(repeatRow).getByText('repeat')).toBeInTheDocument();
-    const fiveSessionHeaders = ['5S', '5S vs SPY', 'MFE', 'MAE'];
     expect(repeatRow).not.toHaveStyle({ opacity: '0.55' });
-    for (const header of ['1S', '20S', '60S']) {
+    for (const header of ['1S', '20S']) {
       expect(repeatRow.cells[headers.indexOf(header)].className).toBe(eventRow.cells[headers.indexOf(header)].className);
     }
-    for (const header of fiveSessionHeaders) {
+    for (const header of ['5S', '60S', '5S vs SPY', 'MFE', 'MAE']) {
       const cell = repeatRow.cells[headers.indexOf(header)];
       expect(cell.className).not.toBe(eventRow.cells[headers.indexOf(header)].className);
       expect(cell).toHaveStyle({ color: 'rgb(139, 147, 167)' });

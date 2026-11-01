@@ -1512,6 +1512,31 @@ def test_a_repeat_ten_sessions_later_counts_at_five_sessions_but_not_at_twenty(s
     ] == [("2026-02-11", True, 6.25, None), ("2026-02-01", True, 6.25, 6.25)]
 
 
+def test_recent_events_name_the_horizons_each_event_counts_at(session):
+    _add_universe(session, "NVDA")
+    for as_of in (date(2026, 2, 1), date(2026, 2, 18), date(2026, 2, 21)):
+        _add_pick(session, _add_run(session, as_of), "NVDA", 90.0)
+    session.commit()
+    service = _service({"NVDA": _history_frame(date(2026, 2, 2), [FLAT_ROW] * 63)})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=90,
+        as_of_date=FIXED_TODAY,
+    )
+
+    # The 2026-02-21 pick repeats inside the 2026-02-18 pick's 5 sessions, but the
+    # 2026-02-18 pick is itself a 20-session repeat, so it blocks nothing at 20.
+    assert [
+        (event.event_at, event.counted, event.counted_horizons) for event in payload.recent_events
+    ] == [
+        ("2026-02-21", False, [1, 20]),
+        ("2026-02-18", True, [1, 5]),
+        ("2026-02-01", True, [1, 5, 20, 60]),
+    ]
+
+
 def test_a_pick_seventy_days_before_the_cutoff_blocks_repeats_inside_its_sixty_sessions(session):
     _add_universe(session, "NVDA")
     _add_pick(session, _add_run(session, date(2025, 12, 26)), "NVDA", 90.0)
