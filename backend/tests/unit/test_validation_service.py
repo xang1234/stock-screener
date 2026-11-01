@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 import app.services.validation_service as validation_service_module
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import ValidationSourceKind
 from app.services.validation_service import (
@@ -42,6 +43,7 @@ def session():
         tables=[
             FeatureRun.__table__,
             StockFeatureDaily.__table__,
+            StockUniverse.__table__,
             ThemeCluster.__table__,
             ThemeAlert.__table__,
         ],
@@ -56,6 +58,7 @@ def session():
             tables=[
                 ThemeAlert.__table__,
                 ThemeCluster.__table__,
+                StockUniverse.__table__,
                 StockFeatureDaily.__table__,
                 FeatureRun.__table__,
             ],
@@ -79,36 +82,151 @@ def _history_frame(start: date, rows: list[tuple[float, float, float, float]]):
     )
 
 
-def test_scan_pick_validation_source_limits_to_top_ten_and_breaks_ties_by_symbol(session):
-    run = FeatureRun(
-        as_of_date=FIXED_TODAY,
-        run_type="daily_snapshot",
-        status="published",
-    )
+def _add_run(session, as_of_date: date) -> FeatureRun:
+    run = FeatureRun(as_of_date=as_of_date, run_type="daily_snapshot", status="published")
     session.add(run)
     session.commit()
     session.refresh(run)
+    return run
+
+
+def _add_universe(session, symbol, *, market="US", industry="Semiconductors", is_common_stock=True):
+    session.add(
+        StockUniverse(
+            symbol=symbol,
+            market=market,
+            industry=industry,
+            is_common_stock=is_common_stock,
+        )
+    )
+
+
+def _add_pick(session, run, symbol, composite_score, *, minervini_score=80.0, canslim_score=70.0):
+    session.add(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol=symbol,
+            as_of_date=run.as_of_date,
+            composite_score=composite_score,
+            overall_rating=5,
+            passes_count=3,
+            minervini_score=minervini_score,
+            canslim_score=canslim_score,
+            details_json={"stage": 2, "ibd_industry_group": "Semis"},
+        )
+    )
+
+
+def test_scan_pick_validation_source_limits_to_top_ten_and_breaks_ties_by_symbol(session):
+    run = _add_run(session, FIXED_TODAY)
 
     symbols = ["ZZZ", "BBB", "AAA", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH", "III", "JJJ", "KKK"]
     for symbol in symbols:
-        session.add(
-            StockFeatureDaily(
-                run_id=run.id,
-                symbol=symbol,
-                as_of_date=run.as_of_date,
-                composite_score=90.0,
-                overall_rating=5,
-                passes_count=3,
-                details_json={"stage": 2, "ibd_industry_group": "Semis"},
-            )
-        )
+        _add_universe(session, symbol)
+        _add_pick(session, run, symbol, 90.0)
     session.commit()
 
     source = ScanPickValidationSource()
-    events, degraded = source.collect(session, cutoff_date=FIXED_TODAY - timedelta(days=1))
+    events, degraded = source.collect(
+        session, cutoff_date=FIXED_TODAY - timedelta(days=1), market="US"
+    )
 
     assert degraded == []
     assert [event.symbol for event in events] == sorted(symbols)[:SCAN_PICK_TOP_N]
+
+
+def test_scan_pick_top_ten_is_taken_among_rows_scored_by_both_methods_and_not_funds(session):
+    run = _add_run(session, FIXED_TODAY)
+    _add_universe(session, "IPOX")
+    _add_pick(session, run, "IPOX", 99.0, minervini_score=None, canslim_score=None)
+    _add_universe(session, "HALF")
+    _add_pick(session, run, "HALF", 98.5, canslim_score=None)
+    _add_universe(session, "MRVU", industry="Exchange Traded Fund")
+    _add_pick(session, run, "MRVU", 98.0)
+    _add_universe(session, "PFD", is_common_stock=False)
+    _add_pick(session, run, "PFD", 97.0)
+    for offset in range(11):
+        symbol = f"S{offset:02d}"
+        _add_universe(session, symbol, industry=None if offset == 0 else "Semiconductors")
+        _add_pick(session, run, symbol, 90.0 - offset)
+    session.commit()
+
+    events, degraded = ScanPickValidationSource().collect(
+        session, cutoff_date=FIXED_TODAY - timedelta(days=1), market="US"
+    )
+
+    assert degraded == []
+    assert [event.symbol for event in events] == [
+        "S00", "S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09",
+    ]
+
+
+def test_scan_picks_are_filtered_to_the_requested_market(session):
+    us_run = _add_run(session, FIXED_TODAY)
+    hk_run = _add_run(session, FIXED_TODAY)
+    _add_universe(session, "AAPL")
+    _add_pick(session, us_run, "AAPL", 80.0)
+    _add_universe(session, "0700.HK", market="HK", industry=None)
+    _add_pick(session, hk_run, "0700.HK", 95.0)
+    session.commit()
+    service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
+
+    us = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+        market="us",
+    )
+    hk = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+        market="HK",
+    )
+
+    assert (us.market, [event.attributes["symbol"] for event in us.recent_events]) == ("US", ["AAPL"])
+    assert (hk.market, [event.attributes["symbol"] for event in hk.recent_events]) == ("HK", ["0700.HK"])
+
+
+def test_theme_alert_tickers_are_filtered_to_the_requested_market(session):
+    _add_universe(session, "NVDA")
+    _add_universe(session, "0700.HK", market="HK")
+    session.add(
+        ThemeAlert(
+            alert_type="breakout",
+            title="Mixed tickers",
+            severity="warning",
+            related_tickers=["NVDA", "0700.HK", "NOTLISTED"],
+            triggered_at=FIXED_NOW,
+        )
+    )
+    session.commit()
+    source = ThemeAlertValidationSource()
+    cutoff = FIXED_TODAY - timedelta(days=7)
+
+    us_events, _ = source.collect(session, cutoff_date=cutoff, market="US")
+    hk_events, _ = source.collect(session, cutoff_date=cutoff, market="HK")
+
+    assert [event.symbol for event in us_events] == ["NVDA", "NOTLISTED"]
+    assert [event.symbol for event in hk_events] == ["0700.HK"]
+
+
+def test_stock_validation_uses_the_symbols_own_market(session):
+    hk_run = _add_run(session, FIXED_TODAY)
+    _add_universe(session, "0700.HK", market="HK")
+    _add_pick(session, hk_run, "0700.HK", 95.0)
+    session.commit()
+    service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
+
+    payload = service.get_stock_validation(
+        session, symbol="0700.hk", lookback_days=30, as_of_date=FIXED_TODAY
+    )
+
+    assert [(event.source_kind, event.source_ref) for event in payload.recent_events] == [
+        (ValidationSourceKind.SCAN_PICK, f"run:{hk_run.id}")
+    ]
 
 
 def test_theme_alert_validation_source_filters_supported_types_and_expands_related_tickers(session):
@@ -154,7 +272,9 @@ def test_theme_alert_validation_source_filters_supported_types_and_expands_relat
     session.commit()
 
     source = ThemeAlertValidationSource()
-    events, degraded = source.collect(session, cutoff_date=FIXED_TODAY - timedelta(days=7))
+    events, degraded = source.collect(
+        session, cutoff_date=FIXED_TODAY - timedelta(days=7), market="US"
+    )
 
     assert degraded == []
     assert [(event.attributes["alert_type"], event.symbol) for event in events] == [
@@ -203,6 +323,7 @@ def test_theme_alert_validation_source_uses_eastern_day_bounds(session):
         session,
         cutoff_date=date(2026, 4, 4),
         until_date=date(2026, 4, 4),
+        market="US",
     )
 
     assert degraded == []
