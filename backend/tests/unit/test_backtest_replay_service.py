@@ -92,7 +92,7 @@ def _add_run(db, as_of: date, ratings: dict[str, int], *, market="US") -> int:
     return run.id
 
 
-def _add_prices(db, symbol: str, closes) -> None:
+def _add_prices(db, symbol: str, closes, sessions=SESSIONS) -> None:
     db.add_all(
         StockPrice(
             symbol=symbol,
@@ -104,7 +104,7 @@ def _add_prices(db, symbol: str, closes) -> None:
             adj_close=close,
             volume=1_000_000,
         )
-        for day, close in zip(SESSIONS, closes)
+        for day, close in zip(sessions, closes)
     )
     db.commit()
 
@@ -386,6 +386,20 @@ def _fail_minervini_for(monkeypatch, *symbols: str) -> None:
         return has_sufficient_data(self, min_days)
 
     monkeypatch.setattr(StockData, "has_sufficient_data", failing)
+
+
+def test_a_symbol_too_short_to_rate_is_skipped_without_failing_the_session(session_factory):
+    db = session_factory()
+    run_id = _add_run(db, D1, {"AAA": 95, "SHORT": 90})
+    _add_prices(db, "AAA", _uptrend(0.004))
+    _add_prices(db, "SHORT", _uptrend(0.004)[201:301], sessions=SESSIONS[201:301])
+    _add_prices(db, "SPY", _uptrend(0.001))
+    db.close()
+
+    replays = list(replay_market(session_factory, "US"))
+
+    assert [(r.scored, r.passed, r.errors, r.failure) for r in replays] == [(2, 1, 0, None)]
+    assert [row[:2] + row[3:] for row in _stored_picks(session_factory, D1)] == [(1, "AAA", 95, run_id)]
 
 
 def test_a_session_where_every_symbol_errors_keeps_its_stored_picks(session_factory, monkeypatch):
