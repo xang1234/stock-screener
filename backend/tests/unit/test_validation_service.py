@@ -912,6 +912,30 @@ def test_overview_reports_benchmark_relative_returns(session):
     } == {"NVDA": (3.0, 10.0), "AMD": (-1.0, -4.0), "MU": (4.0, 1.0)}
 
 
+def test_overview_without_a_cached_benchmark_reports_returns_but_no_excess(session):
+    run = _add_run(session, date(2026, 3, 27))
+    _add_universe(session, "NVDA")
+    _add_pick(session, run, "NVDA", 90.0)
+    session.commit()
+    service = _service({"NVDA": _history_frame(date(2026, 3, 28), NVDA_ROWS)})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert (payload.benchmark_symbol, payload.degraded_reasons) == (
+        None,
+        ["missing_benchmark_prices"],
+    )
+    assert [
+        (h.sample_size, h.avg_return_pct, h.avg_excess_return_pct, h.excess_sample_size)
+        for h in payload.horizons
+    ] == [(1, 4.0, None, 0), (1, 12.0, None, 0)]
+
+
 def test_overview_reports_how_many_events_the_excess_figures_cover(session):
     _add_universe(session, "NVDA")
     _add_universe(session, "AMD")
