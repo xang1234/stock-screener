@@ -28,7 +28,6 @@ from app.scripts import replay_scan_picks
 from app.services.backtest_replay_service import (
     ProviderFetchAttempted,
     ReplayPick,
-    SessionReplay,
     minervini_orchestrator,
     replay_market,
     select_picks,
