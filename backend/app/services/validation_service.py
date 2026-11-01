@@ -60,6 +60,7 @@ STOP_LOSS_PCT = 7.0
 # while no symbol's chain of overlapping picks reaches further back: an older pick decides
 # whether the next one counts, and so whether that one blocks a pick in the lookback. Upgrade
 # path: replay every earlier pick of the window's symbols, which means ranking every earlier run.
+# Replay picks are stored already, so they count over all of them instead.
 OVERLAP_LOOKBEHIND = timedelta(days=math.ceil(max(HORIZONS) * 7 / 5) + 21)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
@@ -842,7 +843,11 @@ class ValidationService:
     ) -> dict[str, Any]:
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         cutoff_date = effective_as_of_date - timedelta(days=lookback_days)
-        collect_from = cutoff_date - OVERLAP_LOOKBEHIND
+        collect_from = (
+            date.min
+            if source_kind == ValidationSourceKind.REPLAY_PICK
+            else cutoff_date - OVERLAP_LOOKBEHIND
+        )
         raw_events, degraded_reasons = self._sources[source_kind].collect(
             db,
             cutoff_date=collect_from,
@@ -863,7 +868,11 @@ class ValidationService:
             # Ending at ``through``, which never passes verified coverage, drops today's partial
             # bar while the session is open. A bar fetched mid-session stays partial until the
             # after-close refresh, which can run after this cut-off moves.
-            sessions=self._market_calendar.trading_days(market, collect_from, through),
+            sessions=self._market_calendar.trading_days(
+                market,
+                min((_event_date(event.event_at) for event in raw_events), default=cutoff_date),
+                through,
+            ),
         )
         events = [
             event
