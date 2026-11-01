@@ -771,7 +771,12 @@ class ValidationService:
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
-            freshness=self._build_freshness(db, as_of_date=effective_as_of_date, market=market),
+            freshness=self._build_freshness(
+                db,
+                as_of_date=effective_as_of_date,
+                market=market,
+                include_replay=source_kind == ValidationSourceKind.REPLAY_PICK,
+            ),
             degraded_reasons=payload["degraded_reasons"],
         )
 
@@ -953,7 +958,12 @@ class ValidationService:
         )
 
     def _build_freshness(
-        self, db: Session, *, market: str, as_of_date: date | None = None
+        self,
+        db: Session,
+        *,
+        market: str,
+        as_of_date: date | None = None,
+        include_replay: bool = False,
     ) -> ValidationFreshness:
         feature_query = db.query(func.max(FeatureRun.as_of_date)).filter(
             FeatureRun.status == "published", RUN_MARKET == market
@@ -972,13 +982,15 @@ class ValidationService:
                 alert_query = alert_query.filter(ThemeAlert.triggered_at < cutoff)
             latest_theme_alert_at = alert_query.scalar()
 
-        replay_query = db.query(func.max(BacktestReplayPick.as_of_date)).filter(
-            BacktestReplayPick.market == market,
-            BacktestReplayPick.definition_version == DEFINITION_VERSION,
-        )
-        if as_of_date is not None:
-            replay_query = replay_query.filter(BacktestReplayPick.as_of_date <= as_of_date)
-        latest_replay_as_of_date = replay_query.scalar()
+        latest_replay_as_of_date = None
+        if include_replay:
+            replay_query = db.query(func.max(BacktestReplayPick.as_of_date)).filter(
+                BacktestReplayPick.market == market,
+                BacktestReplayPick.definition_version == DEFINITION_VERSION,
+            )
+            if as_of_date is not None:
+                replay_query = replay_query.filter(BacktestReplayPick.as_of_date <= as_of_date)
+            latest_replay_as_of_date = replay_query.scalar()
         return ValidationFreshness(
             latest_feature_as_of_date=(
                 latest_feature_as_of_date.isoformat() if latest_feature_as_of_date else None

@@ -1905,7 +1905,7 @@ def test_freshness_reports_the_latest_replayed_session_of_the_market_and_definit
     freshness = [
         _service().get_overview(
             session,
-            source_kind=ValidationSourceKind.SCAN_PICK,
+            source_kind=ValidationSourceKind.REPLAY_PICK,
             lookback_days=30,
             as_of_date=FIXED_TODAY,
             market=market,

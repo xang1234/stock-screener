@@ -225,7 +225,7 @@ describe('ValidationPage', () => {
     await waitFor(() => {
       expect(getValidationOverview).toHaveBeenLastCalledWith('replay_pick', 90, 'US');
     });
-    expect(screen.getByText(
+    expect(await screen.findByText(
       "Price-only Minervini replay: the top 10 per session among stocks passing the template. "
       + "Survivor-biased (today's universe) and not the live composite score. "
       + 'Replayed through 2026-10-29.',
