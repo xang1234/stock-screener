@@ -467,7 +467,7 @@ def test_price_outcome_calculator_rolls_to_next_trading_session_and_computes_win
     )
     calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
 
-    evaluated, degraded = calculator.evaluate_many([saturday_event])
+    evaluated, degraded, _ = calculator.evaluate_many([saturday_event])
 
     assert degraded == []
     assert len(evaluated) == 1
@@ -499,7 +499,7 @@ def test_price_outcome_calculator_marks_missing_five_session_history():
     )
     calculator = PriceOutcomeCalculator(_FakePriceCache({"MSFT": history}))
 
-    evaluated, _ = calculator.evaluate_many([event])
+    evaluated, _, _ = calculator.evaluate_many([event])
 
     assert evaluated[0].return_1s_pct == pytest.approx(1.0)
     assert evaluated[0].return_5s_pct is None
@@ -526,7 +526,7 @@ def test_price_outcome_calculator_degrades_zero_open_entry_prices():
     )
     calculator = PriceOutcomeCalculator(_FakePriceCache({"MSFT": history}))
 
-    evaluated, degraded = calculator.evaluate_many([event])
+    evaluated, degraded, _ = calculator.evaluate_many([event])
 
     assert degraded == []
     assert evaluated[0].entry_at == date(2026, 4, 2)
@@ -566,7 +566,7 @@ def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only(
         attributes={"symbol": "NVDA"},
     )
 
-    evaluated, degraded = calculator.evaluate_many([premarket_event, after_open_event])
+    evaluated, degraded, _ = calculator.evaluate_many([premarket_event, after_open_event])
 
     assert degraded == []
     assert evaluated[0].entry_at == date(2026, 4, 2)
@@ -596,7 +596,7 @@ def test_price_outcome_calculator_uses_eastern_calendar_day_for_late_evening_the
         attributes={"symbol": "NVDA"},
     )
 
-    evaluated, degraded = calculator.evaluate_many([late_evening_event])
+    evaluated, degraded, _ = calculator.evaluate_many([late_evening_event])
 
     assert degraded == []
     assert evaluated[0].entry_at == date(2026, 4, 2)
@@ -659,3 +659,105 @@ def test_normalize_price_history_keeps_the_exchange_date_of_tz_aware_bars():
     normalized = validation_service_module._normalize_price_history(frame)
 
     assert [d.date().isoformat() for d in normalized.index] == ["2026-03-09", "2026-03-10"]
+
+
+NVDA_ROWS = [(100, 105, 99, 104), (104, 110, 102, 109), (109, 112, 103, 106), (106, 114, 101, 111), (111, 113, 98, 112)]
+BENCHMARK_ROWS = [(500, 506, 499, 505), (505, 507, 503, 506), (506, 508, 504, 507), (507, 509, 505, 508), (508, 511, 507, 510)]
+
+
+def test_price_outcome_calculator_measures_excess_over_the_first_cached_benchmark():
+    event = RawValidationEvent(
+        symbol="NVDA",
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        source_ref="run:1",
+        event_at=date(2026, 4, 4),
+        attributes={"symbol": "NVDA"},
+    )
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache(
+            {
+                "NVDA": _history_frame(date(2026, 4, 6), NVDA_ROWS),
+                "SPY": None,
+                "IVV": _history_frame(date(2026, 4, 6), BENCHMARK_ROWS),
+            }
+        )
+    )
+
+    evaluated, degraded, benchmark_symbol = calculator.evaluate_many(
+        [event], benchmark_candidates=["SPY", "IVV"]
+    )
+
+    assert (benchmark_symbol, degraded) == ("IVV", [])
+    assert evaluated[0].exit_at == date(2026, 4, 10)
+    assert evaluated[0].excess_return_1s_pct == pytest.approx(3.0)
+    assert evaluated[0].excess_return_5s_pct == pytest.approx(10.0)
+
+
+def test_price_outcome_calculator_degrades_once_when_the_benchmark_lacks_a_window_bar():
+    events = [
+        RawValidationEvent(
+            symbol=symbol,
+            source_kind=ValidationSourceKind.SCAN_PICK,
+            source_ref="run:1",
+            event_at=date(2026, 4, 4),
+            attributes={"symbol": symbol},
+        )
+        for symbol in ("NVDA", "AMD")
+    ]
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache(
+            {
+                "NVDA": _history_frame(date(2026, 4, 6), NVDA_ROWS),
+                "AMD": _history_frame(date(2026, 4, 6), NVDA_ROWS),
+                "SPY": _history_frame(date(2026, 4, 6), BENCHMARK_ROWS[:4]),
+            }
+        )
+    )
+
+    evaluated, degraded, benchmark_symbol = calculator.evaluate_many(
+        events, benchmark_candidates=["SPY", "IVV"]
+    )
+
+    assert (benchmark_symbol, degraded) == ("SPY", ["missing_benchmark_prices"])
+    assert [(item.excess_return_1s_pct, item.excess_return_5s_pct) for item in evaluated] == [
+        (pytest.approx(3.0), None),
+        (pytest.approx(3.0), None),
+    ]
+
+
+def test_overview_reports_benchmark_relative_returns(session):
+    run = _add_run(session, date(2026, 3, 27))
+    for symbol, score in (("NVDA", 95.0), ("AMD", 90.0), ("MU", 85.0)):
+        _add_universe(session, symbol)
+        _add_pick(session, run, symbol, score)
+    session.commit()
+    start = date(2026, 3, 28)
+    service = ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(
+            _FakePriceCache(
+                {
+                    "NVDA": _history_frame(start, NVDA_ROWS),
+                    "AMD": _history_frame(start, [(50, 51, 49, 50)] * 4 + [(50, 51, 48, 49)]),
+                    "MU": _history_frame(start, [(200, 211, 199, 210)] + [(210, 211, 205, 206)] * 4),
+                    "SPY": _history_frame(start, BENCHMARK_ROWS),
+                }
+            )
+        )
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert (payload.benchmark_symbol, payload.degraded_reasons) == ("SPY", [])
+    assert [
+        (h.horizon_sessions, h.avg_excess_return_pct, h.median_excess_return_pct)
+        for h in payload.horizons
+    ] == [(1, 2.0, 3.0), (5, 2.3333, 1.0)]
+    assert {
+        event.attributes["symbol"]: (event.excess_return_1s_pct, event.excess_return_5s_pct)
+        for event in payload.recent_events
+    } == {"NVDA": (3.0, 10.0), "AMD": (-1.0, -4.0), "MU": (4.0, 1.0)}
