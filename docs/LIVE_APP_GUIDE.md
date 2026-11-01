@@ -62,7 +62,7 @@ It is read once at startup, so changing it means editing `.env` and recreating t
 | `/scan` | Scan | Multi-market screener: strategy defaults, 80+ filters, named AND/OR setups, composite scoring, CSV export, chart drill-ins |
 | `/breadth` | Breadth | StockBee-style breadth indicators, benchmark overlay, movers, trend windows |
 | `/groups` | Groups | IBD-style group/sector rankings, movers, constituents, history, and the RRG |
-| `/validation` | Backtest | Deterministic follow-through validation of published scan picks and theme alerts |
+| `/validation` | Backtest | Deterministic follow-through validation of each run's top 10 fully scored scan picks and of US theme alerts |
 | `/themes` | Themes | *(feature-gated)* theme rankings, review/merge queues, source and pipeline controls |
 | `/chatbot` | Assistant | *(feature-gated)* AI research assistant with web search, citations, history, watchlist actions |
 | `/stocks/:ticker` | Stock Detail | Charts, fundamentals, technicals, theme membership, watchlist actions, validation history |
@@ -419,17 +419,20 @@ Symbol-level research view:
 
 ## Backtest (`/validation`)
 
-Deterministic follow-through check on what the app actually published — **top-10 scan picks per run** and **theme alerts** (breakout, velocity-spike) — computed from cached OHLCV, so results are reproducible.
+Deterministic follow-through check on the **top 10 fully scored stocks of each published scan run** and on **theme alerts** (breakout, velocity-spike). Outcomes come from cached OHLCV only, so results are reproducible.
 
-- **Scan picks** — the 10 highest composite scores in each published run, ranked only among stocks both Minervini and CANSLIM scored. Rows only the IPO screener scored, non-common stock, and Exchange Traded Funds are never picks. Runs published before the typed score columns (migration 0066) have no eligible picks.
-- **Market** — follows the header market selector. Picks and theme-alert tickers are limited to symbols listed in that market; an alert ticker missing from the stock universe counts as US.
+- **Scan picks** — the 10 highest composite scores in each published run, ranked only among stocks both Minervini and CANSLIM scored. Rows only the IPO screener scored, non-common stock, and Exchange Traded Funds are never picks. Rows written before the typed score columns (migration 0066) are judged by the scores in their stored details.
+- **Market** — follows the header market selector. Picks come from runs published for that market, including symbols since delisted from the stock universe.
+- **Theme alerts** — US only. Their entry timing follows the US session, so other markets show no alert events and the degraded reason `theme_alerts_us_only`. An alert ticker missing from the stock universe takes its market from its symbol suffix, else US.
 - **Lookback selector** — `30 / 90 / 180` days (default 90): which past signals to include.
 - **Outcome horizons** — fixed **1-session** and **5-session** forward returns, entered at the next session's open, plus MFE/MAE over the 5-session window.
-- **Benchmark-relative returns** — each event's return minus the market benchmark's return over the same dates (benchmark open on the entry day to its close on the entry day, or on the event's fifth session). The benchmark is the first of the market's candidates with cached history (US: SPY, then IVV).
-- **One window per symbol** — a symbol picked on consecutive days counts once: an event counts only when it enters after the previous counted event's fifth session for the same source and symbol, and a still-open window blocks later events. The API reports the dropped count as `suppressed_overlapping`.
-- **Metrics** — per horizon: sample size, positive rate (share of events with a return > 0), average and median return, average and median excess over the benchmark.
+- **Completed sessions only** — prices stop at the market's last completed trading day. During a session, the partial bar stored for today is ignored, so the newest picks show no outcome until the session closes.
+- **Benchmark-relative returns** — each event's return minus the market benchmark's return over the same dates (benchmark open on the entry day to its close on the entry day, or on the event's fifth session). The benchmark is the market candidate whose cached history ends latest, ties going to registry order (US: SPY, then IVV).
+- **One 5-session window per symbol** — a symbol picked on consecutive days counts once in the 5-session summary and the failure clusters: an event counts only when it enters after the previous counted event's fifth session for the same source and symbol, and a still-open window blocks later events. The 1-session summary counts every event. The API reports the dropped count as `suppressed_overlapping` on the 5-session summary. Recent events keep the repeats, shown muted as "repeat" (`counted: false`).
+- **Counting before the lookback** — picks from up to 14 days before the lookback start take part in the overlap rule, so a pick just before it still blocks the repeats after it. Those earlier picks appear in no metric or list.
+- **Metrics** — per horizon: sample size, positive rate (share of events with a return > 0), average and median return, average and median excess over the benchmark with the number of events they cover (`excess_sample_size`, shown as `n=`).
 - **Failure clusters** — losers bucketed by rating/stage/group (picks) or type/severity/theme (alerts).
-- **Freshness** — degraded-reason flags when price history is missing (`missing_price_cache`) or the benchmark lacks a bar on an event's dates (`missing_benchmark_prices`).
+- **Freshness** — the latest published run for the selected market. Degraded-reason flags come from the events the summaries count: price history is missing (`missing_price_cache`) or the benchmark lacks a bar on an event's dates (`missing_benchmark_prices`).
 
 ---
 
