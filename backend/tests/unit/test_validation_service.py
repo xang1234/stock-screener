@@ -1801,7 +1801,7 @@ def test_replay_picks_of_the_current_definition_are_scored_as_their_own_source(s
     ]
     assert [h.sample_size for h in payload.horizons] == [2, 2, 0, 0]
     assert [(c.cluster_key, c.label, c.sample_size) for c in payload.failure_clusters] == [
-        ("rs_band:80-89", "Rs Band: 80-89", 1),
+        ("rs_band:80-89", "RS Band: 80-89", 1),
         ("stage:2", "Stage: 2", 1),
     ]
 
