@@ -993,6 +993,31 @@ def test_a_missing_high_or_low_on_the_last_bar_keeps_the_earlier_extremes():
     assert _stop_figures(event) == [(1, 0.0, False, 3.125, -3.125), (5, 0.0, False, 12.5, -6.25)]
 
 
+def test_the_first_stop_after_the_fifth_session_sets_the_longer_horizons():
+    def stops_with(**hits):
+        rows = [(64, 64, 62, 64)] * 60
+        for session_number, row in hits.items():
+            rows[int(session_number[1:]) - 1] = row
+        return [
+            (horizon, outcome.stopped_return_pct, outcome.stopped_out)
+            for horizon, outcome in _evaluate_rows(rows).outcomes.items()
+        ]
+
+    # Session 6's intraday hit comes before session 30's worse gap, so it sets the exit.
+    assert stops_with(s6=(62, 63, 58, 60), s30=(40, 42, 38, 40)) == [
+        (1, 0.0, False), (5, 0.0, False), (20, -7.0, True), (60, -7.0, True),
+    ]
+    assert stops_with(s20=(62, 63, 59.52, 60)) == [
+        (1, 0.0, False), (5, 0.0, False), (20, -7.0, True), (60, -7.0, True),
+    ]
+    assert stops_with(s21=(48, 50, 46, 49)) == [
+        (1, 0.0, False), (5, 0.0, False), (20, 0.0, False), (60, -25.0, True),
+    ]
+    assert stops_with(s60=(56, 60, 55, 58)) == [
+        (1, 0.0, False), (5, 0.0, False), (20, 0.0, False), (60, -12.5, True),
+    ]
+
+
 def test_overview_degrades_once_when_the_benchmark_lacks_a_window_bar(session):
     run = _add_run(session, date(2026, 3, 27))
     for symbol in ("NVDA", "AMD"):
