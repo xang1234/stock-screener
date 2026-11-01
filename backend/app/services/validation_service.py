@@ -752,7 +752,8 @@ class ValidationService:
         evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
             raw_events,
             benchmark_candidates=benchmark_candidates,
-            # A mid-session fetch stores a partial bar for today.
+            # Drops today's partial bar while the session is open. A bar fetched mid-session
+            # stays partial until the after-close refresh, which can run after this cut-off moves.
             through=through,
         )
         events = [
