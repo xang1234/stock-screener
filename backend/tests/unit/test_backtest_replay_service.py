@@ -23,7 +23,7 @@ from app.infra.db.models.relative_strength import (
 )
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
-from app.scanners.base_screener import DataRequirements
+from app.scanners.base_screener import DataRequirements, StockData
 from app.scripts import replay_scan_picks
 from app.services.backtest_replay_service import (
     ProviderFetchAttempted,
@@ -314,7 +314,7 @@ def test_the_cli_dry_run_prints_each_sessions_picks_and_writes_nothing(capsys):
     assert (exit_code, lines[0], lines[2]) == (
         0,
         "Replaying US: dry run, nothing written",
-        "US: 1 sessions, 2 picks, 0 error rows",
+        "US: 1 sessions, 2 picks, 0 failed sessions",
     )
     assert re.fullmatch(
         rf"{D1} run={run_id} scored=2 passed=2 errors=0 \d+\.\d\ds AAA:\d+\.\d BBB:\d+\.\d", lines[1]
@@ -329,11 +329,48 @@ def test_the_cli_writes_picks_without_dry_run():
     assert _stored_symbols() == ["AAA", "BBB"]
 
 
-def test_the_cli_exits_nonzero_when_a_session_had_error_rows(monkeypatch, capsys):
-    replay = SessionReplay(
-        as_of_date=D1, market_rs_run_id=7, scored=3, passed=0, errors=1, picks=(), seconds=0.5
-    )
-    monkeypatch.setattr(replay_scan_picks, "replay_market", lambda *args, **kwargs: iter([replay]))
+def _fail_minervini_for(monkeypatch, *symbols: str) -> None:
+    """Raise inside MinerviniScanner.scan_stock's try block, which turns it into an "Error" sub-result."""
+    has_sufficient_data = StockData.has_sufficient_data
 
-    assert replay_scan_picks.main(["--market", "US", "--dry-run"]) == 1
-    assert capsys.readouterr().out.splitlines()[-1] == "US: 1 sessions, 0 picks, 1 error rows"
+    def failing(self, min_days=100):
+        if self.symbol in symbols:
+            raise RuntimeError(f"scoring bug on {self.symbol}")
+        return has_sufficient_data(self, min_days)
+
+    monkeypatch.setattr(StockData, "has_sufficient_data", failing)
+
+
+def test_a_session_where_every_symbol_errors_keeps_its_stored_picks(session_factory, monkeypatch):
+    db = session_factory()
+    _add_run(db, D1, {"AAA": 95, "BBB": 85})
+    _add_prices(db, "AAA", _uptrend(0.004))
+    _add_prices(db, "BBB", _uptrend(0.003))
+    _add_prices(db, "SPY", _uptrend(0.001))
+    db.close()
+    list(replay_market(session_factory, "US"))
+    stored = _stored_picks(session_factory, D1)
+    _fail_minervini_for(monkeypatch, "AAA", "BBB")
+
+    replays = list(replay_market(session_factory, "US"))
+
+    assert [(r.scored, r.errors, r.picks, r.failure) for r in replays] == [(2, 2, (), "scan errors")]
+    assert ([row[1] for row in stored], _stored_picks(session_factory, D1)) == (["AAA", "BBB"], stored)
+
+
+def test_the_cli_keeps_a_sessions_picks_and_exits_1_when_one_symbol_errors(monkeypatch, capsys):
+    run_id = _seed_two_leaders()
+    assert replay_scan_picks.main(["--market", "US"]) == 0
+    _fail_minervini_for(monkeypatch, "AAA")
+
+    exit_code = replay_scan_picks.main(["--market", "US"])
+
+    lines = capsys.readouterr().out.splitlines()
+    assert (exit_code, _stored_symbols(), lines[-1]) == (
+        1,
+        ["AAA", "BBB"],
+        "US: 1 sessions, 0 picks, 1 failed sessions",
+    )
+    assert re.fullmatch(
+        rf"{D1} run={run_id} scored=2 passed=1 errors=1 \d+\.\d\ds FAILED: scan errors", lines[-2]
+    )
