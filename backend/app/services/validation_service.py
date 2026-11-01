@@ -871,9 +871,11 @@ class ValidationService:
             # Ending at ``through``, which never passes verified coverage, drops today's partial
             # bar while the session is open. A bar fetched mid-session stays partial until the
             # after-close refresh, which can run after this cut-off moves.
+            # Starting no later than the cutoff keeps the session before ``through`` in the
+            # calendar even when every event falls on ``through``.
             sessions=self._market_calendar.trading_days(
                 market,
-                min((_event_date(event.event_at) for event in raw_events), default=cutoff_date),
+                min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)]),
                 through,
             ),
         )
