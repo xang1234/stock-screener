@@ -1210,6 +1210,34 @@ def test_a_gap_before_the_newest_cached_bar_still_degrades(session):
     assert payload.degraded_reasons == ["incomplete_price_history"]
 
 
+def test_a_symbol_whose_batch_has_not_refreshed_yet_is_pending_once_spy_has(session):
+    # The refresh writes SPY's 2026-01-30 bar before NVDA's batch runs.
+    payload = _winter_overview(
+        session, [("NVDA", date(2026, 1, 29))], {"NVDA": _winter_bars()[:-1]}
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 0, 0, 1), (5, 0, 0, 1), (20, 0, 0, 1), (60, 0, 0, 1)]
+    assert payload.degraded_reasons == []
+
+
+def test_histories_stale_for_many_sessions_skip_windows_that_closed(session):
+    # Every history ends 2026-01-15, ten sessions before the last completed one.
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2026, 1, 12))],
+        {"NVDA": _winter_bars()[:-10], "SPY": _winter_bars()[:-10]},
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 1, 0, 0), (5, 0, 1, 0), (20, 0, 0, 1), (60, 0, 0, 1)]
+    assert payload.degraded_reasons == ["incomplete_price_history"]
+
+
 def test_a_window_missing_a_session_blocks_repeats_only_until_its_calendar_exit(session):
     payload = _winter_overview(
         session,
