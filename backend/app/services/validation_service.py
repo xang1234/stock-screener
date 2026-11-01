@@ -74,16 +74,22 @@ RUN_MARKET = func.coalesce(
 )
 
 
+# is_common_stock alone misses ETFs: finviz marks them common stock. A symbol the
+# universe no longer lists passes, so delisted symbols' past picks still count.
+NOT_A_FUND = and_(
+    StockUniverse.is_common_stock.is_not(False),
+    StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
+)
+
+
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
 # (minervini/canslim NULL) and funds otherwise top the composite ranking.
-# is_common_stock alone misses ETFs: finviz marks them common stock.
 # Rows written before 20261013_0066 lack the typed scores and never qualify; reading
 # details_json instead costs a full JSON parse per row on Postgres.
 SCAN_PICK_ELIGIBILITY = and_(
     StockFeatureDaily.minervini_score.is_not(None),
     StockFeatureDaily.canslim_score.is_not(None),
-    StockUniverse.is_common_stock.is_not(False),
-    StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
+    NOT_A_FUND,
 )
 
 
