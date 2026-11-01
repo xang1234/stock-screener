@@ -23,6 +23,7 @@ from app.services.validation_service import (
     ScanPickValidationSource,
     ThemeAlertValidationSource,
     ValidationService,
+    drop_overlapping_windows,
 )
 from tests.helpers.taxonomy_authority import set_economic_authority
 
@@ -761,3 +762,64 @@ def test_overview_reports_benchmark_relative_returns(session):
         event.attributes["symbol"]: (event.excess_return_1s_pct, event.excess_return_5s_pct)
         for event in payload.recent_events
     } == {"NVDA": (3.0, 10.0), "AMD": (-1.0, -4.0), "MU": (4.0, 1.0)}
+
+
+def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
+    _add_universe(session, "NVDA")
+    for as_of in (date(2026, 3, 2), date(2026, 3, 3), date(2026, 3, 4), date(2026, 3, 6), date(2026, 3, 7)):
+        _add_pick(session, _add_run(session, as_of), "NVDA", 90.0)
+    session.commit()
+    service = ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(
+            _FakePriceCache({"NVDA": _history_frame(date(2026, 3, 3), [(10, 11, 9, 10.5)] * 12)})
+        )
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=60,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [event.attributes["run_as_of_date"] for event in payload.recent_events] == [
+        "2026-03-07",
+        "2026-03-02",
+    ]
+    assert [(h.sample_size, h.suppressed_overlapping) for h in payload.horizons] == [(2, 3), (2, 3)]
+
+
+def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None):
+    return EvaluatedValidationEvent(
+        raw=RawValidationEvent(
+            symbol=symbol,
+            source_kind=source_kind,
+            source_ref=source_ref,
+            event_at=date(2026, 3, 20),
+            attributes={},
+        ),
+        entry_at=entry_at,
+        entry_price=10.0 if entry_at else None,
+        return_1s_pct=1.0 if entry_at else None,
+        return_5s_pct=None,
+        mfe_5s_pct=None,
+        mae_5s_pct=None,
+        missing_horizons=frozenset({5}) if entry_at else frozenset({1, 5}),
+        exit_at=exit_at,
+    )
+
+
+def test_an_incomplete_window_blocks_later_events_for_the_same_source_and_symbol():
+    scan, alert = ValidationSourceKind.SCAN_PICK, ValidationSourceKind.THEME_ALERT
+    events = [
+        _evaluated(scan, "AAA", "run:2", date(2026, 3, 30)),
+        _evaluated(scan, "AAA", "run:1", date(2026, 3, 25)),
+        _evaluated(scan, "AAA", "run:3", None),
+        _evaluated(scan, "BBB", "run:4", date(2026, 3, 30)),
+        _evaluated(alert, "AAA", "alert:1", date(2026, 3, 30)),
+    ]
+
+    kept, suppressed = drop_overlapping_windows(events)
+
+    assert sorted(event.raw.source_ref for event in kept) == ["alert:1", "run:1", "run:3", "run:4"]
+    assert suppressed == 1
