@@ -14,6 +14,7 @@ from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import ValidationSourceKind
+from app.services.market_calendar_service import CalendarCoverageExpired
 from app.services.validation_service import (
     EvaluatedValidationEvent,
     FailureClusterBuilder,
@@ -1004,6 +1005,49 @@ def test_overview_ignores_bars_after_the_last_completed_session(session):
         (5, 0, 1),
     ]
     assert payload.recent_events[0].return_5s_pct is None
+
+
+class _ExpiredCalendar:
+    def last_completed_trading_day(self, market):
+        raise CalendarCoverageExpired(
+            market=market,
+            requested_date=FIXED_TODAY,
+            verified_through=date(2026, 3, 31),
+            source_url="https://example.test/holidays",
+            operations_doc="docs/OPERATIONS.md",
+        )
+
+
+def test_overview_caps_prices_at_verified_coverage_when_the_calendar_expires(session):
+    run = _add_run(session, date(2026, 3, 27))
+    _add_universe(session, "NVDA")
+    _add_pick(session, run, "NVDA", 95.0)
+    session.commit()
+    start = date(2026, 3, 28)
+    service = ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(
+            _FakePriceCache(
+                {
+                    "NVDA": _history_frame(start, NVDA_ROWS),
+                    "SPY": _history_frame(start, BENCHMARK_ROWS),
+                }
+            )
+        ),
+        market_calendar=_ExpiredCalendar(),
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [(h.horizon_sessions, h.sample_size, h.skipped_missing_history) for h in payload.horizons] == [
+        (1, 1, 0),
+        (5, 0, 1),
+    ]
+    assert payload.degraded_reasons == ["calendar_coverage_expired"]
 
 
 def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
