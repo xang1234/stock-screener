@@ -77,17 +77,25 @@ class _FakePriceCache:
 
 
 class _FixedCalendar:
-    def __init__(self, last_completed: date):
+    """Every day is a session, as in ``_history_frame``, unless ``sessions`` lists them."""
+
+    def __init__(self, last_completed: date, sessions=None):
         self._last_completed = last_completed
+        self._sessions = sessions
 
     def last_completed_trading_day(self, market):
         return self._last_completed
 
+    def trading_days(self, market, start, end):
+        if self._sessions is None:
+            return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+        return [day for day in self._sessions if start <= day <= end]
 
-def _service(histories=None, *, last_completed=FIXED_TODAY):
+
+def _service(histories=None, *, last_completed=FIXED_TODAY, sessions=None):
     return ValidationService(
         outcome_calculator=PriceOutcomeCalculator(_FakePriceCache(histories or {})),
-        market_calendar=_FixedCalendar(last_completed),
+        market_calendar=_FixedCalendar(last_completed, sessions),
     )
 
 
@@ -1016,6 +1024,93 @@ def test_the_first_stop_after_the_fifth_session_sets_the_longer_horizons():
     assert stops_with(s60=(56, 60, 55, 58)) == [
         (1, 0.0, False), (5, 0.0, False), (20, 0.0, False), (60, -12.5, True),
     ]
+
+
+# US sessions from the Friday after Thanksgiving 2025 to 2026-01-30.
+WINTER_SESSIONS = [
+    day.date()
+    for day in pd.bdate_range("2025-11-28", "2026-01-30")
+    if day.date() not in (date(2025, 12, 25), date(2026, 1, 1), date(2026, 1, 19))
+]
+STOP_DAY = date(2025, 12, 11)
+
+
+def _winter_bars(*missing):
+    """Flat bars at 100 from the 2025-12-01 entry, with a low of 90 on 2025-12-11."""
+    days = [day for day in WINTER_SESSIONS if day >= date(2025, 12, 1) and day not in missing]
+    rows = [(100, 101, 90, 95) if day == STOP_DAY else (100, 101, 99, 100) for day in days]
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(days), columns=["Open", "High", "Low", "Close"])
+
+
+def test_the_calendar_dates_each_window_and_a_missing_session_leaves_it_unscored():
+    def evaluate(bars):
+        calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": bars}))
+        event = _scan_event("NVDA", event_at=date(2025, 11, 28))
+        return calculator.evaluate_many([event], sessions=WINTER_SESSIONS)[0][0]
+
+    complete = evaluate(_winter_bars())
+    without_stop_day = evaluate(_winter_bars(STOP_DAY))
+    without_entry_day = evaluate(_winter_bars(date(2025, 12, 1)))
+
+    assert (complete.exits, complete.outcomes[20].stopped_return_pct) == (
+        {1: date(2025, 12, 1), 5: date(2025, 12, 5), 20: date(2025, 12, 29)},
+        -7.0,
+    )
+    assert (without_stop_day.exits, sorted(without_stop_day.outcomes)) == (complete.exits, [1, 5])
+    assert (without_entry_day.entry_at, without_entry_day.entry_price, without_entry_day.outcomes) == (
+        date(2025, 12, 1),
+        None,
+        {},
+    )
+
+
+def _winter_overview(session, picks, histories):
+    for symbol in histories:
+        _add_universe(session, symbol)
+    for symbol, as_of in picks:
+        _add_pick(session, _add_run(session, as_of), symbol, 90.0)
+    session.commit()
+    service = _service(
+        {**histories, "SPY": _winter_bars()},
+        last_completed=date(2026, 1, 30),
+        sessions=WINTER_SESSIONS,
+    )
+    return service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=90,
+        as_of_date=date(2026, 1, 30),
+    )
+
+
+def test_a_session_missing_from_the_cache_skips_the_horizons_it_falls_in(session):
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2025, 11, 28)), ("AMD", date(2025, 11, 28))],
+        {"NVDA": _winter_bars(STOP_DAY), "AMD": _winter_bars()},
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.avg_stopped_return_pct)
+        for h in payload.horizons
+    ] == [(1, 2, 0, 0.0), (5, 2, 0, 0.0), (20, 1, 1, -7.0), (60, 0, 2, None)]
+    assert payload.degraded_reasons == ["incomplete_price_history"]
+
+
+def test_a_window_missing_a_session_blocks_repeats_only_until_its_calendar_exit(session):
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2025, 11, 28)), ("NVDA", date(2025, 12, 29))],
+        {"NVDA": _winter_bars(STOP_DAY)},
+    )
+
+    assert [
+        (event.event_at, event.return_20s_pct) for event in payload.recent_events
+    ] == [("2025-12-29", 0.0), ("2025-11-28", None)]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.suppressed_overlapping)
+        for h in payload.horizons
+    ][2] == (20, 1, 1, 0)
 
 
 def test_overview_degrades_once_when_the_benchmark_lacks_a_window_bar(session):
