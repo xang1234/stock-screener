@@ -988,6 +988,14 @@ def test_a_zero_open_or_low_mid_window_is_a_bad_tick_not_a_stop():
     assert _stop_figures(zero_low) == [(1, 0.0, False, 3.125, -3.125), (5, 0.0, False, 3.125, -3.125)]
 
 
+def test_a_zero_high_or_low_on_the_entry_bar_measures_from_the_entry_price():
+    zero_high = _evaluate_rows([(64, 0, 62, 64)] + [FLAT_ROW] * 4)
+    zero_low = _evaluate_rows([(64, 66, 0, 64)] + [FLAT_ROW] * 4)
+
+    assert _stop_figures(zero_high) == [(1, 0.0, False, 0.0, -3.125), (5, 6.25, False, 3.125, -3.125)]
+    assert _stop_figures(zero_low) == [(1, 0.0, False, 3.125, 0.0), (5, 6.25, False, 3.125, -3.125)]
+
+
 def test_a_missing_entry_open_scores_nothing():
     event = _evaluate_rows([(float("nan"), 66, 62, 64)] + [FLAT_ROW] * 4)
 

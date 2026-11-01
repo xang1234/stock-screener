@@ -232,6 +232,22 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
 
 
 @pytest.mark.asyncio
+async def test_validation_overview_endpoint_serves_a_pick_whose_entry_bar_has_a_zero_high(client, session):
+    today = _seed_validation_data(session)
+    bars = [(100, 0, 99, 103), (103, 105, 101, 104), (104, 108, 103, 107), (107, 109, 104, 108), (108, 111, 107, 110)]
+    histories = {"NVDA": _history_frame(today - timedelta(days=2), bars), "MSFT": None, "SPY": None}
+    app.dependency_overrides[get_db] = _override_db(session)
+    app.dependency_overrides[_get_validation_service] = lambda: _service_with_histories(histories)
+
+    response = await client.get("/api/v1/validation/overview", params={"source_kind": "scan_pick", "lookback_days": 90})
+
+    assert response.status_code == 200
+    assert [(h["avg_mfe_pct"], h["avg_mae_pct"]) for h in response.json()["horizons"]] == [
+        (0.0, -1.0), (11.0, -1.0), (None, None), (None, None),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_validation_overview_endpoint_filters_by_requested_market(client, session):
     _seed_validation_data(session)
     app.dependency_overrides[get_db] = _override_db(session)
