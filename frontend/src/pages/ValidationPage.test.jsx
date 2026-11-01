@@ -203,6 +203,51 @@ describe('ValidationPage', () => {
     expect(getValidationOverview).toHaveBeenCalledWith('theme_alert', 180, 'US');
   });
 
+  it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
+    getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
+      Promise.resolve({
+        ...emptyOverview(market),
+        source_kind: sourceKind,
+        freshness: { latest_replay_as_of_date: '2026-10-29' },
+      })
+    ));
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    await screen.findByRole('heading', { name: 'Validation' });
+    expect(screen.queryByText(/survivor-biased/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Replay (Minervini)' }));
+
+    await waitFor(() => {
+      expect(getValidationOverview).toHaveBeenLastCalledWith('replay_pick', 90, 'US');
+    });
+    expect(await screen.findByText(
+      "Price-only Minervini replay: the top 10 per session among stocks passing the template. "
+      + "Survivor-biased (today's universe) and not the live composite score. "
+      + 'Replayed through 2026-10-29.',
+    )).toBeInTheDocument();
+  });
+
+  it('says when nothing has been replayed for the market', async () => {
+    getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
+      Promise.resolve({ ...emptyOverview(market), source_kind: sourceKind })
+    ));
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Replay (Minervini)' }));
+
+    expect(await screen.findByText(/No replay picks are stored for this market yet\.$/)).toBeInTheDocument();
+  });
+
   it('scopes the scorecard to the market chosen in the header selector', async () => {
     getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
       Promise.resolve(emptyOverview(market))
@@ -257,5 +302,37 @@ describe('ValidationPage', () => {
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
     resolveHk({ ...emptyOverview('HK'), benchmark_symbol: '2800.HK' });
     expect(await screen.findByRole('columnheader', { name: '5S vs 2800.HK' })).toBeInTheDocument();
+  });
+
+  it("shows the loading state, not the previous source's scorecard, while Replay loads", async () => {
+    let resolveReplay;
+    getValidationOverview.mockImplementation((sourceKind) => (
+      sourceKind === 'replay_pick'
+        ? new Promise((resolve) => { resolveReplay = resolve; })
+        : Promise.resolve({ ...emptyOverview('US'), benchmark_symbol: 'SPY' })
+    ));
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('columnheader', { name: '5S vs SPY' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Replay (Minervini)' }));
+    await waitFor(() => {
+      expect(getValidationOverview).toHaveBeenLastCalledWith('replay_pick', 90, 'US');
+    });
+
+    expect(screen.queryByRole('columnheader', { name: '5S vs SPY' })).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText(/Replayed through|No replay picks are stored/)).not.toBeInTheDocument();
+    resolveReplay({
+      ...emptyOverview('US'),
+      source_kind: 'replay_pick',
+      benchmark_symbol: 'IVV',
+      freshness: { latest_replay_as_of_date: '2026-10-29' },
+    });
+    expect(await screen.findByRole('columnheader', { name: '5S vs IVV' })).toBeInTheDocument();
   });
 });

@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.v1.stocks import _get_validation_service as _get_stock_validation_service
 from app.api.v1.validation import _get_validation_service
 from app.database import Base, get_db
+from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.main import app
 from app.models.stock_universe import StockUniverse
@@ -54,6 +55,7 @@ def session():
             StockUniverse.__table__,
             ThemeCluster.__table__,
             ThemeAlert.__table__,
+            BacktestReplayPick.__table__,
         ],
     )
     db = TestingSessionLocal()
@@ -64,6 +66,7 @@ def session():
         Base.metadata.drop_all(
             engine,
             tables=[
+                BacktestReplayPick.__table__,
                 ThemeAlert.__table__,
                 ThemeCluster.__table__,
                 StockUniverse.__table__,
@@ -340,3 +343,35 @@ async def test_stock_validation_endpoint_returns_both_source_breakdowns(client, 
     ]
     assert len(payload["recent_events"]) == 2
     assert payload["freshness"]["latest_feature_as_of_date"] is not None
+
+
+@pytest.mark.asyncio
+async def test_validation_overview_endpoint_serves_replay_picks(client, session):
+    replayed = datetime.now(UTC).date() - timedelta(days=3)
+    session.add(
+        BacktestReplayPick(
+            market="US",
+            as_of_date=replayed,
+            rank=1,
+            symbol="NVDA",
+            minervini_score=91.5,
+            rs_rating=95,
+            stage=2,
+            definition_version=DEFINITION_VERSION,
+            market_rs_run_id=41,
+        )
+    )
+    session.commit()
+    app.dependency_overrides[get_db] = _override_db(session)
+    app.dependency_overrides[_get_validation_service] = lambda: _service_with_histories({})
+
+    response = await client.get(
+        "/api/v1/validation/overview", params={"source_kind": "replay_pick", "lookback_days": 30}
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (payload["source_kind"], payload["degraded_reasons"]) == ("replay_pick", ["missing_price_cache"])
+    assert [(e["source_ref"], e["attributes"]["symbol"]) for e in payload["recent_events"]] == [
+        (f"replay:US:{replayed.isoformat()}", "NVDA"),
+    ]

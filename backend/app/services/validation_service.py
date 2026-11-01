@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
+from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.portability import json_text
 from app.models.stock_universe import StockUniverse
@@ -59,11 +60,21 @@ STOP_LOSS_PCT = 7.0
 # while no symbol's chain of overlapping picks reaches further back: an older pick decides
 # whether the next one counts, and so whether that one blocks a pick in the lookback. Upgrade
 # path: replay every earlier pick of the window's symbols, which means ranking every earlier run.
+# Replay picks are stored already, so they count over all of them instead.
 OVERLAP_LOOKBEHIND = timedelta(days=math.ceil(max(HORIZONS) * 7 / 5) + 21)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
+    ValidationSourceKind.REPLAY_PICK: "no_matching_replay_picks",
 }
+# The event attributes each source's losing events are bucketed by.
+FAILURE_CLUSTER_FIELDS = {
+    ValidationSourceKind.SCAN_PICK: ("rating", "stage", "ibd_industry_group"),
+    ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "theme"),
+    ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band"),
+}
+# Labels that title-casing the field name gets wrong.
+FAILURE_CLUSTER_LABELS = {"rs_band": "RS Band"}
 
 
 # Runs before 2026-04-26 carry only universe.market; a run with neither counts as US.
@@ -74,16 +85,22 @@ RUN_MARKET = func.coalesce(
 )
 
 
+# is_common_stock alone misses ETFs: finviz marks them common stock. A symbol the
+# universe no longer lists passes, so delisted symbols' past picks still count.
+NOT_A_FUND = and_(
+    StockUniverse.is_common_stock.is_not(False),
+    StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
+)
+
+
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
 # (minervini/canslim NULL) and funds otherwise top the composite ranking.
-# is_common_stock alone misses ETFs: finviz marks them common stock.
 # Rows written before 20261013_0066 lack the typed scores and never qualify; reading
 # details_json instead costs a full JSON parse per row on Postgres.
 SCAN_PICK_ELIGIBILITY = and_(
     StockFeatureDaily.minervini_score.is_not(None),
     StockFeatureDaily.canslim_score.is_not(None),
-    StockUniverse.is_common_stock.is_not(False),
-    StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
+    NOT_A_FUND,
 )
 
 
@@ -470,6 +487,54 @@ class ThemeAlertValidationSource:
         return [event for event in events if markets[event.symbol] == market], []
 
 
+def _rs_band(rating: int) -> str:
+    low = rating // 10 * 10
+    return f"{low}-{low + 9}"
+
+
+class ReplayPickValidationSource:
+    """Extract one validation event per stored replay pick of the current definition."""
+
+    def collect(
+        self,
+        db: Session,
+        *,
+        cutoff_date: date,
+        market: str,
+        until_date: date | None = None,
+        symbol: str | None = None,
+    ) -> tuple[list[RawValidationEvent], list[str]]:
+        query = db.query(BacktestReplayPick).filter(
+            BacktestReplayPick.market == market,
+            BacktestReplayPick.definition_version == DEFINITION_VERSION,
+            BacktestReplayPick.as_of_date >= cutoff_date,
+        )
+        if until_date is not None:
+            query = query.filter(BacktestReplayPick.as_of_date <= until_date)
+        if symbol:
+            query = query.filter(BacktestReplayPick.symbol == symbol)
+        rows = query.order_by(
+            BacktestReplayPick.as_of_date.desc(), BacktestReplayPick.rank.asc()
+        ).all()
+        return [
+            RawValidationEvent(
+                symbol=row.symbol,
+                source_kind=ValidationSourceKind.REPLAY_PICK,
+                source_ref=f"replay:{market}:{row.as_of_date.isoformat()}",
+                event_at=row.as_of_date,
+                attributes={
+                    "symbol": row.symbol,
+                    "rank": row.rank,
+                    "minervini_score": _round_or_none(row.minervini_score),
+                    "rs_rating": row.rs_rating,
+                    "rs_band": _rs_band(row.rs_rating),
+                    "stage": row.stage,
+                },
+            )
+            for row in rows
+        ], []
+
+
 class PriceOutcomeCalculator:
     """Compute the fixed validation horizons from cached OHLCV data."""
 
@@ -643,25 +708,14 @@ class FailureClusterBuilder:
         event: EvaluatedValidationEvent,
     ) -> list[tuple[tuple[str, str], str]]:
         attrs = event.raw.attributes
-        if event.raw.source_kind == ValidationSourceKind.SCAN_PICK:
-            mapping = {
-                "rating": attrs.get("rating"),
-                "stage": attrs.get("stage"),
-                "ibd_industry_group": attrs.get("ibd_industry_group"),
-            }
-        else:
-            mapping = {
-                "alert_type": attrs.get("alert_type"),
-                "severity": attrs.get("severity"),
-                "theme": attrs.get("theme"),
-            }
-
         clusters: list[tuple[tuple[str, str], str]] = []
-        for name, value in mapping.items():
+        for name in FAILURE_CLUSTER_FIELDS[event.raw.source_kind]:
+            value = attrs.get(name)
             if value is None or value == "":
                 continue
             normalized = str(value)
-            clusters.append(((name, normalized), f"{name.replace('_', ' ').title()}: {normalized}"))
+            label = FAILURE_CLUSTER_LABELS.get(name) or name.replace("_", " ").title()
+            clusters.append(((name, normalized), f"{label}: {normalized}"))
         return clusters
 
 
@@ -673,6 +727,7 @@ class ValidationService:
         *,
         scan_pick_source: ScanPickValidationSource | None = None,
         theme_alert_source: ThemeAlertValidationSource | None = None,
+        replay_pick_source: ReplayPickValidationSource | None = None,
         outcome_calculator: PriceOutcomeCalculator | None = None,
         failure_cluster_builder: FailureClusterBuilder | None = None,
         market_calendar: MarketCalendarService | None = None,
@@ -681,8 +736,11 @@ class ValidationService:
 
         price_cache = get_price_cache()
         self._market_calendar = market_calendar or get_market_calendar_service()
-        self._scan_pick_source = scan_pick_source or ScanPickValidationSource()
-        self._theme_alert_source = theme_alert_source or ThemeAlertValidationSource()
+        self._sources = {
+            ValidationSourceKind.SCAN_PICK: scan_pick_source or ScanPickValidationSource(),
+            ValidationSourceKind.THEME_ALERT: theme_alert_source or ThemeAlertValidationSource(),
+            ValidationSourceKind.REPLAY_PICK: replay_pick_source or ReplayPickValidationSource(),
+        }
         self._outcome_calculator = outcome_calculator or PriceOutcomeCalculator(price_cache)
         self._failure_cluster_builder = failure_cluster_builder or FailureClusterBuilder()
 
@@ -713,7 +771,12 @@ class ValidationService:
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
-            freshness=self._build_freshness(db, as_of_date=effective_as_of_date, market=market),
+            freshness=self._build_freshness(
+                db,
+                as_of_date=effective_as_of_date,
+                market=market,
+                include_replay=source_kind == ValidationSourceKind.REPLAY_PICK,
+            ),
             degraded_reasons=payload["degraded_reasons"],
         )
 
@@ -788,13 +851,12 @@ class ValidationService:
     ) -> dict[str, Any]:
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         cutoff_date = effective_as_of_date - timedelta(days=lookback_days)
-        source = (
-            self._scan_pick_source
-            if source_kind == ValidationSourceKind.SCAN_PICK
-            else self._theme_alert_source
+        collect_from = (
+            date.min
+            if source_kind == ValidationSourceKind.REPLAY_PICK
+            else cutoff_date - OVERLAP_LOOKBEHIND
         )
-        collect_from = cutoff_date - OVERLAP_LOOKBEHIND
-        raw_events, degraded_reasons = source.collect(
+        raw_events, degraded_reasons = self._sources[source_kind].collect(
             db,
             cutoff_date=collect_from,
             market=market,
@@ -814,7 +876,13 @@ class ValidationService:
             # Ending at ``through``, which never passes verified coverage, drops today's partial
             # bar while the session is open. A bar fetched mid-session stays partial until the
             # after-close refresh, which can run after this cut-off moves.
-            sessions=self._market_calendar.trading_days(market, collect_from, through),
+            # Starting no later than the cutoff keeps the session before ``through`` in the
+            # calendar even when every event falls on ``through``.
+            sessions=self._market_calendar.trading_days(
+                market,
+                min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)]),
+                through,
+            ),
         )
         events = [
             event
@@ -890,7 +958,12 @@ class ValidationService:
         )
 
     def _build_freshness(
-        self, db: Session, *, market: str, as_of_date: date | None = None
+        self,
+        db: Session,
+        *,
+        market: str,
+        as_of_date: date | None = None,
+        include_replay: bool = False,
     ) -> ValidationFreshness:
         feature_query = db.query(func.max(FeatureRun.as_of_date)).filter(
             FeatureRun.status == "published", RUN_MARKET == market
@@ -908,12 +981,25 @@ class ValidationService:
                 _, cutoff = eastern_day_bounds_utc(as_of_date)
                 alert_query = alert_query.filter(ThemeAlert.triggered_at < cutoff)
             latest_theme_alert_at = alert_query.scalar()
+
+        latest_replay_as_of_date = None
+        if include_replay:
+            replay_query = db.query(func.max(BacktestReplayPick.as_of_date)).filter(
+                BacktestReplayPick.market == market,
+                BacktestReplayPick.definition_version == DEFINITION_VERSION,
+            )
+            if as_of_date is not None:
+                replay_query = replay_query.filter(BacktestReplayPick.as_of_date <= as_of_date)
+            latest_replay_as_of_date = replay_query.scalar()
         return ValidationFreshness(
             latest_feature_as_of_date=(
                 latest_feature_as_of_date.isoformat() if latest_feature_as_of_date else None
             ),
             latest_theme_alert_at=(
                 _serialize_temporal(latest_theme_alert_at) if latest_theme_alert_at else None
+            ),
+            latest_replay_as_of_date=(
+                latest_replay_as_of_date.isoformat() if latest_replay_as_of_date else None
             ),
             price_cache_period=PRICE_CACHE_PERIOD,
         )

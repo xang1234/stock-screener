@@ -13,6 +13,7 @@ class ValidationSourceKind(str, Enum):
 
     SCAN_PICK = "scan_pick"
     THEME_ALERT = "theme_alert"
+    REPLAY_PICK = "replay_pick"
 
 
 class ValidationFreshness(BaseModel):
@@ -20,6 +21,7 @@ class ValidationFreshness(BaseModel):
 
     latest_feature_as_of_date: str | None = None
     latest_theme_alert_at: str | None = None
+    latest_replay_as_of_date: str | None = None
     price_cache_period: str = "2y"
 
 
