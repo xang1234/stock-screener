@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
 from typing import Any
@@ -50,11 +51,13 @@ FAILURE_CLUSTERS_LIMIT = 5
 PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
-# Events this far before the cutoff join the overlap rule, so a pick just before it still
-# blocks the repeats after it. ponytail: 31 days covers a 5-session window across the longest
-# exchange holidays (TW Lunar New Year), not a longer chain of overlapping picks; collect
-# full history if that matters.
-OVERLAP_LOOKBEHIND = timedelta(days=31)
+HORIZONS = (1, 5, 20, 60)
+STOP_LOSS_PCT = 7.0
+# Events this far before the cutoff join the overlap rule, so a pick before it still blocks
+# the repeats inside its window. ponytail: one longest-horizon window at 7 calendar days per
+# 5 sessions, plus 21 days for exchange holidays (TW Lunar New Year), not a longer chain of
+# overlapping picks; collect full history if that matters.
+OVERLAP_LOOKBEHIND = timedelta(days=math.ceil(max(HORIZONS) * 7 / 5) + 21)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
@@ -94,21 +97,29 @@ class RawValidationEvent:
 
 
 @dataclass(frozen=True)
+class HorizonOutcome:
+    """An event's result over its first ``h`` sessions, entered at the first session's open."""
+
+    exit_at: date
+    return_pct: float
+    mfe_pct: float
+    mae_pct: float
+    stopped_return_pct: float
+    stopped_out: bool
+    excess_return_pct: float | None = None
+
+
+@dataclass(frozen=True)
 class EvaluatedValidationEvent:
     """One validation event after deterministic price-outcome calculation."""
 
     raw: RawValidationEvent
     entry_at: date | None
     entry_price: float | None
-    return_1s_pct: float | None
-    return_5s_pct: float | None
-    mfe_5s_pct: float | None
-    mae_5s_pct: float | None
-    missing_horizons: frozenset[int]
-    exit_at: date | None = None
-    excess_return_1s_pct: float | None = None
-    excess_return_5s_pct: float | None = None
-    counted: bool = True
+    # Keyed by horizon; a horizon whose last session has not closed has no entry.
+    outcomes: dict[int, HorizonOutcome] = field(default_factory=dict)
+    # Horizons at which this event repeats inside an earlier counted event's window.
+    suppressed: frozenset[int] = frozenset()
     history_missing: bool = False
 
     def to_response(self) -> ValidationEvent:
@@ -118,21 +129,35 @@ class EvaluatedValidationEvent:
             event_at=_serialize_temporal(self.raw.event_at),
             entry_at=self.entry_at.isoformat() if self.entry_at else None,
             entry_price=_round_or_none(self.entry_price),
-            return_1s_pct=_round_or_none(self.return_1s_pct),
-            return_5s_pct=_round_or_none(self.return_5s_pct),
-            mfe_5s_pct=_round_or_none(self.mfe_5s_pct),
-            mae_5s_pct=_round_or_none(self.mae_5s_pct),
-            excess_return_1s_pct=_round_or_none(self.excess_return_1s_pct),
-            excess_return_5s_pct=_round_or_none(self.excess_return_5s_pct),
-            counted=self.counted,
+            return_1s_pct=self._outcome_pct(1, "return_pct"),
+            return_5s_pct=self._outcome_pct(5, "return_pct"),
+            return_20s_pct=self._outcome_pct(20, "return_pct"),
+            return_60s_pct=self._outcome_pct(60, "return_pct"),
+            mfe_5s_pct=self._outcome_pct(5, "mfe_pct"),
+            mae_5s_pct=self._outcome_pct(5, "mae_pct"),
+            excess_return_1s_pct=self._outcome_pct(1, "excess_return_pct"),
+            excess_return_5s_pct=self._outcome_pct(5, "excess_return_pct"),
+            counted=5 not in self.suppressed,
             attributes=self.raw.attributes,
         )
+
+    def _outcome_pct(self, horizon: int, name: str) -> float | None:
+        outcome = self.outcomes.get(horizon)
+        return _round_or_none(getattr(outcome, name)) if outcome else None
 
 
 def _round_or_none(value: float | None, digits: int = 4) -> float | None:
     if value is None:
         return None
     return round(float(value), digits)
+
+
+def _mean(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def _median(values: list[float]) -> float | None:
+    return round(float(median(values)), 4) if values else None
 
 
 def _serialize_temporal(value: date | datetime) -> str:
@@ -204,33 +229,38 @@ def _excess_return_pct(
 def mark_overlapping_windows(
     events: list[EvaluatedValidationEvent],
 ) -> list[EvaluatedValidationEvent]:
-    """Return ``events`` in input order, each marking whether its 5-session window counts.
+    """Return ``events`` in input order, each marking the horizons at which it is a repeat.
 
-    An event counts only when it enters strictly after the previous counted event's
-    fifth session for the same source and symbol. A counted event whose window is
-    still open blocks every later one; an event with no entry price blocks nothing.
+    At a horizon of h sessions, an event counts only when it enters strictly after the
+    previous counted event's h-th session for the same source and symbol. A counted event
+    whose h-session window is still open blocks every later one; an event with no entry
+    price blocks nothing. Every event counts at 1 session, where the window is the entry
+    day alone.
     """
-    suppressed: set[int] = set()
-    blocked_through: dict[tuple[ValidationSourceKind, str], date] = {}
-    for index, event in sorted(
-        enumerate(events),
+    entered = sorted(
+        (pair for pair in enumerate(events) if pair[1].entry_price is not None),
         key=lambda pair: (
             pair[1].raw.source_kind,
             pair[1].raw.symbol,
-            pair[1].entry_at or date.min,
+            pair[1].entry_at,
             _serialize_temporal(pair[1].raw.event_at),
             pair[1].raw.source_ref,
         ),
-    ):
-        if event.entry_price is None:
+    )
+    suppressed: dict[int, set[int]] = defaultdict(set)
+    for horizon in HORIZONS:
+        if horizon == 1:
             continue
-        key = (event.raw.source_kind, event.raw.symbol)
-        if event.entry_at <= blocked_through.get(key, date.min):
-            suppressed.add(index)
-            continue
-        blocked_through[key] = event.exit_at or date.max
+        blocked_through: dict[tuple[ValidationSourceKind, str], date] = {}
+        for index, event in entered:
+            key = (event.raw.source_kind, event.raw.symbol)
+            if event.entry_at <= blocked_through.get(key, date.min):
+                suppressed[index].add(horizon)
+                continue
+            outcome = event.outcomes.get(horizon)
+            blocked_through[key] = outcome.exit_at if outcome else date.max
     return [
-        replace(event, counted=False) if index in suppressed else event
+        replace(event, suppressed=frozenset(suppressed[index])) if index in suppressed else event
         for index, event in enumerate(events)
     ]
 
@@ -249,14 +279,15 @@ def _dedupe(values: list[str]) -> list[str]:
 def _outcome_degraded_reasons(
     events: list[EvaluatedValidationEvent], *, benchmarked: bool
 ) -> list[str]:
-    """Reasons from the events the summaries use: every event at 1 session, counted ones at 5."""
+    """Reasons from the outcomes the summaries use: each horizon's non-repeat events."""
     reasons: list[str] = []
     if any(event.history_missing for event in events):
         reasons.append("missing_price_cache")
     if benchmarked and any(
-        (event.return_1s_pct is not None and event.excess_return_1s_pct is None)
-        or (event.counted and event.return_5s_pct is not None and event.excess_return_5s_pct is None)
+        outcome.excess_return_pct is None
         for event in events
+        for horizon, outcome in event.outcomes.items()
+        if horizon not in event.suppressed
     ):
         reasons.append("missing_benchmark_prices")
     return reasons
@@ -470,15 +501,7 @@ class PriceOutcomeCalculator:
     ) -> EvaluatedValidationEvent:
         if history is None:
             return EvaluatedValidationEvent(
-                raw=event,
-                entry_at=None,
-                entry_price=None,
-                return_1s_pct=None,
-                return_5s_pct=None,
-                mfe_5s_pct=None,
-                mae_5s_pct=None,
-                missing_horizons=frozenset({1, 5}),
-                history_missing=True,
+                raw=event, entry_at=None, entry_price=None, history_missing=True
             )
 
         if isinstance(event.event_at, datetime):
@@ -497,62 +520,60 @@ class PriceOutcomeCalculator:
             event_day = pd.Timestamp(event.event_at)
             trading_days = history.index[history.index > event_day]
         if len(trading_days) == 0:
-            return EvaluatedValidationEvent(
-                raw=event,
-                entry_at=None,
-                entry_price=None,
-                return_1s_pct=None,
-                return_5s_pct=None,
-                mfe_5s_pct=None,
-                mae_5s_pct=None,
-                missing_horizons=frozenset({1, 5}),
-            )
+            return EvaluatedValidationEvent(raw=event, entry_at=None, entry_price=None)
 
-        entry_day = trading_days[0]
-        exit_day = trading_days[4] if len(trading_days) >= 5 else None
-        exit_at = exit_day.date() if exit_day is not None else None
-        entry_row = history.loc[entry_day]
-        entry_price = float(entry_row["Open"])
+        window = history.loc[trading_days[: max(HORIZONS)]]
+        entry_at = trading_days[0].date()
+        entry_price = float(window["Open"].iloc[0])
         if entry_price <= 0:
-            return EvaluatedValidationEvent(
-                raw=event,
-                entry_at=entry_day.date(),
-                entry_price=None,
-                return_1s_pct=None,
-                return_5s_pct=None,
-                mfe_5s_pct=None,
-                mae_5s_pct=None,
-                missing_horizons=frozenset({1, 5}),
-                exit_at=exit_at,
-            )
-        close_1s = float(entry_row["Close"])
-        return_1s_pct = ((close_1s / entry_price) - 1.0) * 100.0
-
-        missing_horizons: set[int] = set()
-        return_5s_pct: float | None = None
-        mfe_5s_pct: float | None = None
-        mae_5s_pct: float | None = None
-        if exit_day is not None:
-            window = history.loc[trading_days[:5]]
-            return_5s_pct = ((float(window.iloc[-1]["Close"]) / entry_price) - 1.0) * 100.0
-            mfe_5s_pct = ((float(window["High"].max()) / entry_price) - 1.0) * 100.0
-            mae_5s_pct = ((float(window["Low"].min()) / entry_price) - 1.0) * 100.0
-        else:
-            missing_horizons.add(5)
-
+            return EvaluatedValidationEvent(raw=event, entry_at=entry_at, entry_price=None)
         return EvaluatedValidationEvent(
             raw=event,
-            entry_at=entry_day.date(),
+            entry_at=entry_at,
             entry_price=entry_price,
-            return_1s_pct=return_1s_pct,
-            return_5s_pct=return_5s_pct,
-            mfe_5s_pct=mfe_5s_pct,
-            mae_5s_pct=mae_5s_pct,
-            missing_horizons=frozenset(missing_horizons),
-            exit_at=exit_at,
-            excess_return_1s_pct=_excess_return_pct(return_1s_pct, benchmark, entry_day, entry_day),
-            excess_return_5s_pct=_excess_return_pct(return_5s_pct, benchmark, entry_day, exit_day),
+            outcomes=_horizon_outcomes(window, entry_price, benchmark),
         )
+
+
+def _horizon_outcomes(
+    window: pd.DataFrame, entry_price: float, benchmark: pd.DataFrame | None
+) -> dict[int, HorizonOutcome]:
+    """Outcomes for every horizon ``window`` covers, its first bar being the entry session."""
+
+    def pct(price: float) -> float:
+        return (price / entry_price - 1.0) * 100.0
+
+    opens = window["Open"].to_numpy(dtype=float)
+    closes = window["Close"].to_numpy(dtype=float)
+    peaks = window["High"].cummax().to_numpy(dtype=float)
+    troughs = window["Low"].cummin().to_numpy(dtype=float)
+    stop_price = entry_price * (100.0 - STOP_LOSS_PCT) / 100.0
+    # The entry session opens at the entry price, above the stop, so only its low can trigger.
+    gapped = opens <= stop_price
+    hit = gapped | (window["Low"].to_numpy(dtype=float) <= stop_price)
+    stop_day = int(hit.argmax()) if hit.any() else len(window)
+    gapped_through = stop_day < len(window) and gapped[stop_day]
+    stop_return_pct = pct(opens[stop_day]) if gapped_through else -STOP_LOSS_PCT
+
+    outcomes: dict[int, HorizonOutcome] = {}
+    for horizon in HORIZONS:
+        if horizon > len(window):
+            continue
+        last = horizon - 1
+        return_pct = pct(closes[last])
+        stopped_out = stop_day <= last
+        outcomes[horizon] = HorizonOutcome(
+            exit_at=window.index[last].date(),
+            return_pct=return_pct,
+            mfe_pct=pct(peaks[last]),
+            mae_pct=pct(troughs[last]),
+            stopped_return_pct=stop_return_pct if stopped_out else return_pct,
+            stopped_out=stopped_out,
+            excess_return_pct=_excess_return_pct(
+                return_pct, benchmark, window.index[0], window.index[last]
+            ),
+        )
+    return outcomes
 
 
 class FailureClusterBuilder:
@@ -563,10 +584,11 @@ class FailureClusterBuilder:
         labels: dict[tuple[str, str], str] = {}
 
         for event in events:
-            if event.return_5s_pct is None or event.return_5s_pct >= 0:
+            outcome = event.outcomes.get(5)
+            if outcome is None or outcome.return_pct >= 0:
                 continue
             for cluster_key, label in self._cluster_labels(event):
-                bucket_values[cluster_key].append(event.return_5s_pct)
+                bucket_values[cluster_key].append(outcome.return_pct)
                 labels[cluster_key] = label
 
         ranked_buckets = sorted(
@@ -604,11 +626,11 @@ class FailureClusterBuilder:
             }
 
         clusters: list[tuple[tuple[str, str], str]] = []
-        for field, value in mapping.items():
+        for name, value in mapping.items():
             if value is None or value == "":
                 continue
             normalized = str(value)
-            clusters.append(((field, normalized), f"{field.replace('_', ' ').title()}: {normalized}"))
+            clusters.append(((name, normalized), f"{name.replace('_', ' ').title()}: {normalized}"))
         return clusters
 
 
@@ -656,6 +678,7 @@ class ValidationService:
             lookback_days=lookback_days,
             market=market,
             benchmark_symbol=payload["benchmark_symbol"],
+            stop_loss_pct=STOP_LOSS_PCT,
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
@@ -709,6 +732,7 @@ class ValidationService:
         return StockValidationResponse(
             symbol=symbol,
             lookback_days=lookback_days,
+            stop_loss_pct=STOP_LOSS_PCT,
             source_breakdown=source_breakdown,
             recent_events=merged_events[:RECENT_EVENTS_LIMIT],
             failure_clusters=merged_failure_clusters[:FAILURE_CLUSTERS_LIMIT],
@@ -783,11 +807,11 @@ class ValidationService:
         return {
             "horizons": [
                 self._summarize_horizon(events, horizon_sessions=horizon_sessions)
-                for horizon_sessions in (1, 5)
+                for horizon_sessions in HORIZONS
             ],
             "recent_events": recent_events,
             "failure_clusters": self._failure_cluster_builder.build(
-                [event for event in events if event.counted]
+                [event for event in events if 5 not in event.suppressed]
             ),
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
@@ -799,72 +823,35 @@ class ValidationService:
         *,
         horizon_sessions: int,
     ) -> ValidationHorizonSummary:
-        # Only 5-session windows can overlap a repeat pick's; 1-session outcomes never do.
-        counted = events if horizon_sessions == 1 else [event for event in events if event.counted]
-        suppressed_overlapping = len(events) - len(counted)
-        returns: list[float] = []
-        mfe_values: list[float] = []
-        mae_values: list[float] = []
-        excess_values: list[float] = []
-        skipped_missing_history = 0
-
-        for event in counted:
-            if horizon_sessions in event.missing_horizons or event.entry_price is None:
-                skipped_missing_history += 1
-                continue
-
-            if horizon_sessions == 1:
-                if event.return_1s_pct is None:
-                    skipped_missing_history += 1
-                    continue
-                returns.append(event.return_1s_pct)
-                if event.excess_return_1s_pct is not None:
-                    excess_values.append(event.excess_return_1s_pct)
-                continue
-
-            if event.return_5s_pct is None:
-                skipped_missing_history += 1
-                continue
-            returns.append(event.return_5s_pct)
-            if event.excess_return_5s_pct is not None:
-                excess_values.append(event.excess_return_5s_pct)
-            if event.mfe_5s_pct is not None:
-                mfe_values.append(event.mfe_5s_pct)
-            if event.mae_5s_pct is not None:
-                mae_values.append(event.mae_5s_pct)
-
-        sample_size = len(returns)
-        positive_rate = None
-        avg_return_pct = None
-        median_return_pct = None
-        avg_mfe_pct = None
-        avg_mae_pct = None
-        if sample_size:
-            positive_rate = round(sum(1 for value in returns if value > 0) / sample_size, 4)
-            avg_return_pct = round(sum(returns) / sample_size, 4)
-            median_return_pct = round(float(median(returns)), 4)
-            if mfe_values:
-                avg_mfe_pct = round(sum(mfe_values) / len(mfe_values), 4)
-            if mae_values:
-                avg_mae_pct = round(sum(mae_values) / len(mae_values), 4)
-
+        counted = [event for event in events if horizon_sessions not in event.suppressed]
+        outcomes = [
+            event.outcomes[horizon_sessions]
+            for event in counted
+            if horizon_sessions in event.outcomes
+        ]
+        returns = [outcome.return_pct for outcome in outcomes]
+        stopped_returns = [outcome.stopped_return_pct for outcome in outcomes]
+        excess_values = [
+            outcome.excess_return_pct
+            for outcome in outcomes
+            if outcome.excess_return_pct is not None
+        ]
         return ValidationHorizonSummary(
             horizon_sessions=horizon_sessions,
-            sample_size=sample_size,
-            positive_rate=positive_rate,
-            avg_return_pct=avg_return_pct,
-            median_return_pct=median_return_pct,
-            avg_mfe_pct=avg_mfe_pct,
-            avg_mae_pct=avg_mae_pct,
-            avg_excess_return_pct=(
-                round(sum(excess_values) / len(excess_values), 4) if excess_values else None
-            ),
-            median_excess_return_pct=(
-                round(float(median(excess_values)), 4) if excess_values else None
-            ),
+            sample_size=len(outcomes),
+            positive_rate=_mean([float(value > 0) for value in returns]),
+            avg_return_pct=_mean(returns),
+            median_return_pct=_median(returns),
+            avg_mfe_pct=_mean([outcome.mfe_pct for outcome in outcomes]),
+            avg_mae_pct=_mean([outcome.mae_pct for outcome in outcomes]),
+            avg_excess_return_pct=_mean(excess_values),
+            median_excess_return_pct=_median(excess_values),
             excess_sample_size=len(excess_values),
-            skipped_missing_history=skipped_missing_history,
-            suppressed_overlapping=suppressed_overlapping,
+            avg_stopped_return_pct=_mean(stopped_returns),
+            median_stopped_return_pct=_median(stopped_returns),
+            stopped_out_rate=_mean([float(outcome.stopped_out) for outcome in outcomes]),
+            skipped_missing_history=len(counted) - len(outcomes),
+            suppressed_overlapping=len(events) - len(counted),
         )
 
     def _build_freshness(
