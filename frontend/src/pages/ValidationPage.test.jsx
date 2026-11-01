@@ -121,6 +121,9 @@ describe('ValidationPage', () => {
     expect(within(eventRow).queryByText('repeat')).not.toBeInTheDocument();
     const repeatRow = screen.getByRole('link', { name: 'AMD' }).closest('tr');
     expect(within(repeatRow).getByText('repeat')).toBeInTheDocument();
+    expect(repeatRow).not.toHaveStyle({ opacity: '0.55' });
+    expect(repeatRow.cells[headers.indexOf('1S')]).not.toHaveStyle({ opacity: '0.55' });
+    expect(repeatRow.cells[headers.indexOf('5S')]).toHaveStyle({ opacity: '0.55' });
   });
 
   it('updates the query when source and lookback controls change', async () => {
