@@ -48,9 +48,10 @@ PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
 # Events this far before the cutoff join the overlap rule, so a pick just before it still
-# blocks the repeats after it. ponytail: a longer chain of overlapping picks can still shift
-# which repeat counts; collect from the first run if that matters.
-OVERLAP_LOOKBEHIND = timedelta(days=14)
+# blocks the repeats after it. ponytail: 31 days covers a 5-session window across the longest
+# exchange holidays (TW Lunar New Year), not a longer chain of overlapping picks; collect
+# full history if that matters.
+OVERLAP_LOOKBEHIND = timedelta(days=31)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
