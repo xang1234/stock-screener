@@ -863,6 +863,7 @@ class ValidationService:
             for outcome in outcomes
             if outcome.excess_return_pct is not None
         ]
+        pending = sum(horizon_sessions not in event.exits for event in counted)
         return ValidationHorizonSummary(
             horizon_sessions=horizon_sessions,
             sample_size=len(outcomes),
@@ -877,7 +878,8 @@ class ValidationService:
             avg_stopped_return_pct=_mean(stopped_returns),
             median_stopped_return_pct=_median(stopped_returns),
             stopped_out_rate=_mean([float(outcome.stopped_out) for outcome in outcomes]),
-            skipped_missing_history=len(counted) - len(outcomes),
+            skipped_missing_history=len(counted) - len(outcomes) - pending,
+            pending_windows=pending,
             suppressed_overlapping=len(events) - len(counted),
         )
 

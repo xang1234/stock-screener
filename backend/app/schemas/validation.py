@@ -41,7 +41,10 @@ class ValidationHorizonSummary(BaseModel):
     median_stopped_return_pct: float | None = None
     # Share of the sample whose stop triggered within the horizon.
     stopped_out_rate: float | None = None
+    # Closed windows the cache cannot score: no history, a missing session or no entry price.
     skipped_missing_history: int = 0
+    # Windows whose last session falls after the last completed one.
+    pending_windows: int = 0
     suppressed_overlapping: int = 0
 
 
