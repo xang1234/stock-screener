@@ -105,7 +105,7 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
         </TableHead>
         <TableBody>
           {(events || []).map((event, index) => {
-            const fiveSessionSx = event.counted === false ? { opacity: 0.55 } : undefined;
+            const fiveSessionSx = event.counted === false ? { color: 'text.secondary' } : undefined;
             return (
             <TableRow
               key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}:${index}`}
