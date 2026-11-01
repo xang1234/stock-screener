@@ -1818,3 +1818,34 @@ def test_replay_overview_without_stored_picks_reports_none_match(session):
     )
 
     assert (payload.recent_events, payload.degraded_reasons) == ([], ["no_matching_replay_picks"])
+
+
+def test_replay_overlap_counting_runs_over_every_stored_pick_before_the_lookback(session):
+    sessions = pd.bdate_range(date(2026, 4, 6), date(2026, 10, 30))
+    for as_of in sessions[:-1].date:
+        _add_replay_pick(session, as_of, 1, "NVDA", score=91.5, rs=95)
+    session.commit()
+    bars = pd.DataFrame(
+        [FLAT_ROW] * len(sessions), index=sessions, columns=["Open", "High", "Low", "Close"]
+    )
+    service = _service(
+        {"NVDA": bars, "SPY": bars}, last_completed=date(2026, 10, 30), sessions=list(sessions.date)
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.REPLAY_PICK,
+        lookback_days=30,
+        as_of_date=date(2026, 10, 30),
+    )
+
+    assert [event.event_at for event in payload.recent_events if event.counted] == [
+        "2026-10-26",
+        "2026-10-19",
+        "2026-10-12",
+        "2026-10-05",
+    ]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.pending_windows, h.suppressed_overlapping)
+        for h in payload.horizons
+    ] == [(1, 22, 0, 0), (5, 3, 1, 18), (20, 0, 1, 21), (60, 0, 0, 22)]
