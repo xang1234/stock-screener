@@ -184,6 +184,10 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
             ],
         ),
         "MSFT": None,
+        "SPY": _history_frame(
+            today - timedelta(days=2),
+            [(500, 506, 499, 505)] + [(505, 511, 504, 510)] * 4,
+        ),
     }
 
     app.dependency_overrides[get_db] = _override_db(session)
@@ -199,6 +203,11 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
     assert payload["horizons"][0]["sample_size"] == 1
     assert payload["horizons"][1]["skipped_missing_history"] == 1
     assert payload["recent_events"][0]["attributes"]["symbol"] == "NVDA"
+    assert payload["benchmark_symbol"] == "SPY"
+    assert (
+        payload["recent_events"][0]["excess_return_1s_pct"],
+        payload["recent_events"][0]["excess_return_5s_pct"],
+    ) == (2.0, 8.0)
     assert "missing_price_cache" in payload["degraded_reasons"]
 
 

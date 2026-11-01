@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
@@ -26,6 +27,7 @@ from app.schemas.validation import (
     ValidationSourceBreakdown,
     ValidationSourceKind,
 )
+from app.services.benchmark_registry_service import benchmark_registry
 from app.services.economic_theme_read_service import EconomicThemeReader
 from app.services.price_cache_service import PriceCacheService
 from app.utils.market_hours import (
@@ -77,6 +79,9 @@ class EvaluatedValidationEvent:
     mfe_5s_pct: float | None
     mae_5s_pct: float | None
     missing_horizons: frozenset[int]
+    exit_at: date | None = None
+    excess_return_1s_pct: float | None = None
+    excess_return_5s_pct: float | None = None
 
     def to_response(self) -> ValidationEvent:
         return ValidationEvent(
@@ -89,6 +94,8 @@ class EvaluatedValidationEvent:
             return_5s_pct=_round_or_none(self.return_5s_pct),
             mfe_5s_pct=_round_or_none(self.mfe_5s_pct),
             mae_5s_pct=_round_or_none(self.mae_5s_pct),
+            excess_return_1s_pct=_round_or_none(self.excess_return_1s_pct),
+            excess_return_5s_pct=_round_or_none(self.excess_return_5s_pct),
             attributes=self.raw.attributes,
         )
 
@@ -141,6 +148,23 @@ def _normalize_price_history(df: pd.DataFrame | None) -> pd.DataFrame | None:
     if not required_columns.issubset(set(normalized.columns)):
         return None
     return normalized
+
+
+def _excess_return_pct(
+    event_return_pct: float | None,
+    benchmark: pd.DataFrame | None,
+    entry_day: pd.Timestamp,
+    close_day: pd.Timestamp | None,
+) -> float | None:
+    if event_return_pct is None or benchmark is None:
+        return None
+    if entry_day not in benchmark.index or close_day not in benchmark.index:
+        return None
+    benchmark_open = float(benchmark.at[entry_day, "Open"])
+    if benchmark_open <= 0:
+        return None
+    benchmark_return_pct = (float(benchmark.at[close_day, "Close"]) / benchmark_open - 1.0) * 100.0
+    return event_return_pct - benchmark_return_pct
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -318,29 +342,45 @@ class PriceOutcomeCalculator:
     def evaluate_many(
         self,
         events: list[RawValidationEvent],
-    ) -> tuple[list[EvaluatedValidationEvent], list[str]]:
-        if not events:
-            return [], []
-
+        *,
+        benchmark_candidates: Sequence[str] = (),
+    ) -> tuple[list[EvaluatedValidationEvent], list[str], str | None]:
+        """Evaluate events; also return degraded reasons and the benchmark used."""
         histories = self._price_cache.get_many_cached_only(
-            sorted({event.symbol for event in events}),
+            sorted({event.symbol for event in events} | set(benchmark_candidates)),
             period=PRICE_CACHE_PERIOD,
+        )
+        benchmark_symbol, benchmark = next(
+            (
+                (candidate, candidate_history)
+                for candidate in benchmark_candidates
+                if (candidate_history := _normalize_price_history(histories.get(candidate)))
+                is not None
+            ),
+            (None, None),
         )
         degraded_reasons: list[str] = []
         evaluations: list[EvaluatedValidationEvent] = []
 
         for event in events:
             history = _normalize_price_history(histories.get(event.symbol))
-            if history is None and "missing_price_cache" not in degraded_reasons:
+            if history is None:
                 degraded_reasons.append("missing_price_cache")
-            evaluations.append(self._evaluate_one(event, history))
+            evaluation = self._evaluate_one(event, history, benchmark)
+            if benchmark_candidates and (
+                (evaluation.return_1s_pct is not None and evaluation.excess_return_1s_pct is None)
+                or (evaluation.return_5s_pct is not None and evaluation.excess_return_5s_pct is None)
+            ):
+                degraded_reasons.append("missing_benchmark_prices")
+            evaluations.append(evaluation)
 
-        return evaluations, degraded_reasons
+        return evaluations, _dedupe(degraded_reasons), benchmark_symbol
 
     def _evaluate_one(
         self,
         event: RawValidationEvent,
         history: pd.DataFrame | None,
+        benchmark: pd.DataFrame | None,
     ) -> EvaluatedValidationEvent:
         if history is None or history.empty:
             return EvaluatedValidationEvent(
@@ -382,6 +422,8 @@ class PriceOutcomeCalculator:
             )
 
         entry_day = trading_days[0]
+        exit_day = trading_days[4] if len(trading_days) >= 5 else None
+        exit_at = exit_day.date() if exit_day is not None else None
         entry_row = history.loc[entry_day]
         entry_price = float(entry_row["Open"])
         if entry_price <= 0:
@@ -394,6 +436,7 @@ class PriceOutcomeCalculator:
                 mfe_5s_pct=None,
                 mae_5s_pct=None,
                 missing_horizons=frozenset({1, 5}),
+                exit_at=exit_at,
             )
         close_1s = float(entry_row["Close"])
         return_1s_pct = ((close_1s / entry_price) - 1.0) * 100.0
@@ -402,9 +445,8 @@ class PriceOutcomeCalculator:
         return_5s_pct: float | None = None
         mfe_5s_pct: float | None = None
         mae_5s_pct: float | None = None
-        if len(trading_days) >= 5:
-            window_days = trading_days[:5]
-            window = history.loc[window_days]
+        if exit_day is not None:
+            window = history.loc[trading_days[:5]]
             return_5s_pct = ((float(window.iloc[-1]["Close"]) / entry_price) - 1.0) * 100.0
             mfe_5s_pct = ((float(window["High"].max()) / entry_price) - 1.0) * 100.0
             mae_5s_pct = ((float(window["Low"].min()) / entry_price) - 1.0) * 100.0
@@ -420,6 +462,9 @@ class PriceOutcomeCalculator:
             mfe_5s_pct=mfe_5s_pct,
             mae_5s_pct=mae_5s_pct,
             missing_horizons=frozenset(missing_horizons),
+            exit_at=exit_at,
+            excess_return_1s_pct=_excess_return_pct(return_1s_pct, benchmark, entry_day, entry_day),
+            excess_return_5s_pct=_excess_return_pct(return_5s_pct, benchmark, entry_day, exit_day),
         )
 
 
@@ -521,6 +566,7 @@ class ValidationService:
             source_kind=source_kind,
             lookback_days=lookback_days,
             market=market,
+            benchmark_symbol=payload["benchmark_symbol"],
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
@@ -610,7 +656,12 @@ class ValidationService:
             until_date=effective_as_of_date,
             symbol=symbol,
         )
-        evaluated_events, calculator_degraded = self._outcome_calculator.evaluate_many(raw_events)
+        evaluated_events, calculator_degraded, benchmark_symbol = (
+            self._outcome_calculator.evaluate_many(
+                raw_events,
+                benchmark_candidates=benchmark_registry.get_candidate_symbols(market),
+            )
+        )
         degraded_reasons.extend(calculator_degraded)
 
         recent_events = [
@@ -627,6 +678,7 @@ class ValidationService:
             "recent_events": recent_events,
             "failure_clusters": self._failure_cluster_builder.build(evaluated_events),
             "degraded_reasons": _dedupe(degraded_reasons),
+            "benchmark_symbol": benchmark_symbol,
         }
 
     def _build_horizon_summaries(
@@ -647,6 +699,7 @@ class ValidationService:
         returns: list[float] = []
         mfe_values: list[float] = []
         mae_values: list[float] = []
+        excess_values: list[float] = []
         skipped_missing_history = 0
 
         for event in events:
@@ -659,12 +712,16 @@ class ValidationService:
                     skipped_missing_history += 1
                     continue
                 returns.append(event.return_1s_pct)
+                if event.excess_return_1s_pct is not None:
+                    excess_values.append(event.excess_return_1s_pct)
                 continue
 
             if event.return_5s_pct is None:
                 skipped_missing_history += 1
                 continue
             returns.append(event.return_5s_pct)
+            if event.excess_return_5s_pct is not None:
+                excess_values.append(event.excess_return_5s_pct)
             if event.mfe_5s_pct is not None:
                 mfe_values.append(event.mfe_5s_pct)
             if event.mae_5s_pct is not None:
@@ -693,6 +750,12 @@ class ValidationService:
             median_return_pct=median_return_pct,
             avg_mfe_pct=avg_mfe_pct,
             avg_mae_pct=avg_mae_pct,
+            avg_excess_return_pct=(
+                round(sum(excess_values) / len(excess_values), 4) if excess_values else None
+            ),
+            median_excess_return_pct=(
+                round(float(median(excess_values)), 4) if excess_values else None
+            ),
             skipped_missing_history=skipped_missing_history,
         )
 

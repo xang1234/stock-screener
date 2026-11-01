@@ -33,6 +33,8 @@ class ValidationHorizonSummary(BaseModel):
     median_return_pct: float | None = None
     avg_mfe_pct: float | None = None
     avg_mae_pct: float | None = None
+    avg_excess_return_pct: float | None = None
+    median_excess_return_pct: float | None = None
     skipped_missing_history: int = 0
 
 
@@ -48,6 +50,8 @@ class ValidationEvent(BaseModel):
     return_5s_pct: float | None = None
     mfe_5s_pct: float | None = None
     mae_5s_pct: float | None = None
+    excess_return_1s_pct: float | None = None
+    excess_return_5s_pct: float | None = None
     attributes: dict[str, Any]
 
 
@@ -77,6 +81,7 @@ class ValidationOverviewResponse(BaseModel):
     source_kind: ValidationSourceKind
     lookback_days: int
     market: str
+    benchmark_symbol: str | None = None
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
     failure_clusters: list[ValidationFailureCluster]
