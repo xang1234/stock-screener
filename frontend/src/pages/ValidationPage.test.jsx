@@ -203,6 +203,30 @@ describe('ValidationPage', () => {
     expect(getValidationOverview).toHaveBeenCalledWith('theme_alert', 180, 'US');
   });
 
+  it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
+    getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
+      Promise.resolve({ ...emptyOverview(market), source_kind: sourceKind })
+    ));
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    await screen.findByRole('heading', { name: 'Validation' });
+    expect(screen.queryByText(/survivor-biased/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Replay (Minervini)' }));
+
+    await waitFor(() => {
+      expect(getValidationOverview).toHaveBeenLastCalledWith('replay_pick', 90, 'US');
+    });
+    expect(screen.getByText(
+      "Price-only Minervini replay: the top 10 per session among stocks passing the template. "
+      + "Survivor-biased (today's universe) and not the live composite score.",
+    )).toBeInTheDocument();
+  });
+
   it('scopes the scorecard to the market chosen in the header selector', async () => {
     getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
       Promise.resolve(emptyOverview(market))
