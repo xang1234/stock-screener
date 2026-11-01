@@ -413,14 +413,14 @@ class PriceOutcomeCalculator:
             sorted({event.symbol for event in events} | set(benchmark_candidates)),
             period=PRICE_CACHE_PERIOD,
         )
-        benchmark_symbol, benchmark = next(
-            (
-                (candidate, candidate_history)
-                for candidate in benchmark_candidates
-                if (candidate_history := _normalize_price_history(histories.get(candidate)))
-                is not None
-            ),
-            (None, None),
+        cached_benchmarks = [
+            (candidate, candidate_history)
+            for candidate in benchmark_candidates
+            if (candidate_history := _normalize_price_history(histories.get(candidate))) is not None
+        ]
+        # A primary whose feed stopped keeps its old rows; the freshest wins, ties in registry order.
+        benchmark_symbol, benchmark = max(
+            cached_benchmarks, key=lambda pair: pair[1].index[-1], default=(None, None)
         )
         degraded_reasons: list[str] = []
         evaluations: list[EvaluatedValidationEvent] = []
