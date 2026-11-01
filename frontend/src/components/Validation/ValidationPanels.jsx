@@ -104,10 +104,11 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
           </TableRow>
         </TableHead>
         <TableBody>
-          {(events || []).map((event, index) => (
+          {(events || []).map((event, index) => {
+            const fiveSessionSx = event.counted === false ? { opacity: 0.55 } : undefined;
+            return (
             <TableRow
               key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}:${index}`}
-              sx={event.counted === false ? { opacity: 0.55 } : undefined}
             >
               <TableCell>
                 {event.attributes?.symbol ? (
@@ -132,12 +133,13 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
               <TableCell>{formatDate(event.event_at)}</TableCell>
               <TableCell>{formatDate(event.entry_at)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.return_1s_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(event.return_5s_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(event.excess_return_5s_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(event.mfe_5s_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(event.mae_5s_pct)}</TableCell>
+              <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.return_5s_pct)}</TableCell>
+              <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.excess_return_5s_pct)}</TableCell>
+              <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.mfe_5s_pct)}</TableCell>
+              <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.mae_5s_pct)}</TableCell>
             </TableRow>
-          ))}
+            );
+          })}
           {(!events || events.length === 0) && (
             <TableRow>
               <TableCell colSpan={showSourceKind ? 9 : 8} align="center">
