@@ -83,8 +83,13 @@ def _history_frame(start: date, rows: list[tuple[float, float, float, float]]):
     )
 
 
-def _add_run(session, as_of_date: date) -> FeatureRun:
-    run = FeatureRun(as_of_date=as_of_date, run_type="daily_snapshot", status="published")
+def _add_run(session, as_of_date: date, *, market="US") -> FeatureRun:
+    run = FeatureRun(
+        as_of_date=as_of_date,
+        run_type="daily_snapshot",
+        status="published",
+        config_json={"market": market},
+    )
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -199,7 +204,7 @@ def test_scan_picks_read_core_scores_from_details_on_legacy_rows(session):
 
 def test_scan_picks_are_filtered_to_the_requested_market(session):
     us_run = _add_run(session, FIXED_TODAY)
-    hk_run = _add_run(session, FIXED_TODAY)
+    hk_run = _add_run(session, FIXED_TODAY, market="HK")
     _add_universe(session, "AAPL")
     _add_pick(session, us_run, "AAPL", 80.0)
     _add_universe(session, "0700.HK", market="HK", industry=None)
@@ -234,7 +239,7 @@ def test_theme_alert_tickers_are_filtered_to_the_requested_market(session):
             alert_type="breakout",
             title="Mixed tickers",
             severity="warning",
-            related_tickers=["NVDA", "0700.HK", "NOTLISTED"],
+            related_tickers=["NVDA", "0700.HK", "NOTLISTED", "9988.HK"],
             triggered_at=FIXED_NOW,
         )
     )
@@ -246,23 +251,62 @@ def test_theme_alert_tickers_are_filtered_to_the_requested_market(session):
     hk_events, _ = source.collect(session, cutoff_date=cutoff, market="HK")
 
     assert [event.symbol for event in us_events] == ["NVDA", "NOTLISTED"]
-    assert [event.symbol for event in hk_events] == ["0700.HK"]
+    assert [event.symbol for event in hk_events] == ["0700.HK", "9988.HK"]
 
 
 def test_stock_validation_uses_the_symbols_own_market(session):
-    hk_run = _add_run(session, FIXED_TODAY)
+    hk_run = _add_run(session, FIXED_TODAY, market="HK")
     _add_universe(session, "0700.HK", market="HK")
     _add_pick(session, hk_run, "0700.HK", 95.0)
+    _add_pick(session, hk_run, "9988.HK", 90.0)
     session.commit()
     service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
 
-    payload = service.get_stock_validation(
-        session, symbol="0700.hk", lookback_days=30, as_of_date=FIXED_TODAY
-    )
+    refs = {
+        symbol: [
+            (event.source_kind, event.source_ref)
+            for event in service.get_stock_validation(
+                session, symbol=symbol, lookback_days=30, as_of_date=FIXED_TODAY
+            ).recent_events
+        ]
+        for symbol in ("0700.hk", "9988.HK")
+    }
 
-    assert [(event.source_kind, event.source_ref) for event in payload.recent_events] == [
-        (ValidationSourceKind.SCAN_PICK, f"run:{hk_run.id}")
+    assert refs == {
+        "0700.hk": [(ValidationSourceKind.SCAN_PICK, f"run:{hk_run.id}")],
+        "9988.HK": [(ValidationSourceKind.SCAN_PICK, f"run:{hk_run.id}")],
+    }
+
+
+def test_scan_picks_follow_the_run_market_and_keep_symbols_no_longer_listed(session):
+    us_run = _add_run(session, FIXED_TODAY)
+    hk_run = _add_run(session, FIXED_TODAY, market="HK")
+    _add_pick(session, us_run, "GONE", 90.0)
+    _add_universe(session, "AAPL")
+    _add_pick(session, us_run, "AAPL", 80.0)
+    _add_pick(session, hk_run, "9988.HK", 95.0)
+    older_runs = [
+        FeatureRun(
+            as_of_date=FIXED_TODAY,
+            run_type="daily_snapshot",
+            status="published",
+            config_json=config,
+        )
+        for config in ({"universe": {"market": "HK"}}, None)
     ]
+    session.add_all(older_runs)
+    session.commit()
+    _add_pick(session, older_runs[0], "0005.HK", 85.0)
+    _add_pick(session, older_runs[1], "OLDUS", 85.0)
+    session.commit()
+    source = ScanPickValidationSource()
+    cutoff = FIXED_TODAY - timedelta(days=1)
+
+    us_events, _ = source.collect(session, cutoff_date=cutoff, market="US")
+    hk_events, _ = source.collect(session, cutoff_date=cutoff, market="HK")
+
+    assert sorted(event.symbol for event in us_events) == ["AAPL", "GONE", "OLDUS"]
+    assert sorted(event.symbol for event in hk_events) == ["0005.HK", "9988.HK"]
 
 
 def test_theme_alert_validation_source_filters_supported_types_and_expands_related_tickers(session):

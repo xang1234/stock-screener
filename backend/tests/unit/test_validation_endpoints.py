@@ -107,7 +107,12 @@ def _history_frame(start: date, closes: list[tuple[float, float, float, float]])
 
 def _seed_validation_data(session):
     today = datetime.now(UTC).date()
-    run = FeatureRun(as_of_date=today - timedelta(days=3), run_type="daily_snapshot", status="published")
+    run = FeatureRun(
+        as_of_date=today - timedelta(days=3),
+        run_type="daily_snapshot",
+        status="published",
+        config_json={"market": "US"},
+    )
     session.add(run)
     theme = ThemeCluster(
         name="AI Infrastructure",
