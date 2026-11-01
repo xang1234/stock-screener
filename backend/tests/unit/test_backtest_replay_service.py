@@ -24,15 +24,12 @@ from app.infra.db.models.relative_strength import (
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.scanners.base_screener import DataRequirements
-from app.scanners.minervini_scanner import MinerviniScanner
-from app.scanners.scan_orchestrator import ScanOrchestrator
-from app.scanners.screener_registry import ScreenerRegistry
 from app.scripts import replay_scan_picks
 from app.services.backtest_replay_service import (
-    NoFetchStockDataProvider,
     ProviderFetchAttempted,
     ReplayPick,
     SessionReplay,
+    minervini_orchestrator,
     replay_market,
     select_picks,
 )
@@ -282,12 +279,10 @@ def test_the_minervini_replay_sees_no_bar_after_its_session_and_never_fetches(se
 
 
 def test_a_fetch_attempt_escapes_the_orchestrator_instead_of_becoming_an_error_row():
-    registry = ScreenerRegistry()
-    registry.register(MinerviniScanner)
-    orchestrator = ScanOrchestrator(data_provider=NoFetchStockDataProvider(), registry=registry)
-
     with pytest.raises(ProviderFetchAttempted, match="AAA"):
-        orchestrator.scan_stock_multi("AAA", ["minervini"], pre_merged_requirements=DataRequirements())
+        minervini_orchestrator().scan_stock_multi(
+            "AAA", ["minervini"], pre_merged_requirements=DataRequirements()
+        )
 
 
 def _seed_two_leaders() -> int:

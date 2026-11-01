@@ -28,9 +28,8 @@ from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.scanners.base_screener import StockData
-from app.scanners.minervini_scanner import MinerviniScanner
 from app.scanners.scan_orchestrator import ScanOrchestrator
-from app.scanners.screener_registry import ScreenerRegistry
+from app.scanners.screener_registry import screener_registry
 from app.services.benchmark_registry_service import benchmark_registry
 from app.services.market_rs_reader import SqlMarketRsReader
 from app.services.price_cache_service import PERIOD_DAYS
@@ -106,10 +105,8 @@ def select_picks(results: Iterable[Mapping]) -> tuple[ReplayPick, ...]:
 
 
 def minervini_orchestrator() -> ScanOrchestrator:
-    registry = ScreenerRegistry()
-    registry.register(MinerviniScanner)
     # No Market RS reader: it would serve the latest run to a StockData without RS.
-    return ScanOrchestrator(data_provider=NoFetchStockDataProvider(), registry=registry)
+    return ScanOrchestrator(data_provider=NoFetchStockDataProvider(), registry=screener_registry)
 
 
 def replay_market(
