@@ -203,7 +203,7 @@ def mark_overlapping_windows(
 
     An event counts only when it enters strictly after the previous counted event's
     fifth session for the same source and symbol. A counted event whose window is
-    still open blocks every later one.
+    still open blocks every later one; an event with no entry price blocks nothing.
     """
     suppressed: set[int] = set()
     blocked_through: dict[tuple[ValidationSourceKind, str], date] = {}
@@ -217,7 +217,7 @@ def mark_overlapping_windows(
             pair[1].raw.source_ref,
         ),
     ):
-        if event.entry_at is None:
+        if event.entry_price is None:
             continue
         key = (event.raw.source_kind, event.raw.symbol)
         if event.entry_at <= blocked_through.get(key, date.min):
