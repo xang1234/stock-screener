@@ -31,7 +31,7 @@ from app.schemas.validation import (
 )
 from app.services.benchmark_registry_service import benchmark_registry
 from app.services.economic_theme_read_service import EconomicThemeReader
-from app.services.market_calendar_service import MarketCalendarService
+from app.services.market_calendar_service import CalendarCoverageExpired, MarketCalendarService
 from app.services.price_cache_service import PriceCacheService
 from app.utils.market_hours import (
     EASTERN,
@@ -741,12 +741,18 @@ class ValidationService:
             until_date=effective_as_of_date,
             symbol=symbol,
         )
+        calendar_reasons: list[str] = []
+        try:
+            through = self._market_calendar.last_completed_trading_day(market)
+        except CalendarCoverageExpired as exc:
+            through = exc.verified_through
+            calendar_reasons.append("calendar_coverage_expired")
         benchmark_candidates = benchmark_registry.get_candidate_symbols(market)
         evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
             raw_events,
             benchmark_candidates=benchmark_candidates,
             # A mid-session fetch stores a partial bar for today.
-            through=self._market_calendar.last_completed_trading_day(market),
+            through=through,
         )
         events = [
             event
@@ -755,6 +761,7 @@ class ValidationService:
         ]
         if not events and not degraded_reasons:
             degraded_reasons.append(NO_EVENTS_REASONS[source_kind])
+        degraded_reasons.extend(calendar_reasons)
         degraded_reasons.extend(
             _outcome_degraded_reasons(events, benchmarked=bool(benchmark_candidates))
         )
