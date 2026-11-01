@@ -912,6 +912,34 @@ def test_overview_reports_benchmark_relative_returns(session):
     } == {"NVDA": (3.0, 10.0), "AMD": (-1.0, -4.0), "MU": (4.0, 1.0)}
 
 
+def test_overview_reports_how_many_events_the_excess_figures_cover(session):
+    _add_universe(session, "NVDA")
+    _add_universe(session, "AMD")
+    _add_pick(session, _add_run(session, date(2026, 3, 27)), "NVDA", 90.0)
+    _add_pick(session, _add_run(session, date(2026, 3, 29)), "AMD", 90.0)
+    session.commit()
+    service = _service(
+        {
+            "NVDA": _history_frame(date(2026, 3, 28), NVDA_ROWS),
+            "AMD": _history_frame(date(2026, 3, 30), NVDA_ROWS),
+            "SPY": _history_frame(date(2026, 3, 28), BENCHMARK_ROWS).drop(
+                pd.Timestamp(2026, 3, 30)
+            ),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.excess_sample_size) for h in payload.horizons
+    ] == [(1, 2, 1), (5, 2, 1)]
+
+
 def test_overview_ignores_bars_after_the_last_completed_session(session):
     run = _add_run(session, date(2026, 3, 27))
     _add_universe(session, "NVDA")
