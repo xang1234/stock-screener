@@ -278,6 +278,54 @@ def test_the_minervini_replay_sees_no_bar_after_its_session_and_never_fetches(se
     ]
 
 
+def test_a_session_takes_the_first_benchmark_candidate_with_a_bar_on_that_session(session_factory):
+    db = session_factory()
+    run_id = _add_run(db, D1, {"AAA": 90})
+    _add_prices(db, "AAA", _uptrend(0.002))
+    _add_prices(db, "SPY", _uptrend(0.001)[:200])
+    _add_prices(db, "IVV", _uptrend(0.001))
+    db.close()
+    stub = _ScoringStub({"AAA": 80.0})
+
+    list(replay_market(session_factory, "US", orchestrator=stub))
+
+    assert stub.calls == [("AAA", D1, D1, run_id, run_id)]
+
+
+@pytest.mark.parametrize("benchmark_bars", [200, 0], ids=["stale", "missing"])
+def test_a_session_without_a_benchmark_bar_fails_before_scoring_and_keeps_its_picks(
+    session_factory, benchmark_bars
+):
+    db = session_factory()
+    run_id = _add_run(db, D1, {"AAA": 90})
+    _add_prices(db, "AAA", _uptrend(0.002))
+    _add_prices(db, "SPY", _uptrend(0.001)[:benchmark_bars])
+    db.add(
+        BacktestReplayPick(
+            market="US",
+            as_of_date=D1,
+            rank=1,
+            symbol="OLD",
+            minervini_score=70.0,
+            rs_rating=80,
+            stage=2,
+            definition_version=DEFINITION_VERSION,
+            market_rs_run_id=run_id,
+        )
+    )
+    db.commit()
+    db.close()
+    stub = _ScoringStub({"AAA": 80.0})
+
+    replays = list(replay_market(session_factory, "US", orchestrator=stub))
+
+    assert (stub.calls, [(r.as_of_date, r.scored, r.picks, r.failure) for r in replays]) == (
+        [],
+        [(D1, 0, (), "no benchmark bar (SPY, IVV)")],
+    )
+    assert _stored_picks(session_factory, D1) == [(1, "OLD", 70.0, 80, run_id)]
+
+
 def test_a_fetch_attempt_escapes_the_orchestrator_instead_of_becoming_an_error_row():
     with pytest.raises(ProviderFetchAttempted, match="AAA"):
         minervini_orchestrator().scan_stock_multi(
