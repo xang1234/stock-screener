@@ -1849,3 +1849,25 @@ def test_replay_overlap_counting_runs_over_every_stored_pick_before_the_lookback
         (h.horizon_sessions, h.sample_size, h.pending_windows, h.suppressed_overlapping)
         for h in payload.horizons
     ] == [(1, 22, 0, 0), (5, 3, 1, 18), (20, 0, 1, 21), (60, 0, 0, 22)]
+
+
+def test_freshness_reports_the_latest_replayed_session_of_the_market_and_definition(session):
+    _add_replay_pick(session, date(2026, 3, 27), 1, "NVDA", score=91.5, rs=95)
+    _add_replay_pick(session, date(2026, 3, 26), 1, "NVDA", score=91.5, rs=95)
+    _add_replay_pick(session, date(2026, 4, 10), 1, "NVDA", score=91.5, rs=95)
+    _add_replay_pick(session, date(2026, 4, 1), 1, "MU", score=99.0, rs=99, market="HK")
+    _add_replay_pick(session, date(2026, 4, 2), 1, "MU", score=99.0, rs=99, version="minervini-top10-v0")
+    session.commit()
+
+    freshness = [
+        _service().get_overview(
+            session,
+            source_kind=ValidationSourceKind.SCAN_PICK,
+            lookback_days=30,
+            as_of_date=FIXED_TODAY,
+            market=market,
+        ).freshness.latest_replay_as_of_date
+        for market in ("US", "HK", "JP")
+    ]
+
+    assert freshness == ["2026-03-27", "2026-04-01", None]

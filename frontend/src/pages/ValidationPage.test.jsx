@@ -205,7 +205,11 @@ describe('ValidationPage', () => {
 
   it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
     getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
-      Promise.resolve({ ...emptyOverview(market), source_kind: sourceKind })
+      Promise.resolve({
+        ...emptyOverview(market),
+        source_kind: sourceKind,
+        freshness: { latest_replay_as_of_date: '2026-10-29' },
+      })
     ));
 
     renderWithProviders(
@@ -223,8 +227,25 @@ describe('ValidationPage', () => {
     });
     expect(screen.getByText(
       "Price-only Minervini replay: the top 10 per session among stocks passing the template. "
-      + "Survivor-biased (today's universe) and not the live composite score.",
+      + "Survivor-biased (today's universe) and not the live composite score. "
+      + 'Replayed through 2026-10-29.',
     )).toBeInTheDocument();
+  });
+
+  it('says when nothing has been replayed for the market', async () => {
+    getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
+      Promise.resolve({ ...emptyOverview(market), source_kind: sourceKind })
+    ));
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Replay (Minervini)' }));
+
+    expect(await screen.findByText(/Nothing replayed for this market yet\.$/)).toBeInTheDocument();
   });
 
   it('scopes the scorecard to the market chosen in the header selector', async () => {
