@@ -125,7 +125,8 @@ def replay_market(
 
     Writing replaces one session's picks per transaction, so a rerun converges and an
     interrupted run resumes by redoing sessions or, with ``skip_existing``, skipping
-    the ones that have picks. A session where any symbol errored writes nothing.
+    the ones that have picks. A session with no benchmark bar, or where any symbol
+    errored, fails and writes nothing.
     """
     orchestrator = orchestrator or minervini_orchestrator()
     reader = SqlMarketRsReader(session_factory)
