@@ -33,7 +33,12 @@ class ValidationHorizonSummary(BaseModel):
     median_return_pct: float | None = None
     avg_mfe_pct: float | None = None
     avg_mae_pct: float | None = None
+    avg_excess_return_pct: float | None = None
+    median_excess_return_pct: float | None = None
+    # Events with a benchmark bar on both dates; the excess figures average over these.
+    excess_sample_size: int = 0
     skipped_missing_history: int = 0
+    suppressed_overlapping: int = 0
 
 
 class ValidationEvent(BaseModel):
@@ -48,6 +53,10 @@ class ValidationEvent(BaseModel):
     return_5s_pct: float | None = None
     mfe_5s_pct: float | None = None
     mae_5s_pct: float | None = None
+    excess_return_1s_pct: float | None = None
+    excess_return_5s_pct: float | None = None
+    # False for a repeat inside an earlier counted event's 5-session window.
+    counted: bool = True
     attributes: dict[str, Any]
 
 
@@ -76,6 +85,8 @@ class ValidationOverviewResponse(BaseModel):
 
     source_kind: ValidationSourceKind
     lookback_days: int
+    market: str
+    benchmark_symbol: str | None = None
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
     failure_clusters: list[ValidationFailureCluster]

@@ -81,6 +81,7 @@ class _FakeValidationService:
         return ValidationOverviewResponse(
             source_kind=source_kind,
             lookback_days=lookback_days,
+            market="US",
             horizons=horizons,
             recent_events=[],
             failure_clusters=[],

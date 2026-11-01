@@ -15,6 +15,7 @@ from app.api.v1.validation import _get_validation_service
 from app.database import Base, get_db
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.main import app
+from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.services import server_auth
 from app.services.validation_service import ValidationService
@@ -50,6 +51,7 @@ def session():
         tables=[
             FeatureRun.__table__,
             StockFeatureDaily.__table__,
+            StockUniverse.__table__,
             ThemeCluster.__table__,
             ThemeAlert.__table__,
         ],
@@ -64,6 +66,7 @@ def session():
             tables=[
                 ThemeAlert.__table__,
                 ThemeCluster.__table__,
+                StockUniverse.__table__,
                 StockFeatureDaily.__table__,
                 FeatureRun.__table__,
             ],
@@ -88,10 +91,17 @@ def _override_db(session):
     return _yield_db
 
 
+class _AllSessionsCompleted:
+    """The seeded bars run past today; treat every one as a completed session."""
+
+    def last_completed_trading_day(self, market):
+        return datetime.now(UTC).date() + timedelta(days=30)
+
+
 def _service_with_histories(histories):
     class _TestValidationService(ValidationService):
         def __init__(self):
-            super().__init__()
+            super().__init__(market_calendar=_AllSessionsCompleted())
             self._outcome_calculator._price_cache = _FakePriceCache(histories)
 
     return _TestValidationService()
@@ -104,7 +114,12 @@ def _history_frame(start: date, closes: list[tuple[float, float, float, float]])
 
 def _seed_validation_data(session):
     today = datetime.now(UTC).date()
-    run = FeatureRun(as_of_date=today - timedelta(days=3), run_type="daily_snapshot", status="published")
+    run = FeatureRun(
+        as_of_date=today - timedelta(days=3),
+        run_type="daily_snapshot",
+        status="published",
+        config_json={"market": "US"},
+    )
     session.add(run)
     theme = ThemeCluster(
         name="AI Infrastructure",
@@ -127,7 +142,12 @@ def _seed_validation_data(session):
                 composite_score=95.0,
                 overall_rating=5,
                 passes_count=3,
-                details_json={"stage": 2, "ibd_industry_group": "Semiconductors"},
+                details_json={
+                    "stage": 2,
+                    "ibd_industry_group": "Semiconductors",
+                    "minervini_score": 85.0,
+                    "canslim_score": 75.0,
+                },
             ),
             StockFeatureDaily(
                 run_id=run.id,
@@ -136,8 +156,15 @@ def _seed_validation_data(session):
                 composite_score=90.0,
                 overall_rating=4,
                 passes_count=3,
-                details_json={"stage": 2, "ibd_industry_group": "Software"},
+                details_json={
+                    "stage": 2,
+                    "ibd_industry_group": "Software",
+                    "minervini_score": 80.0,
+                    "canslim_score": 70.0,
+                },
             ),
+            StockUniverse(symbol="NVDA", market="US", industry="Semiconductors"),
+            StockUniverse(symbol="MSFT", market="US", industry="Software - Infrastructure"),
         ]
     )
     session.add(
@@ -169,6 +196,10 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
             ],
         ),
         "MSFT": None,
+        "SPY": _history_frame(
+            today - timedelta(days=2),
+            [(500, 506, 499, 505)] + [(505, 511, 504, 510)] * 4,
+        ),
     }
 
     app.dependency_overrides[get_db] = _override_db(session)
@@ -180,10 +211,33 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
     assert response.status_code == 200
     payload = response.json()
     assert payload["source_kind"] == "scan_pick"
+    assert payload["market"] == "US"
     assert payload["horizons"][0]["sample_size"] == 1
     assert payload["horizons"][1]["skipped_missing_history"] == 1
     assert payload["recent_events"][0]["attributes"]["symbol"] == "NVDA"
+    assert payload["benchmark_symbol"] == "SPY"
+    assert (
+        payload["recent_events"][0]["excess_return_1s_pct"],
+        payload["recent_events"][0]["excess_return_5s_pct"],
+    ) == (2.0, 8.0)
     assert "missing_price_cache" in payload["degraded_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_validation_overview_endpoint_filters_by_requested_market(client, session):
+    _seed_validation_data(session)
+    app.dependency_overrides[get_db] = _override_db(session)
+    app.dependency_overrides[_get_validation_service] = lambda: _service_with_histories({})
+
+    hk = await client.get(
+        "/api/v1/validation/overview",
+        params={"source_kind": "scan_pick", "lookback_days": 90, "market": "hk"},
+    )
+    unsupported = await client.get("/api/v1/validation/overview", params={"market": "XX"})
+
+    assert hk.status_code == 200
+    assert (hk.json()["market"], hk.json()["recent_events"]) == ("HK", [])
+    assert unsupported.status_code == 400
 
 
 @pytest.mark.asyncio

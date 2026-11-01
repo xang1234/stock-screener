@@ -1,7 +1,10 @@
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import MarketSelector from '../components/Layout/MarketSelector';
+import { MarketProvider } from '../contexts/MarketContext';
 import { renderWithProviders } from '../test/renderWithProviders';
 import ValidationPage from './ValidationPage';
 
@@ -12,14 +15,47 @@ vi.mock('../api/validation', () => ({
   getValidationOverview: (...args) => getValidationOverview(...args),
 }));
 
+vi.mock('../contexts/RuntimeContext', () => ({
+  useRuntime: () => ({
+    primaryMarket: 'US',
+    enabledMarkets: ['US', 'HK'],
+    supportedMarkets: ['US', 'HK'],
+    marketCatalog: {
+      markets: [
+        { code: 'US', label: 'United States' },
+        { code: 'HK', label: 'Hong Kong' },
+      ],
+    },
+  }),
+}));
+
+const emptyOverview = (market) => ({
+  source_kind: 'scan_pick',
+  lookback_days: 90,
+  market,
+  benchmark_symbol: null,
+  horizons: [],
+  recent_events: [],
+  failure_clusters: [],
+  freshness: {},
+  degraded_reasons: [],
+});
+
 describe('ValidationPage', () => {
+  beforeEach(() => {
+    getValidationOverview.mockReset();
+    window.localStorage.clear();
+  });
+
   it('renders overview metrics, events, and failure clusters', async () => {
     getValidationOverview.mockResolvedValue({
       source_kind: 'scan_pick',
       lookback_days: 90,
+      market: 'US',
+      benchmark_symbol: 'SPY',
       horizons: [
-        { horizon_sessions: 1, sample_size: 12, positive_rate: 0.58, avg_return_pct: 1.2, median_return_pct: 0.9, avg_mfe_pct: null, avg_mae_pct: null, skipped_missing_history: 1 },
-        { horizon_sessions: 5, sample_size: 11, positive_rate: 0.55, avg_return_pct: 2.4, median_return_pct: 1.8, avg_mfe_pct: 4.7, avg_mae_pct: -2.1, skipped_missing_history: 2 },
+        { horizon_sessions: 1, sample_size: 12, positive_rate: 0.58, avg_return_pct: 1.2, median_return_pct: 0.9, avg_excess_return_pct: 0.4, median_excess_return_pct: 0.2, excess_sample_size: 10, avg_mfe_pct: null, avg_mae_pct: null, skipped_missing_history: 1 },
+        { horizon_sessions: 5, sample_size: 11, positive_rate: 0.55, avg_return_pct: 2.4, median_return_pct: 1.8, avg_excess_return_pct: 1.1, median_excess_return_pct: 0.6, excess_sample_size: 9, avg_mfe_pct: 4.7, avg_mae_pct: -2.1, skipped_missing_history: 2 },
       ],
       recent_events: [
         {
@@ -29,9 +65,21 @@ describe('ValidationPage', () => {
           entry_at: '2026-04-02',
           return_1s_pct: 1.4,
           return_5s_pct: 3.1,
+          excess_return_5s_pct: 2.2,
           mfe_5s_pct: 4.2,
           mae_5s_pct: -1.2,
+          counted: true,
           attributes: { symbol: 'NVDA' },
+        },
+        {
+          source_kind: 'scan_pick',
+          source_ref: 'run:11',
+          event_at: '2026-03-20',
+          entry_at: '2026-03-23',
+          return_1s_pct: 0.5,
+          return_5s_pct: 1.0,
+          counted: false,
+          attributes: { symbol: 'AMD' },
         },
       ],
       failure_clusters: [
@@ -64,6 +112,24 @@ describe('ValidationPage', () => {
     expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
     expect(screen.getByText(formatDate('2026-04-01'))).toBeInTheDocument();
     expect(screen.getByText(formatDate('2026-04-02'))).toBeInTheDocument();
+    const fiveSessions = within(screen.getByText('5 Sessions').closest('.MuiCardContent-root'));
+    expect(fiveSessions.getByText('Avg vs SPY (n=9)').nextSibling).toHaveTextContent('1.1%');
+    expect(fiveSessions.getByText('Median vs SPY (n=9)').nextSibling).toHaveTextContent('0.6%');
+    const eventRow = screen.getByRole('link', { name: 'NVDA' }).closest('tr');
+    const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent);
+    expect(eventRow.cells[headers.indexOf('5S vs SPY')]).toHaveTextContent('2.2%');
+    expect(within(eventRow).queryByText('repeat')).not.toBeInTheDocument();
+    const repeatRow = screen.getByRole('link', { name: 'AMD' }).closest('tr');
+    expect(within(repeatRow).getByText('repeat')).toBeInTheDocument();
+    const fiveSessionHeaders = ['5S', '5S vs SPY', 'MFE', 'MAE'];
+    expect(repeatRow).not.toHaveStyle({ opacity: '0.55' });
+    expect(repeatRow.cells[headers.indexOf('1S')].className).toBe(eventRow.cells[headers.indexOf('1S')].className);
+    for (const header of fiveSessionHeaders) {
+      const cell = repeatRow.cells[headers.indexOf(header)];
+      expect(cell.className).not.toBe(eventRow.cells[headers.indexOf(header)].className);
+      expect(cell).toHaveStyle({ color: 'rgb(139, 147, 167)' });
+      expect(cell).not.toHaveStyle({ opacity: '0.55' });
+    }
   });
 
   it('updates the query when source and lookback controls change', async () => {
@@ -71,6 +137,7 @@ describe('ValidationPage', () => {
       .mockResolvedValueOnce({
         source_kind: 'scan_pick',
         lookback_days: 90,
+        market: 'US',
         horizons: [],
         recent_events: [],
         failure_clusters: [],
@@ -80,6 +147,7 @@ describe('ValidationPage', () => {
       .mockResolvedValueOnce({
         source_kind: 'theme_alert',
         lookback_days: 90,
+        market: 'US',
         horizons: [],
         recent_events: [],
         failure_clusters: [],
@@ -89,6 +157,7 @@ describe('ValidationPage', () => {
       .mockResolvedValueOnce({
         source_kind: 'theme_alert',
         lookback_days: 180,
+        market: 'US',
         horizons: [],
         recent_events: [],
         failure_clusters: [],
@@ -107,6 +176,62 @@ describe('ValidationPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '180D' }));
 
     expect(await screen.findByText(/validation is partially degraded/i)).toBeInTheDocument();
-    expect(getValidationOverview).toHaveBeenCalledWith('theme_alert', 180);
+    expect(getValidationOverview).toHaveBeenCalledWith('theme_alert', 180, 'US');
+  });
+
+  it('scopes the scorecard to the market chosen in the header selector', async () => {
+    getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
+      Promise.resolve(emptyOverview(market))
+    ));
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <MemoryRouter>
+        <MarketProvider>
+          <MarketSelector />
+          <ValidationPage />
+        </MarketProvider>
+      </MemoryRouter>
+    );
+
+    await screen.findByRole('heading', { name: 'Validation' });
+    expect(getValidationOverview).toHaveBeenLastCalledWith('scan_pick', 90, 'US');
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /market/i }));
+    await user.click(await screen.findByRole('option', { name: /Hong Kong/i }));
+
+    await waitFor(() => {
+      expect(getValidationOverview).toHaveBeenLastCalledWith('scan_pick', 90, 'HK');
+    });
+  });
+
+  it("shows the loading state, not the previous market's scorecard, while a new market loads", async () => {
+    let resolveHk;
+    getValidationOverview.mockImplementation((sourceKind, lookbackDays, market) => (
+      market === 'HK'
+        ? new Promise((resolve) => { resolveHk = resolve; })
+        : Promise.resolve({ ...emptyOverview('US'), benchmark_symbol: 'SPY' })
+    ));
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <MemoryRouter>
+        <MarketProvider>
+          <MarketSelector />
+          <ValidationPage />
+        </MarketProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('columnheader', { name: '5S vs SPY' })).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /market/i }));
+    await user.click(await screen.findByRole('option', { name: /Hong Kong/i }));
+    await waitFor(() => {
+      expect(getValidationOverview).toHaveBeenLastCalledWith('scan_pick', 90, 'HK');
+    });
+
+    expect(screen.queryByRole('columnheader', { name: '5S vs SPY' })).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    resolveHk({ ...emptyOverview('HK'), benchmark_symbol: '2800.HK' });
+    expect(await screen.findByRole('columnheader', { name: '5S vs 2800.HK' })).toBeInTheDocument();
   });
 });
