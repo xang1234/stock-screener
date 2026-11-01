@@ -31,6 +31,7 @@ from app.schemas.validation import (
 )
 from app.services.benchmark_registry_service import benchmark_registry
 from app.services.economic_theme_read_service import EconomicThemeReader
+from app.services.market_calendar_service import MarketCalendarService
 from app.services.price_cache_service import PriceCacheService
 from app.utils.market_hours import (
     EASTERN,
@@ -154,7 +155,10 @@ def _safe_upper_symbol(value: Any) -> str | None:
     return normalized or None
 
 
-def _normalize_price_history(df: pd.DataFrame | None) -> pd.DataFrame | None:
+def _normalize_price_history(
+    df: pd.DataFrame | None, through: date | None = None
+) -> pd.DataFrame | None:
+    """Daily OHLC bars by exchange date, dropping any bar after ``through``."""
     if df is None or df.empty:
         return None
 
@@ -164,9 +168,11 @@ def _normalize_price_history(df: pd.DataFrame | None) -> pd.DataFrame | None:
         normalized.index = normalized.index.tz_localize(None)
     normalized.index = normalized.index.normalize()
     normalized = normalized.sort_index()
+    if through is not None:
+        normalized = normalized[normalized.index <= pd.Timestamp(through)]
 
     required_columns = {"Open", "High", "Low", "Close"}
-    if not required_columns.issubset(set(normalized.columns)):
+    if normalized.empty or not required_columns.issubset(set(normalized.columns)):
         return None
     return normalized
 
@@ -407,8 +413,9 @@ class PriceOutcomeCalculator:
         events: list[RawValidationEvent],
         *,
         benchmark_candidates: Sequence[str] = (),
+        through: date | None = None,
     ) -> tuple[list[EvaluatedValidationEvent], list[str], str | None]:
-        """Evaluate events; also return degraded reasons and the benchmark used."""
+        """Evaluate events on bars up to ``through``; also return degraded reasons and the benchmark used."""
         histories = self._price_cache.get_many_cached_only(
             sorted({event.symbol for event in events} | set(benchmark_candidates)),
             period=PRICE_CACHE_PERIOD,
@@ -416,7 +423,8 @@ class PriceOutcomeCalculator:
         cached_benchmarks = [
             (candidate, candidate_history)
             for candidate in benchmark_candidates
-            if (candidate_history := _normalize_price_history(histories.get(candidate))) is not None
+            if (candidate_history := _normalize_price_history(histories.get(candidate), through))
+            is not None
         ]
         # A primary whose feed stopped keeps its old rows; the freshest wins, ties in registry order.
         benchmark_symbol, benchmark = max(
@@ -426,7 +434,7 @@ class PriceOutcomeCalculator:
         evaluations: list[EvaluatedValidationEvent] = []
 
         for event in events:
-            history = _normalize_price_history(histories.get(event.symbol))
+            history = _normalize_price_history(histories.get(event.symbol), through)
             if history is None:
                 degraded_reasons.append("missing_price_cache")
             evaluation = self._evaluate_one(event, history, benchmark)
@@ -598,10 +606,12 @@ class ValidationService:
         theme_alert_source: ThemeAlertValidationSource | None = None,
         outcome_calculator: PriceOutcomeCalculator | None = None,
         failure_cluster_builder: FailureClusterBuilder | None = None,
+        market_calendar: MarketCalendarService | None = None,
     ) -> None:
-        from app.wiring.bootstrap import get_price_cache
+        from app.wiring.bootstrap import get_market_calendar_service, get_price_cache
 
         price_cache = get_price_cache()
+        self._market_calendar = market_calendar or get_market_calendar_service()
         self._scan_pick_source = scan_pick_source or ScanPickValidationSource()
         self._theme_alert_source = theme_alert_source or ThemeAlertValidationSource()
         self._outcome_calculator = outcome_calculator or PriceOutcomeCalculator(price_cache)
@@ -723,6 +733,8 @@ class ValidationService:
             self._outcome_calculator.evaluate_many(
                 raw_events,
                 benchmark_candidates=benchmark_registry.get_candidate_symbols(market),
+                # A mid-session fetch stores a partial bar for today.
+                through=self._market_calendar.last_completed_trading_day(market),
             )
         )
         degraded_reasons.extend(calculator_degraded)

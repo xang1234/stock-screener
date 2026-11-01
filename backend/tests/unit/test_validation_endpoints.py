@@ -91,10 +91,17 @@ def _override_db(session):
     return _yield_db
 
 
+class _AllSessionsCompleted:
+    """The seeded bars run past today; treat every one as a completed session."""
+
+    def last_completed_trading_day(self, market):
+        return datetime.now(UTC).date() + timedelta(days=30)
+
+
 def _service_with_histories(histories):
     class _TestValidationService(ValidationService):
         def __init__(self):
-            super().__init__()
+            super().__init__(market_calendar=_AllSessionsCompleted())
             self._outcome_calculator._price_cache = _FakePriceCache(histories)
 
     return _TestValidationService()

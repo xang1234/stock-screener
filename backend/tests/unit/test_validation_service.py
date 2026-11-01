@@ -74,6 +74,21 @@ class _FakePriceCache:
         return {symbol: self._histories.get(symbol) for symbol in symbols}
 
 
+class _FixedCalendar:
+    def __init__(self, last_completed: date):
+        self._last_completed = last_completed
+
+    def last_completed_trading_day(self, market):
+        return self._last_completed
+
+
+def _service(histories=None, *, last_completed=FIXED_TODAY):
+    return ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache(histories or {})),
+        market_calendar=_FixedCalendar(last_completed),
+    )
+
+
 def _history_frame(start: date, rows: list[tuple[float, float, float, float]]):
     index = pd.DatetimeIndex([start + timedelta(days=offset) for offset in range(len(rows))])
     return pd.DataFrame(
@@ -210,7 +225,7 @@ def test_scan_picks_are_filtered_to_the_requested_market(session):
     _add_universe(session, "0700.HK", market="HK", industry=None)
     _add_pick(session, hk_run, "0700.HK", 95.0)
     session.commit()
-    service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
+    service = _service()
 
     us = service.get_overview(
         session,
@@ -285,7 +300,7 @@ def test_freshness_is_scoped_to_the_requested_market(session):
         )
     )
     session.commit()
-    service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
+    service = _service()
 
     freshness = {
         market: service.get_overview(
@@ -313,7 +328,7 @@ def test_stock_validation_uses_the_symbols_own_market(session):
     _add_pick(session, hk_run, "0700.HK", 95.0)
     _add_pick(session, hk_run, "9988.HK", 90.0)
     session.commit()
-    service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
+    service = _service()
 
     refs = {
         symbol: [
@@ -487,9 +502,7 @@ def test_validation_service_freshness_uses_eastern_day_bounds_for_theme_alerts(s
     )
     session.commit()
 
-    service = ValidationService(
-        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({"NVDA": None}))
-    )
+    service = _service({"NVDA": None})
 
     payload = service.get_overview(
         session,
@@ -514,9 +527,7 @@ def test_validation_service_serves_no_legacy_theme_alerts_in_economic_mode(sessi
     )
     session.commit()
     set_economic_authority(session)
-    service = ValidationService(
-        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({"NVDA": None}))
-    )
+    service = _service({"NVDA": None})
 
     payload = service.get_overview(
         session,
@@ -561,9 +572,7 @@ def test_validation_service_uses_eastern_now_for_default_as_of_date(session, mon
 
     monkeypatch.setattr(validation_service_module, "datetime", _FixedDateTime)
 
-    service = ValidationService(
-        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({"NVDA": None}))
-    )
+    service = _service({"NVDA": None})
 
     payload = service.get_overview(
         session,
@@ -881,17 +890,13 @@ def test_overview_reports_benchmark_relative_returns(session):
         _add_pick(session, run, symbol, score)
     session.commit()
     start = date(2026, 3, 28)
-    service = ValidationService(
-        outcome_calculator=PriceOutcomeCalculator(
-            _FakePriceCache(
-                {
-                    "NVDA": _history_frame(start, NVDA_ROWS),
-                    "AMD": _history_frame(start, [(50, 51, 49, 50)] * 4 + [(50, 51, 48, 49)]),
-                    "MU": _history_frame(start, [(200, 211, 199, 210)] + [(210, 211, 205, 206)] * 4),
-                    "SPY": _history_frame(start, BENCHMARK_ROWS),
-                }
-            )
-        )
+    service = _service(
+        {
+            "NVDA": _history_frame(start, NVDA_ROWS),
+            "AMD": _history_frame(start, [(50, 51, 49, 50)] * 4 + [(50, 51, 48, 49)]),
+            "MU": _history_frame(start, [(200, 211, 199, 210)] + [(210, 211, 205, 206)] * 4),
+            "SPY": _history_frame(start, BENCHMARK_ROWS),
+        }
     )
 
     payload = service.get_overview(
@@ -912,28 +917,19 @@ def test_overview_reports_benchmark_relative_returns(session):
     } == {"NVDA": (3.0, 10.0), "AMD": (-1.0, -4.0), "MU": (4.0, 1.0)}
 
 
-class _FixedCalendar:
-    def __init__(self, last_completed: date):
-        self._last_completed = last_completed
-
-    def last_completed_trading_day(self, market):
-        return self._last_completed
-
-
 def test_overview_ignores_bars_after_the_last_completed_session(session):
     run = _add_run(session, date(2026, 3, 27))
     _add_universe(session, "NVDA")
     _add_pick(session, run, "NVDA", 95.0)
     session.commit()
     start = date(2026, 3, 28)
-    histories = {
-        "NVDA": _history_frame(start, NVDA_ROWS),
-        "SPY": _history_frame(start, BENCHMARK_ROWS[:4]),
-        "IVV": _history_frame(start, BENCHMARK_ROWS),
-    }
-    service = ValidationService(
-        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache(histories)),
-        market_calendar=_FixedCalendar(date(2026, 3, 31)),
+    service = _service(
+        {
+            "NVDA": _history_frame(start, NVDA_ROWS),
+            "SPY": _history_frame(start, BENCHMARK_ROWS[:4]),
+            "IVV": _history_frame(start, BENCHMARK_ROWS),
+        },
+        last_completed=date(2026, 3, 31),
     )
 
     payload = service.get_overview(
@@ -956,11 +952,7 @@ def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
     for as_of in (date(2026, 3, 2), date(2026, 3, 3), date(2026, 3, 4), date(2026, 3, 6), date(2026, 3, 7)):
         _add_pick(session, _add_run(session, as_of), "NVDA", 90.0)
     session.commit()
-    service = ValidationService(
-        outcome_calculator=PriceOutcomeCalculator(
-            _FakePriceCache({"NVDA": _history_frame(date(2026, 3, 3), [(10, 11, 9, 10.5)] * 12)})
-        )
-    )
+    service = _service({"NVDA": _history_frame(date(2026, 3, 3), [(10, 11, 9, 10.5)] * 12)})
 
     payload = service.get_overview(
         session,
