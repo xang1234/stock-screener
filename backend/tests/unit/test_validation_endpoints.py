@@ -221,7 +221,8 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
     )
     assert payload["horizons"][0]["sample_size"] == 1
     assert payload["horizons"][1]["skipped_missing_history"] == 1
-    assert [h["pending_windows"] for h in payload["horizons"]] == [0, 0, 0, 2]
+    # The cache's newest bar is five sessions after entry, so longer windows are still open.
+    assert [h["pending_windows"] for h in payload["horizons"]] == [0, 0, 2, 2]
     assert payload["recent_events"][0]["attributes"]["symbol"] == "NVDA"
     assert payload["benchmark_symbol"] == "SPY"
     assert (

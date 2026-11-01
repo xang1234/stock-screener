@@ -1125,7 +1125,7 @@ def _winter_overview(session, picks, histories):
         _add_pick(session, _add_run(session, as_of), symbol, 90.0)
     session.commit()
     service = _service(
-        {**histories, "SPY": _winter_bars()},
+        {"SPY": _winter_bars(), **histories},
         last_completed=date(2026, 1, 30),
         sessions=WINTER_SESSIONS,
     )
@@ -1175,6 +1175,39 @@ def test_a_window_still_open_is_pending_whether_or_not_its_history_is_cached(ses
         (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
         for h in payload.horizons
     ] == [(1, 1, 1, 0), (5, 1, 1, 0), (20, 1, 1, 0), (60, 0, 0, 2)]
+
+
+def test_a_session_completed_before_the_refresh_caches_it_is_pending(session):
+    # The calendar counts 2026-01-30 completed; the newest cached bar is 2026-01-29.
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2026, 1, 29))],
+        {"NVDA": _winter_bars()[:-1], "SPY": _winter_bars()[:-1]},
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 0, 0, 1), (5, 0, 0, 1), (20, 0, 0, 1), (60, 0, 0, 1)]
+    assert payload.degraded_reasons == []
+
+
+def test_a_gap_before_the_newest_cached_bar_still_degrades(session):
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2026, 1, 29)), ("AMD", date(2025, 11, 28))],
+        {
+            "NVDA": _winter_bars()[:-1],
+            "AMD": _winter_bars(STOP_DAY)[:-1],
+            "SPY": _winter_bars()[:-1],
+        },
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 1, 0, 1), (5, 1, 0, 1), (20, 0, 1, 1), (60, 0, 0, 2)]
+    assert payload.degraded_reasons == ["incomplete_price_history"]
 
 
 def test_a_window_missing_a_session_blocks_repeats_only_until_its_calendar_exit(session):
