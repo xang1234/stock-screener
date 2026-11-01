@@ -73,6 +73,8 @@ FAILURE_CLUSTER_FIELDS = {
     ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "theme"),
     ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band"),
 }
+# Labels that title-casing the field name gets wrong.
+FAILURE_CLUSTER_LABELS = {"rs_band": "RS Band"}
 
 
 # Runs before 2026-04-26 carry only universe.market; a run with neither counts as US.
@@ -712,7 +714,8 @@ class FailureClusterBuilder:
             if value is None or value == "":
                 continue
             normalized = str(value)
-            clusters.append(((name, normalized), f"{name.replace('_', ' ').title()}: {normalized}"))
+            label = FAILURE_CLUSTER_LABELS.get(name) or name.replace("_", " ").title()
+            clusters.append(((name, normalized), f"{label}: {normalized}"))
         return clusters
 
 
