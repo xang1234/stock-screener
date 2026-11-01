@@ -1129,6 +1129,36 @@ def test_a_pick_just_before_the_lookback_still_blocks_repeats_after_it(session):
     assert payload.degraded_reasons == []
 
 
+def test_a_pick_before_a_long_holiday_still_blocks_repeats_after_the_lookback_start(session):
+    _add_universe(session, "NVDA")
+    _add_pick(session, _add_run(session, date(2026, 2, 6)), "NVDA", 90.0)
+    _add_pick(session, _add_run(session, date(2026, 2, 23)), "NVDA", 90.0)
+    session.commit()
+    sessions = [date(2026, 2, 9), date(2026, 2, 10), date(2026, 2, 11)] + [
+        date(2026, 2, 23) + timedelta(days=offset) for offset in range(8)
+    ]
+    bars = pd.DataFrame(
+        [(10, 11, 9, 10.5)] * len(sessions),
+        index=pd.DatetimeIndex(sessions),
+        columns=["Open", "High", "Low", "Close"],
+    )
+    service = _service({"NVDA": bars, "SPY": bars})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=date(2026, 3, 24),
+    )
+
+    assert [(event.event_at, event.counted) for event in payload.recent_events] == [
+        ("2026-02-23", False),
+    ]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
+    ] == [(1, 1, 0), (5, 0, 1)]
+
+
 def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry_price=10.0):
     return EvaluatedValidationEvent(
         raw=RawValidationEvent(
