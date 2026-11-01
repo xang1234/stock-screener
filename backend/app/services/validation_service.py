@@ -10,11 +10,12 @@ from statistics import median
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import and_, case, func
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.infra.db.portability import json_text
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import (
@@ -45,12 +46,23 @@ PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
 
+def _scored_by(field: str):
+    """Whether the row carries ``field``; rows before 20261013_0066 hold it only in details_json."""
+    return or_(
+        getattr(StockFeatureDaily, field).is_not(None),
+        and_(
+            StockFeatureDaily.hot_fields_stored.is_(None),
+            json_text(StockFeatureDaily.details_json, (field,)).is_not(None),
+        ),
+    )
+
+
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
 # (minervini/canslim NULL) and funds otherwise top the composite ranking.
 # is_common_stock alone misses ETFs: finviz marks them common stock.
 SCAN_PICK_ELIGIBILITY = and_(
-    StockFeatureDaily.minervini_score.is_not(None),
-    StockFeatureDaily.canslim_score.is_not(None),
+    _scored_by("minervini_score"),
+    _scored_by("canslim_score"),
     StockUniverse.is_common_stock.is_not(False),
     StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
 )
