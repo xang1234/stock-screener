@@ -42,7 +42,6 @@ from app.utils.market_hours import (
     EASTERN,
     MARKET_OPEN_TIME,
     eastern_day_bounds_utc,
-    is_trading_day,
     to_eastern_date,
 )
 
@@ -101,7 +100,6 @@ class RawValidationEvent:
 class HorizonOutcome:
     """An event's result over its first ``h`` sessions, entered at the first session's open."""
 
-    exit_at: date
     return_pct: float
     mfe_pct: float
     mae_pct: float
@@ -117,7 +115,9 @@ class EvaluatedValidationEvent:
     raw: RawValidationEvent
     entry_at: date | None
     entry_price: float | None
-    # Keyed by horizon; a horizon whose last session has not closed has no entry.
+    # Keyed by horizon: the market session each window that has closed ends on.
+    exits: dict[int, date] = field(default_factory=dict)
+    # The closed windows whose every session is cached.
     outcomes: dict[int, HorizonOutcome] = field(default_factory=dict)
     # Horizons at which this event repeats inside an earlier counted event's window.
     suppressed: frozenset[int] = frozenset()
@@ -233,10 +233,10 @@ def mark_overlapping_windows(
     """Return ``events`` in input order, each marking the horizons at which it is a repeat.
 
     At a horizon of h sessions, an event counts only when it enters strictly after the
-    previous counted event's h-th session for the same source and symbol. A counted event
-    whose h-session window is still open blocks every later one; an event with no entry
-    price blocks nothing. Every event counts at 1 session, where the window is the entry
-    day alone.
+    previous counted event's h-th market session for the same source and symbol, cached or
+    not. A counted event whose h-session window is still open blocks every later one; an
+    event with no entry price blocks nothing. Every event counts at 1 session, where the
+    window is the entry day alone.
     """
     entered = sorted(
         (pair for pair in enumerate(events) if pair[1].entry_price is not None),
@@ -258,8 +258,7 @@ def mark_overlapping_windows(
             if event.entry_at <= blocked_through.get(key, date.min):
                 suppressed[index].add(horizon)
                 continue
-            outcome = event.outcomes.get(horizon)
-            blocked_through[key] = outcome.exit_at if outcome else date.max
+            blocked_through[key] = event.exits.get(horizon, date.max)
     return [
         replace(event, suppressed=frozenset(suppressed[index])) if index in suppressed else event
         for index, event in enumerate(events)
@@ -284,11 +283,20 @@ def _outcome_degraded_reasons(
     reasons: list[str] = []
     if any(event.history_missing for event in events):
         reasons.append("missing_price_cache")
-    if benchmarked and any(
-        outcome.excess_return_pct is None
+    windows = [
+        (event, horizon)
         for event in events
-        for horizon, outcome in event.outcomes.items()
+        for horizon in event.exits
         if horizon not in event.suppressed
+    ]
+    if any(
+        not event.history_missing and horizon not in event.outcomes for event, horizon in windows
+    ):
+        reasons.append("incomplete_price_history")
+    if benchmarked and any(
+        event.outcomes[horizon].excess_return_pct is None
+        for event, horizon in windows
+        if horizon in event.outcomes
     ):
         reasons.append("missing_benchmark_prices")
     return reasons
@@ -468,10 +476,13 @@ class PriceOutcomeCalculator:
         self,
         events: list[RawValidationEvent],
         *,
+        sessions: Sequence[date],
         benchmark_candidates: Sequence[str] = (),
-        through: date | None = None,
     ) -> tuple[list[EvaluatedValidationEvent], str | None]:
-        """Evaluate events on bars up to ``through``; also return the benchmark used."""
+        """Evaluate events over the market's ``sessions``, ignoring bars after the last one;
+        also return the benchmark used."""
+        calendar = pd.DatetimeIndex(sessions)
+        through = max(sessions, default=None)
         histories = self._price_cache.get_many_cached_only(
             sorted({event.symbol for event in events} | set(benchmark_candidates)),
             period=PRICE_CACHE_PERIOD,
@@ -488,7 +499,10 @@ class PriceOutcomeCalculator:
         )
         evaluations = [
             self._evaluate_one(
-                event, _normalize_price_history(histories.get(event.symbol), through), benchmark
+                event,
+                _normalize_price_history(histories.get(event.symbol), through),
+                benchmark,
+                calendar,
             )
             for event in events
         ]
@@ -499,41 +513,47 @@ class PriceOutcomeCalculator:
         event: RawValidationEvent,
         history: pd.DataFrame | None,
         benchmark: pd.DataFrame | None,
+        calendar: pd.DatetimeIndex,
     ) -> EvaluatedValidationEvent:
+        start = _entry_session_index(event.event_at, calendar)
+        sessions = calendar[start : start + max(HORIZONS)]
+        exits = {
+            horizon: sessions[horizon - 1].date() for horizon in HORIZONS if horizon <= len(sessions)
+        }
         if history is None:
             return EvaluatedValidationEvent(
-                raw=event, entry_at=None, entry_price=None, history_missing=True
+                raw=event, entry_at=None, entry_price=None, exits=exits, history_missing=True
             )
-
-        if isinstance(event.event_at, datetime):
-            event_dt = _normalize_event_datetime(event.event_at)
-            event_day = pd.Timestamp(event_dt.date())
-            same_day_entry_allowed = (
-                is_trading_day(event_dt.date())
-                and event_dt.time() < MARKET_OPEN_TIME
-                and event_day in history.index
-            )
-            if same_day_entry_allowed:
-                trading_days = history.index[history.index >= event_day]
-            else:
-                trading_days = history.index[history.index > event_day]
-        else:
-            event_day = pd.Timestamp(event.event_at)
-            trading_days = history.index[history.index > event_day]
-        if len(trading_days) == 0:
+        if sessions.empty:
             return EvaluatedValidationEvent(raw=event, entry_at=None, entry_price=None)
 
-        window = history.loc[trading_days[: max(HORIZONS)]]
-        entry_at = trading_days[0].date()
-        entry_price = float(window["Open"].iloc[0])
+        # Score only the sessions before the first one the cache lacks: past a gap, every
+        # later bar would stand in for an earlier session.
+        cached = np.logical_and.accumulate(sessions.isin(history.index))
+        window = history.loc[sessions[cached]]
+        entry_at = sessions[0].date()
+        entry_price = float(window["Open"].iloc[0]) if cached[0] else math.nan
         if not entry_price > 0:
-            return EvaluatedValidationEvent(raw=event, entry_at=entry_at, entry_price=None)
+            return EvaluatedValidationEvent(
+                raw=event, entry_at=entry_at, entry_price=None, exits=exits
+            )
         return EvaluatedValidationEvent(
             raw=event,
             entry_at=entry_at,
             entry_price=entry_price,
+            exits=exits,
             outcomes=_horizon_outcomes(window, entry_price, benchmark),
         )
+
+
+def _entry_session_index(event_at: date | datetime, calendar: pd.DatetimeIndex) -> int:
+    """Position in ``calendar`` of the session whose open the event enters at: its own day
+    for an alert before that session opens, else the next session."""
+    if isinstance(event_at, datetime):
+        event_dt = _normalize_event_datetime(event_at)
+        side = "left" if event_dt.time() < MARKET_OPEN_TIME else "right"
+        return int(calendar.searchsorted(pd.Timestamp(event_dt.date()), side=side))
+    return int(calendar.searchsorted(pd.Timestamp(event_at), side="right"))
 
 
 def _horizon_outcomes(
@@ -569,7 +589,6 @@ def _horizon_outcomes(
         return_pct = pct(closes[last])
         stopped_out = stop_day <= last
         outcomes[horizon] = HorizonOutcome(
-            exit_at=window.index[last].date(),
             return_pct=return_pct,
             mfe_pct=pct(peaks[last]),
             mae_pct=pct(troughs[last]),
@@ -768,9 +787,10 @@ class ValidationService:
             if source_kind == ValidationSourceKind.SCAN_PICK
             else self._theme_alert_source
         )
+        collect_from = cutoff_date - OVERLAP_LOOKBEHIND
         raw_events, degraded_reasons = source.collect(
             db,
-            cutoff_date=cutoff_date - OVERLAP_LOOKBEHIND,
+            cutoff_date=collect_from,
             market=market,
             until_date=effective_as_of_date,
             symbol=symbol,
@@ -785,9 +805,10 @@ class ValidationService:
         evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
             raw_events,
             benchmark_candidates=benchmark_candidates,
-            # Drops today's partial bar while the session is open. A bar fetched mid-session
-            # stays partial until the after-close refresh, which can run after this cut-off moves.
-            through=through,
+            # Ending at ``through``, which never passes verified coverage, drops today's partial
+            # bar while the session is open. A bar fetched mid-session stays partial until the
+            # after-close refresh, which can run after this cut-off moves.
+            sessions=self._market_calendar.trading_days(market, collect_from, through),
         )
         events = [
             event

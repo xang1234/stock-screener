@@ -97,6 +97,9 @@ class _AllSessionsCompleted:
     def last_completed_trading_day(self, market):
         return datetime.now(UTC).date() + timedelta(days=30)
 
+    def trading_days(self, market, start, end):
+        return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+
 
 def _service_with_histories(histories):
     class _TestValidationService(ValidationService):
@@ -247,10 +250,13 @@ async def test_validation_overview_endpoint_filters_by_requested_market(client, 
 @pytest.mark.asyncio
 async def test_validation_overview_endpoint_returns_theme_alert_metrics(client, session):
     today = _seed_validation_data(session)
+    # The alert fires two days before now, so its entry session is one to three days back.
     histories = {
         "NVDA": _history_frame(
-            today - timedelta(days=1),
+            today - timedelta(days=3),
             [
+                (48, 50, 47, 49),
+                (49, 51, 48, 50),
                 (50, 52, 49, 51),
                 (51, 53, 50, 52),
                 (52, 54, 51, 53),
@@ -259,8 +265,10 @@ async def test_validation_overview_endpoint_returns_theme_alert_metrics(client, 
             ],
         ),
         "AVGO": _history_frame(
-            today - timedelta(days=1),
+            today - timedelta(days=3),
             [
+                (82, 83, 80, 81),
+                (81, 82, 79, 80),
                 (80, 81, 78, 79),
                 (79, 82, 77, 78),
                 (78, 80, 76, 77),

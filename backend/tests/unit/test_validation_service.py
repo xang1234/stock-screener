@@ -99,6 +99,10 @@ def _service(histories=None, *, last_completed=FIXED_TODAY, sessions=None):
     )
 
 
+def _sessions_of(frame):
+    return list(frame.index.date)
+
+
 def _history_frame(start: date, rows: list[tuple[float, float, float, float]]):
     index = pd.DatetimeIndex([start + timedelta(days=offset) for offset in range(len(rows))])
     return pd.DataFrame(
@@ -626,7 +630,7 @@ def test_price_outcome_calculator_rolls_to_next_trading_session_and_computes_win
     )
     calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
 
-    evaluated, _ = calculator.evaluate_many([saturday_event])
+    evaluated, _ = calculator.evaluate_many([saturday_event], sessions=_sessions_of(history))
 
     assert len(evaluated) == 1
     event = evaluated[0]
@@ -655,8 +659,9 @@ def test_price_outcome_calculator_marks_missing_five_session_history():
         ],
     )
     calculator = PriceOutcomeCalculator(_FakePriceCache({"MSFT": history}))
+    sessions = [date(2026, 4, 2) + timedelta(days=offset) for offset in range(9)]
 
-    evaluated, _ = calculator.evaluate_many([event])
+    evaluated, _ = calculator.evaluate_many([event], sessions=sessions)
 
     assert evaluated[0].outcomes[1].return_pct == pytest.approx(1.0)
     assert set(evaluated[0].outcomes) == {1}
@@ -682,7 +687,7 @@ def test_price_outcome_calculator_degrades_zero_open_entry_prices():
     )
     calculator = PriceOutcomeCalculator(_FakePriceCache({"MSFT": history}))
 
-    evaluated, _ = calculator.evaluate_many([event])
+    evaluated, _ = calculator.evaluate_many([event], sessions=_sessions_of(history))
 
     assert (evaluated[0].entry_at, evaluated[0].entry_price, evaluated[0].outcomes) == (
         date(2026, 4, 2),
@@ -719,7 +724,9 @@ def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only(
         attributes={"symbol": "NVDA"},
     )
 
-    evaluated, _ = calculator.evaluate_many([premarket_event, after_open_event])
+    evaluated, _ = calculator.evaluate_many(
+        [premarket_event, after_open_event], sessions=_sessions_of(history)
+    )
 
     assert evaluated[0].entry_at == date(2026, 4, 2)
     assert evaluated[0].entry_price == 100.0
@@ -748,15 +755,14 @@ def test_price_outcome_calculator_uses_eastern_calendar_day_for_late_evening_the
         attributes={"symbol": "NVDA"},
     )
 
-    evaluated, _ = calculator.evaluate_many([late_evening_event])
+    evaluated, _ = calculator.evaluate_many([late_evening_event], sessions=_sessions_of(history))
 
     assert evaluated[0].entry_at == date(2026, 4, 2)
     assert evaluated[0].entry_price == 100.0
 
 
-def _outcome(exit_at, return_pct=0.0):
+def _outcome(return_pct=0.0):
     return HorizonOutcome(
-        exit_at=exit_at,
         return_pct=return_pct,
         mfe_pct=0.0,
         mae_pct=0.0,
@@ -777,7 +783,7 @@ def test_failure_cluster_builder_uses_source_specific_bucket_fields():
         ),
         entry_at=FIXED_TODAY,
         entry_price=100.0,
-        outcomes={1: _outcome(FIXED_TODAY, -1.0), 5: _outcome(FIXED_TODAY, -3.0)},
+        outcomes={1: _outcome(-1.0), 5: _outcome(-3.0)},
     )
     losing_theme_event = EvaluatedValidationEvent(
         raw=RawValidationEvent(
@@ -789,7 +795,7 @@ def test_failure_cluster_builder_uses_source_specific_bucket_fields():
         ),
         entry_at=FIXED_TODAY,
         entry_price=100.0,
-        outcomes={1: _outcome(FIXED_TODAY, -0.5), 5: _outcome(FIXED_TODAY, -2.0)},
+        outcomes={1: _outcome(-0.5), 5: _outcome(-2.0)},
     )
 
     clusters = builder.build([losing_scan_event, losing_theme_event])
@@ -838,11 +844,12 @@ def test_price_outcome_calculator_measures_excess_over_the_first_cached_benchmar
     )
 
     evaluated, benchmark_symbol = calculator.evaluate_many(
-        [event], benchmark_candidates=["SPY", "IVV"]
+        [event], sessions=_sessions_of(_history_frame(date(2026, 4, 6), NVDA_ROWS)),
+        benchmark_candidates=["SPY", "IVV"],
     )
 
     assert benchmark_symbol == "IVV"
-    assert evaluated[0].outcomes[5].exit_at == date(2026, 4, 10)
+    assert evaluated[0].exits[5] == date(2026, 4, 10)
     assert evaluated[0].outcomes[1].excess_return_pct == pytest.approx(3.0)
     assert evaluated[0].outcomes[5].excess_return_pct == pytest.approx(10.0)
 
@@ -862,7 +869,9 @@ def test_price_outcome_calculator_prefers_the_benchmark_with_the_latest_bar():
         calculator = PriceOutcomeCalculator(
             _FakePriceCache({"NVDA": _history_frame(date(2026, 4, 6), NVDA_ROWS), **histories})
         )
-        return calculator.evaluate_many([event], benchmark_candidates=["SPY", "IVV"])[-1]
+        return calculator.evaluate_many(
+            [event], sessions=_sessions_of(current), benchmark_candidates=["SPY", "IVV"]
+        )[-1]
 
     assert benchmark_for({"SPY": stale, "IVV": current}) == "IVV"
     assert benchmark_for({"SPY": current, "IVV": current}) == "SPY"
@@ -897,11 +906,13 @@ def test_price_outcome_calculator_reports_twenty_and_sixty_session_outcomes():
         )
     )
 
-    nvda, amd = calculator.evaluate_many([_scan_event("NVDA"), _scan_event("AMD")])[0]
+    nvda, amd = calculator.evaluate_many(
+        [_scan_event("NVDA"), _scan_event("AMD")],
+        sessions=_sessions_of(_history_frame(date(2026, 1, 2), rows)),
+    )[0]
 
-    def unstopped(exit_at, return_pct, mfe_pct, mae_pct):
+    def unstopped(return_pct, mfe_pct, mae_pct):
         return HorizonOutcome(
-            exit_at=exit_at,
             return_pct=return_pct,
             mfe_pct=mfe_pct,
             mae_pct=mae_pct,
@@ -909,11 +920,14 @@ def test_price_outcome_calculator_reports_twenty_and_sixty_session_outcomes():
             stopped_out=False,
         )
 
+    assert nvda.exits == {
+        1: date(2026, 1, 2), 5: date(2026, 1, 6), 20: date(2026, 1, 21), 60: date(2026, 3, 2),
+    }
     assert nvda.outcomes == {
-        1: unstopped(date(2026, 1, 2), 0.0, 0.0, -3.125),
-        5: unstopped(date(2026, 1, 6), 0.0, 0.0, -3.125),
-        20: unstopped(date(2026, 1, 21), 25.0, 50.0, -3.125),
-        60: unstopped(date(2026, 3, 2), 12.5, 50.0, -6.25),
+        1: unstopped(0.0, 0.0, -3.125),
+        5: unstopped(0.0, 0.0, -3.125),
+        20: unstopped(25.0, 50.0, -3.125),
+        60: unstopped(12.5, 50.0, -6.25),
     }
     assert set(amd.outcomes) == {1, 5, 20}
 
@@ -934,7 +948,8 @@ def test_price_outcome_calculator_exits_at_the_stop_or_the_open_that_gaps_throug
     )
 
     evaluated, _ = calculator.evaluate_many(
-        [_scan_event(symbol) for symbol in ("INTRADAY", "GAP", "ENTRYDAY")]
+        [_scan_event(symbol) for symbol in ("INTRADAY", "GAP", "ENTRYDAY")],
+        sessions=_sessions_of(_history_frame(date(2026, 1, 2), GAP_ROWS)),
     )
 
     assert {
@@ -951,10 +966,9 @@ def test_price_outcome_calculator_exits_at_the_stop_or_the_open_that_gaps_throug
 
 
 def _evaluate_rows(rows):
-    calculator = PriceOutcomeCalculator(
-        _FakePriceCache({"NVDA": _history_frame(date(2026, 1, 2), rows)})
-    )
-    return calculator.evaluate_many([_scan_event("NVDA")])[0][0]
+    history = _history_frame(date(2026, 1, 2), rows)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+    return calculator.evaluate_many([_scan_event("NVDA")], sessions=_sessions_of(history))[0][0]
 
 
 def _stop_figures(event):
@@ -1262,15 +1276,26 @@ def test_overview_ignores_bars_after_the_last_completed_session(session):
     assert payload.recent_events[0].return_5s_pct is None
 
 
-class _ExpiredCalendar:
-    def last_completed_trading_day(self, market):
-        raise CalendarCoverageExpired(
+class _ExpiredCalendar(_FixedCalendar):
+    def __init__(self):
+        super().__init__(date(2026, 3, 31))
+
+    def _expired(self, market, requested_date):
+        return CalendarCoverageExpired(
             market=market,
-            requested_date=FIXED_TODAY,
+            requested_date=requested_date,
             verified_through=date(2026, 3, 31),
             source_url="https://example.test/holidays",
             operations_doc="docs/OPERATIONS.md",
         )
+
+    def last_completed_trading_day(self, market):
+        raise self._expired(market, FIXED_TODAY)
+
+    def trading_days(self, market, start, end):
+        if end > date(2026, 3, 31):
+            raise self._expired(market, end)
+        return super().trading_days(market, start, end)
 
 
 def test_overview_caps_prices_at_verified_coverage_when_the_calendar_expires(session):
@@ -1399,7 +1424,7 @@ def test_a_pick_before_a_long_holiday_still_blocks_repeats_after_the_lookback_st
         index=pd.DatetimeIndex(sessions),
         columns=["Open", "High", "Low", "Close"],
     )
-    service = _service({"NVDA": bars, "SPY": bars})
+    service = _service({"NVDA": bars, "SPY": bars}, sessions=sessions)
 
     payload = service.get_overview(
         session,
@@ -1487,7 +1512,7 @@ def test_a_pick_seventy_days_before_the_cutoff_blocks_repeats_inside_its_sixty_s
     bars = pd.DataFrame(
         [FLAT_ROW] * len(sessions), index=sessions, columns=["Open", "High", "Low", "Close"]
     )
-    service = _service({"NVDA": bars})
+    service = _service({"NVDA": bars}, sessions=list(sessions.date))
 
     payload = service.get_overview(
         session,
@@ -1520,7 +1545,7 @@ def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry
         ),
         entry_at=entry_at,
         entry_price=entry_price if entry_at else None,
-        outcomes={5: _outcome(exit_at)} if exit_at else {},
+        exits={5: exit_at} if exit_at else {},
     )
 
 
