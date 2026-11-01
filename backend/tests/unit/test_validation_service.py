@@ -973,6 +973,59 @@ def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
     ] == [(1, 5, 0), (5, 2, 3)]
 
 
+def test_a_suppressed_repeat_does_not_degrade_the_benchmark_comparison(session):
+    _add_universe(session, "NVDA")
+    for as_of in (date(2026, 3, 27), date(2026, 3, 28)):
+        _add_pick(session, _add_run(session, as_of), "NVDA", 90.0)
+    session.commit()
+    start = date(2026, 3, 28)
+    service = _service(
+        {
+            "NVDA": _history_frame(start, NVDA_ROWS + [(112, 113, 111, 112)]),
+            "SPY": _history_frame(start, BENCHMARK_ROWS),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [(event.event_at, event.counted) for event in payload.recent_events] == [
+        ("2026-03-28", False),
+        ("2026-03-27", True),
+    ]
+    assert payload.degraded_reasons == []
+
+
+def test_a_pick_just_before_the_lookback_still_blocks_repeats_after_it(session):
+    _add_universe(session, "NVDA")
+    before_cutoff = _add_run(session, date(2026, 3, 5))
+    _add_pick(session, before_cutoff, "NVDA", 90.0)
+    _add_pick(session, before_cutoff, "GONE", 80.0)
+    _add_pick(session, _add_run(session, date(2026, 3, 7)), "NVDA", 90.0)
+    session.commit()
+    bars = _history_frame(date(2026, 3, 6), [(10, 11, 9, 10.5)] * 12)
+    service = _service({"NVDA": bars, "SPY": bars})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [(event.event_at, event.counted) for event in payload.recent_events] == [
+        ("2026-03-07", False),
+    ]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.suppressed_overlapping) for h in payload.horizons
+    ] == [(1, 1, 0), (5, 0, 1)]
+    assert payload.degraded_reasons == []
+
+
 def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry_price=10.0):
     return EvaluatedValidationEvent(
         raw=RawValidationEvent(
