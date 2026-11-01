@@ -973,7 +973,7 @@ def test_overview_counts_a_repeated_pick_once_per_five_session_window(session):
     ] == [(1, 5, 0), (5, 2, 3)]
 
 
-def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None):
+def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry_price=10.0):
     return EvaluatedValidationEvent(
         raw=RawValidationEvent(
             symbol=symbol,
@@ -983,7 +983,7 @@ def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None):
             attributes={},
         ),
         entry_at=entry_at,
-        entry_price=10.0 if entry_at else None,
+        entry_price=entry_price if entry_at else None,
         return_1s_pct=1.0 if entry_at else None,
         return_5s_pct=None,
         mfe_5s_pct=None,
@@ -1011,4 +1011,19 @@ def test_an_incomplete_window_blocks_later_events_for_the_same_source_and_symbol
         ("run:3", True),
         ("run:4", True),
         ("alert:1", True),
+    ]
+
+
+def test_an_entry_without_a_price_does_not_block_a_window():
+    scan = ValidationSourceKind.SCAN_PICK
+    events = [
+        _evaluated(scan, "AAA", "run:1", date(2026, 3, 25), date(2026, 3, 31), entry_price=None),
+        _evaluated(scan, "AAA", "run:2", date(2026, 3, 26)),
+    ]
+
+    marked = mark_overlapping_windows(events)
+
+    assert [(event.raw.source_ref, event.counted) for event in marked] == [
+        ("run:1", True),
+        ("run:2", True),
     ]
