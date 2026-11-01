@@ -47,6 +47,14 @@ FAILURE_CLUSTERS_LIMIT = 5
 PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
+# Events this far before the cutoff are counted so a pick just before it still blocks the
+# repeats after it. ponytail: a longer chain of counted picks can still shift which repeat
+# counts; collect from the first run if that matters.
+OVERLAP_LOOKBEHIND = timedelta(days=14)
+NO_EVENTS_REASONS = {
+    ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
+    ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
+}
 
 def _scored_by(field: str):
     """Whether the row carries ``field``; rows before 20261013_0066 hold it only in details_json."""
@@ -105,6 +113,7 @@ class EvaluatedValidationEvent:
     excess_return_1s_pct: float | None = None
     excess_return_5s_pct: float | None = None
     counted: bool = True
+    history_missing: bool = False
 
     def to_response(self) -> ValidationEvent:
         return ValidationEvent(
@@ -140,7 +149,7 @@ def _serialize_temporal(value: date | datetime) -> str:
 
 def _event_date(value: date | datetime) -> date:
     if isinstance(value, datetime):
-        return value.date()
+        return to_eastern_date(value)
     return value
 
 
@@ -241,6 +250,22 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _outcome_degraded_reasons(
+    events: list[EvaluatedValidationEvent], *, benchmarked: bool
+) -> list[str]:
+    """Reasons from the events the summaries use: every event at 1 session, counted ones at 5."""
+    reasons: list[str] = []
+    if any(event.history_missing for event in events):
+        reasons.append("missing_price_cache")
+    if benchmarked and any(
+        (event.return_1s_pct is not None and event.excess_return_1s_pct is None)
+        or (event.counted and event.return_5s_pct is not None and event.excess_return_5s_pct is None)
+        for event in events
+    ):
+        reasons.append("missing_benchmark_prices")
+    return reasons
+
+
 def _symbol_markets(db: Session, symbols: set[str]) -> dict[str, str]:
     """Each symbol's listed market, else the one its suffix names, else US."""
     listed = dict(
@@ -312,12 +337,8 @@ class ScanPickValidationSource:
         if until_date is not None:
             query = query.filter(ranked_rows.c.as_of_date <= until_date)
 
-        rows = query.all()
-        if not rows:
-            return [], ["no_matching_scan_picks"]
-
         events: list[RawValidationEvent] = []
-        for row in rows:
+        for row in query.all():
             details = row.details_json or {}
             events.append(
                 RawValidationEvent(
@@ -401,10 +422,7 @@ class ThemeAlertValidationSource:
                 )
 
         markets = _symbol_markets(db, {event.symbol for event in events})
-        events = [event for event in events if markets[event.symbol] == market]
-        if not events:
-            return [], ["no_matching_theme_alerts"]
-        return events, []
+        return [event for event in events if markets[event.symbol] == market], []
 
 
 class PriceOutcomeCalculator:
@@ -419,8 +437,8 @@ class PriceOutcomeCalculator:
         *,
         benchmark_candidates: Sequence[str] = (),
         through: date | None = None,
-    ) -> tuple[list[EvaluatedValidationEvent], list[str], str | None]:
-        """Evaluate events on bars up to ``through``; also return degraded reasons and the benchmark used."""
+    ) -> tuple[list[EvaluatedValidationEvent], str | None]:
+        """Evaluate events on bars up to ``through``; also return the benchmark used."""
         histories = self._price_cache.get_many_cached_only(
             sorted({event.symbol for event in events} | set(benchmark_candidates)),
             period=PRICE_CACHE_PERIOD,
@@ -435,22 +453,13 @@ class PriceOutcomeCalculator:
         benchmark_symbol, benchmark = max(
             cached_benchmarks, key=lambda pair: pair[1].index[-1], default=(None, None)
         )
-        degraded_reasons: list[str] = []
-        evaluations: list[EvaluatedValidationEvent] = []
-
-        for event in events:
-            history = _normalize_price_history(histories.get(event.symbol), through)
-            if history is None:
-                degraded_reasons.append("missing_price_cache")
-            evaluation = self._evaluate_one(event, history, benchmark)
-            if benchmark_candidates and (
-                (evaluation.return_1s_pct is not None and evaluation.excess_return_1s_pct is None)
-                or (evaluation.return_5s_pct is not None and evaluation.excess_return_5s_pct is None)
-            ):
-                degraded_reasons.append("missing_benchmark_prices")
-            evaluations.append(evaluation)
-
-        return evaluations, _dedupe(degraded_reasons), benchmark_symbol
+        evaluations = [
+            self._evaluate_one(
+                event, _normalize_price_history(histories.get(event.symbol), through), benchmark
+            )
+            for event in events
+        ]
+        return evaluations, benchmark_symbol
 
     def _evaluate_one(
         self,
@@ -458,7 +467,7 @@ class PriceOutcomeCalculator:
         history: pd.DataFrame | None,
         benchmark: pd.DataFrame | None,
     ) -> EvaluatedValidationEvent:
-        if history is None or history.empty:
+        if history is None:
             return EvaluatedValidationEvent(
                 raw=event,
                 entry_at=None,
@@ -468,6 +477,7 @@ class PriceOutcomeCalculator:
                 mfe_5s_pct=None,
                 mae_5s_pct=None,
                 missing_horizons=frozenset({1, 5}),
+                history_missing=True,
             )
 
         if isinstance(event.event_at, datetime):
@@ -729,21 +739,28 @@ class ValidationService:
         )
         raw_events, degraded_reasons = source.collect(
             db,
-            cutoff_date=cutoff_date,
+            cutoff_date=cutoff_date - OVERLAP_LOOKBEHIND,
             market=market,
             until_date=effective_as_of_date,
             symbol=symbol,
         )
-        evaluated_events, calculator_degraded, benchmark_symbol = (
-            self._outcome_calculator.evaluate_many(
-                raw_events,
-                benchmark_candidates=benchmark_registry.get_candidate_symbols(market),
-                # A mid-session fetch stores a partial bar for today.
-                through=self._market_calendar.last_completed_trading_day(market),
-            )
+        benchmark_candidates = benchmark_registry.get_candidate_symbols(market)
+        evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
+            raw_events,
+            benchmark_candidates=benchmark_candidates,
+            # A mid-session fetch stores a partial bar for today.
+            through=self._market_calendar.last_completed_trading_day(market),
         )
-        degraded_reasons.extend(calculator_degraded)
-        events = mark_overlapping_windows(evaluated_events)
+        events = [
+            event
+            for event in mark_overlapping_windows(evaluated_events)
+            if _event_date(event.raw.event_at) >= cutoff_date
+        ]
+        if not events and not degraded_reasons:
+            degraded_reasons.append(NO_EVENTS_REASONS[source_kind])
+        degraded_reasons.extend(
+            _outcome_degraded_reasons(events, benchmarked=bool(benchmark_candidates))
+        )
 
         recent_events = [
             event.to_response()
