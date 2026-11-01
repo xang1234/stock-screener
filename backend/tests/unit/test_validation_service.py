@@ -821,6 +821,27 @@ def test_price_outcome_calculator_measures_excess_over_the_first_cached_benchmar
     assert evaluated[0].excess_return_5s_pct == pytest.approx(10.0)
 
 
+def test_price_outcome_calculator_prefers_the_benchmark_with_the_latest_bar():
+    event = RawValidationEvent(
+        symbol="NVDA",
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        source_ref="run:1",
+        event_at=date(2026, 4, 4),
+        attributes={"symbol": "NVDA"},
+    )
+    stale = _history_frame(date(2026, 4, 1), BENCHMARK_ROWS)
+    current = _history_frame(date(2026, 4, 6), BENCHMARK_ROWS)
+
+    def benchmark_for(histories):
+        calculator = PriceOutcomeCalculator(
+            _FakePriceCache({"NVDA": _history_frame(date(2026, 4, 6), NVDA_ROWS), **histories})
+        )
+        return calculator.evaluate_many([event], benchmark_candidates=["SPY", "IVV"])[-1]
+
+    assert benchmark_for({"SPY": stale, "IVV": current}) == "IVV"
+    assert benchmark_for({"SPY": current, "IVV": current}) == "SPY"
+
+
 def test_price_outcome_calculator_degrades_once_when_the_benchmark_lacks_a_window_bar():
     events = [
         RawValidationEvent(
