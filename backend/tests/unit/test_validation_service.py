@@ -248,10 +248,63 @@ def test_theme_alert_tickers_are_filtered_to_the_requested_market(session):
     cutoff = FIXED_TODAY - timedelta(days=7)
 
     us_events, _ = source.collect(session, cutoff_date=cutoff, market="US")
-    hk_events, _ = source.collect(session, cutoff_date=cutoff, market="HK")
 
     assert [event.symbol for event in us_events] == ["NVDA", "NOTLISTED"]
-    assert [event.symbol for event in hk_events] == ["0700.HK", "9988.HK"]
+
+
+def test_theme_alerts_serve_only_the_us_market(session):
+    _add_universe(session, "0700.HK", market="HK")
+    session.add(
+        ThemeAlert(
+            alert_type="breakout",
+            title="HK ticker",
+            severity="warning",
+            related_tickers=["0700.HK"],
+            triggered_at=FIXED_NOW,
+        )
+    )
+    session.commit()
+
+    events, degraded = ThemeAlertValidationSource().collect(
+        session, cutoff_date=FIXED_TODAY - timedelta(days=7), market="HK"
+    )
+
+    assert (events, degraded) == ([], ["theme_alerts_us_only"])
+
+
+def test_freshness_is_scoped_to_the_requested_market(session):
+    _add_run(session, date(2026, 4, 2))
+    _add_run(session, date(2026, 4, 3), market="HK")
+    session.add(
+        ThemeAlert(
+            alert_type="breakout",
+            title="US alert",
+            severity="warning",
+            related_tickers=["NVDA"],
+            triggered_at=FIXED_NOW,
+        )
+    )
+    session.commit()
+    service = ValidationService(outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({})))
+
+    freshness = {
+        market: service.get_overview(
+            session,
+            source_kind=ValidationSourceKind.SCAN_PICK,
+            lookback_days=30,
+            as_of_date=FIXED_TODAY,
+            market=market,
+        ).freshness
+        for market in ("US", "HK")
+    }
+
+    assert {
+        market: (item.latest_feature_as_of_date, item.latest_theme_alert_at)
+        for market, item in freshness.items()
+    } == {
+        "US": ("2026-04-02", "2026-04-05T14:00:00+00:00"),
+        "HK": ("2026-04-03", None),
+    }
 
 
 def test_stock_validation_uses_the_symbols_own_market(session):
