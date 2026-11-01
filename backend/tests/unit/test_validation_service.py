@@ -1107,8 +1107,21 @@ def test_a_session_missing_from_the_cache_skips_the_horizons_it_falls_in(session
     assert [
         (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.avg_stopped_return_pct)
         for h in payload.horizons
-    ] == [(1, 2, 0, 0.0), (5, 2, 0, 0.0), (20, 1, 1, -7.0), (60, 0, 2, None)]
+    ] == [(1, 2, 0, 0.0), (5, 2, 0, 0.0), (20, 1, 1, -7.0), (60, 0, 0, None)]
     assert payload.degraded_reasons == ["incomplete_price_history"]
+
+
+def test_a_window_still_open_is_pending_whether_or_not_its_history_is_cached(session):
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2025, 11, 28)), ("GONE", date(2025, 11, 28))],
+        {"NVDA": _winter_bars(), "GONE": None},
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 1, 1, 0), (5, 1, 1, 0), (20, 1, 1, 0), (60, 0, 0, 2)]
 
 
 def test_a_window_missing_a_session_blocks_repeats_only_until_its_calendar_exit(session):
@@ -1267,12 +1280,10 @@ def test_overview_ignores_bars_after_the_last_completed_session(session):
     )
 
     assert payload.benchmark_symbol == "SPY"
-    assert [(h.horizon_sessions, h.sample_size, h.skipped_missing_history) for h in payload.horizons] == [
-        (1, 1, 0),
-        (5, 0, 1),
-        (20, 0, 1),
-        (60, 0, 1),
-    ]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 1, 0, 0), (5, 0, 0, 1), (20, 0, 0, 1), (60, 0, 0, 1)]
     assert payload.recent_events[0].return_5s_pct is None
 
 
@@ -1323,12 +1334,10 @@ def test_overview_caps_prices_at_verified_coverage_when_the_calendar_expires(ses
         as_of_date=FIXED_TODAY,
     )
 
-    assert [(h.horizon_sessions, h.sample_size, h.skipped_missing_history) for h in payload.horizons] == [
-        (1, 1, 0),
-        (5, 0, 1),
-        (20, 0, 1),
-        (60, 0, 1),
-    ]
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 1, 0, 0), (5, 0, 0, 1), (20, 0, 0, 1), (60, 0, 0, 1)]
     assert payload.degraded_reasons == ["calendar_coverage_expired"]
 
 
@@ -1527,10 +1536,11 @@ def test_a_pick_seventy_days_before_the_cutoff_blocks_repeats_inside_its_sixty_s
             h.horizon_sessions,
             h.sample_size,
             h.skipped_missing_history,
+            h.pending_windows,
             h.suppressed_overlapping,
         )
         for h in payload.horizons
-    ] == [(1, 1, 0, 0), (5, 1, 0, 0), (20, 0, 1, 0), (60, 0, 0, 1)]
+    ] == [(1, 1, 0, 0, 0), (5, 1, 0, 0, 0), (20, 0, 0, 1, 0), (60, 0, 0, 0, 1)]
 
 
 def _evaluated(source_kind, symbol, source_ref, entry_at, exit_at=None, *, entry_price=10.0):
