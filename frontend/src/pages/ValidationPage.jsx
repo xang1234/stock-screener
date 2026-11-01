@@ -13,16 +13,19 @@ import {
 
 import { getValidationOverview } from '../api/validation';
 import { ValidationSection } from '../components/Validation/ValidationPanels';
+import { useMarket } from '../contexts/MarketContext';
 
 const LOOKBACK_OPTIONS = [30, 90, 180];
 
 function ValidationPage() {
   const [sourceKind, setSourceKind] = useState('scan_pick');
   const [lookbackDays, setLookbackDays] = useState(90);
+  const { selectedMarket } = useMarket();
+  const market = selectedMarket || 'US';
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['validationOverview', sourceKind, lookbackDays],
-    queryFn: () => getValidationOverview(sourceKind, lookbackDays),
+    queryKey: ['validationOverview', sourceKind, lookbackDays, market],
+    queryFn: () => getValidationOverview(sourceKind, lookbackDays, market),
     staleTime: 60_000,
     placeholderData: (previousData) => previousData,
   });
@@ -94,6 +97,7 @@ function ValidationPage() {
           horizons={data.horizons}
           recentEvents={data.recent_events}
           failureClusters={data.failure_clusters}
+          benchmarkSymbol={data.benchmark_symbol}
         />
       )}
     </Stack>

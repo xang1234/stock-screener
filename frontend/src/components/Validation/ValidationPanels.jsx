@@ -37,7 +37,7 @@ function formatDate(value) {
   return date.toLocaleDateString();
 }
 
-function MetricCard({ title, horizon }) {
+function MetricCard({ title, horizon, benchmarkLabel }) {
   return (
     <Card variant="outlined">
       <CardContent>
@@ -49,6 +49,8 @@ function MetricCard({ title, horizon }) {
           <MetricRow label="Positive" value={formatRate(horizon?.positive_rate)} />
           <MetricRow label="Avg Return" value={formatPercentValue(horizon?.avg_return_pct)} />
           <MetricRow label="Median" value={formatPercentValue(horizon?.median_return_pct)} />
+          <MetricRow label={`Avg vs ${benchmarkLabel}`} value={formatPercentValue(horizon?.avg_excess_return_pct)} />
+          <MetricRow label={`Median vs ${benchmarkLabel}`} value={formatPercentValue(horizon?.median_excess_return_pct)} />
           <MetricRow label="Avg MFE" value={formatPercentValue(horizon?.avg_mfe_pct)} />
           <MetricRow label="Avg MAE" value={formatPercentValue(horizon?.avg_mae_pct)} />
           <MetricRow label="Skipped" value={horizon?.skipped_missing_history ?? 0} />
@@ -71,19 +73,19 @@ function MetricRow({ label, value }) {
   );
 }
 
-export function ValidationSummaryCards({ horizons }) {
+export function ValidationSummaryCards({ horizons, benchmarkSymbol }) {
   const oneSession = horizons?.find((item) => item.horizon_sessions === 1);
   const fiveSessions = horizons?.find((item) => item.horizon_sessions === 5);
 
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5 }}>
-      <MetricCard title="1 Session" horizon={oneSession} />
-      <MetricCard title="5 Sessions" horizon={fiveSessions} />
+      <MetricCard title="1 Session" horizon={oneSession} benchmarkLabel={benchmarkSymbol || 'Benchmark'} />
+      <MetricCard title="5 Sessions" horizon={fiveSessions} benchmarkLabel={benchmarkSymbol || 'Benchmark'} />
     </Box>
   );
 }
 
-export function ValidationRecentEventsTable({ events, showSourceKind = true }) {
+export function ValidationRecentEventsTable({ events, showSourceKind = true, benchmarkSymbol }) {
   return (
     <TableContainer>
       <Table size="small">
@@ -95,6 +97,7 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true }) {
             <TableCell>Entry</TableCell>
             <TableCell align="right">1S</TableCell>
             <TableCell align="right">5S</TableCell>
+            <TableCell align="right">5S vs {benchmarkSymbol || 'Benchmark'}</TableCell>
             <TableCell align="right">MFE</TableCell>
             <TableCell align="right">MAE</TableCell>
           </TableRow>
@@ -118,13 +121,14 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true }) {
               <TableCell>{formatDate(event.entry_at)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.return_1s_pct)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.return_5s_pct)}</TableCell>
+              <TableCell align="right">{formatPercentValue(event.excess_return_5s_pct)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.mfe_5s_pct)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.mae_5s_pct)}</TableCell>
             </TableRow>
           ))}
           {(!events || events.length === 0) && (
             <TableRow>
-              <TableCell colSpan={showSourceKind ? 8 : 7} align="center">
+              <TableCell colSpan={showSourceKind ? 9 : 8} align="center">
                 <Typography variant="body2" color="text.secondary">
                   No validation events are available for this selection.
                 </Typography>
@@ -185,7 +189,7 @@ export function ValidationDegradedAlert({ degradedReasons }) {
   );
 }
 
-export function ValidationSection({ title, degradedReasons, horizons, recentEvents, failureClusters, showSourceKind = true }) {
+export function ValidationSection({ title, degradedReasons, horizons, recentEvents, failureClusters, showSourceKind = true, benchmarkSymbol }) {
   return (
     <Stack spacing={1.5}>
       {title && (
@@ -194,12 +198,12 @@ export function ValidationSection({ title, degradedReasons, horizons, recentEven
         </Typography>
       )}
       <ValidationDegradedAlert degradedReasons={degradedReasons} />
-      <ValidationSummaryCards horizons={horizons} />
+      <ValidationSummaryCards horizons={horizons} benchmarkSymbol={benchmarkSymbol} />
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
           Recent Events
         </Typography>
-        <ValidationRecentEventsTable events={recentEvents} showSourceKind={showSourceKind} />
+        <ValidationRecentEventsTable events={recentEvents} showSourceKind={showSourceKind} benchmarkSymbol={benchmarkSymbol} />
       </Box>
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
