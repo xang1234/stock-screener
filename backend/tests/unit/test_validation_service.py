@@ -996,6 +996,38 @@ def test_a_zero_high_or_low_on_the_entry_bar_measures_from_the_entry_price():
     assert _stop_figures(zero_low) == [(1, 0.0, False, 3.125, 0.0), (5, 6.25, False, 3.125, -3.125)]
 
 
+def test_a_zero_or_missing_close_leaves_its_horizon_unscored():
+    zero_close = _evaluate_rows([(64, 66, 62, 0)] + [FLAT_ROW] * 4)
+    missing_close = _evaluate_rows([FLAT_ROW] * 4 + [(64, 66, 62, float("nan"))])
+
+    assert [(h, o.return_pct) for h, o in zero_close.outcomes.items()] == [(5, 6.25)]
+    assert [(h, o.return_pct) for h, o in missing_close.outcomes.items()] == [(1, 6.25)]
+
+
+def test_a_zero_or_missing_benchmark_price_gives_no_excess_return():
+    def excess(benchmark_rows):
+        calculator = PriceOutcomeCalculator(
+            _FakePriceCache(
+                {
+                    "NVDA": _history_frame(date(2026, 4, 6), NVDA_ROWS),
+                    "SPY": _history_frame(date(2026, 4, 6), benchmark_rows),
+                }
+            )
+        )
+        evaluated, _ = calculator.evaluate_many(
+            [_scan_event("NVDA", event_at=date(2026, 4, 4))],
+            sessions=_sessions_of(_history_frame(date(2026, 4, 6), NVDA_ROWS)),
+            benchmark_candidates=["SPY"],
+        )
+        return [(h, o.excess_return_pct) for h, o in evaluated[0].outcomes.items()]
+
+    zero_close = [(500, 506, 499, 0)] + BENCHMARK_ROWS[1:]
+    missing_open = [(float("nan"), 506, 499, 505)] + BENCHMARK_ROWS[1:]
+
+    assert excess(zero_close) == [(1, None), (5, pytest.approx(10.0))]
+    assert excess(missing_open) == [(1, None), (5, None)]
+
+
 def test_a_missing_entry_open_scores_nothing():
     event = _evaluate_rows([(float("nan"), 66, 62, 64)] + [FLAT_ROW] * 4)
 
@@ -1116,6 +1148,19 @@ def test_a_session_missing_from_the_cache_skips_the_horizons_it_falls_in(session
         (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.avg_stopped_return_pct)
         for h in payload.horizons
     ] == [(1, 2, 0, 0.0), (5, 2, 0, 0.0), (20, 1, 1, -7.0), (60, 0, 0, None)]
+    assert payload.degraded_reasons == ["incomplete_price_history"]
+
+
+def test_a_zero_close_skips_its_horizon_as_incomplete_history(session):
+    bars = _winter_bars()
+    bars.loc[pd.Timestamp(2025, 12, 1), "Close"] = 0
+
+    payload = _winter_overview(session, [("NVDA", date(2025, 11, 28))], {"NVDA": bars})
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.avg_return_pct)
+        for h in payload.horizons
+    ] == [(1, 0, 1, None), (5, 1, 0, 0.0), (20, 1, 0, 0.0), (60, 0, 0, None)]
     assert payload.degraded_reasons == ["incomplete_price_history"]
 
 
