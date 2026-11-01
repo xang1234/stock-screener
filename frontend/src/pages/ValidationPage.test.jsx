@@ -245,7 +245,7 @@ describe('ValidationPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Replay (Minervini)' }));
 
-    expect(await screen.findByText(/Nothing replayed for this market yet\.$/)).toBeInTheDocument();
+    expect(await screen.findByText(/No replay picks are stored for this market yet\.$/)).toBeInTheDocument();
   });
 
   it('scopes the scorecard to the market chosen in the header selector', async () => {
@@ -326,6 +326,7 @@ describe('ValidationPage', () => {
 
     expect(screen.queryByRole('columnheader', { name: '5S vs SPY' })).not.toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText(/Replayed through|No replay picks are stored/)).not.toBeInTheDocument();
     resolveReplay({
       ...emptyOverview('US'),
       source_kind: 'replay_pick',

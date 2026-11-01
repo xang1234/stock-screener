@@ -96,7 +96,7 @@ function ValidationPage() {
                   {' '}
                   {overview.freshness?.latest_replay_as_of_date
                     ? `Replayed through ${overview.freshness.latest_replay_as_of_date}.`
-                    : 'Nothing replayed for this market yet.'}
+                    : 'No replay picks are stored for this market yet.'}
                 </>
               )}
             </Alert>
