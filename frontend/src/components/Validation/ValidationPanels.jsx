@@ -114,7 +114,10 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
         </TableHead>
         <TableBody>
           {(events || []).map((event, index) => {
-            const fiveSessionSx = event.counted === false ? { color: 'text.secondary' } : undefined;
+            const horizonSx = (horizon) => (
+              event.counted_horizons?.includes(horizon) === false ? { color: 'text.secondary' } : undefined
+            );
+            const fiveSessionSx = horizonSx(5);
             return (
             <TableRow
               key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}:${index}`}
@@ -143,8 +146,8 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
               <TableCell>{formatDate(event.entry_at)}</TableCell>
               <TableCell align="right">{formatPercentValue(event.return_1s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.return_5s_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(event.return_20s_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(event.return_60s_pct)}</TableCell>
+              <TableCell align="right" sx={horizonSx(20)}>{formatPercentValue(event.return_20s_pct)}</TableCell>
+              <TableCell align="right" sx={horizonSx(60)}>{formatPercentValue(event.return_60s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.excess_return_5s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.mfe_5s_pct)}</TableCell>
               <TableCell align="right" sx={fiveSessionSx}>{formatPercentValue(event.mae_5s_pct)}</TableCell>

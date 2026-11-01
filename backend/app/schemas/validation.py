@@ -66,6 +66,8 @@ class ValidationEvent(BaseModel):
     excess_return_5s_pct: float | None = None
     # False for a repeat inside an earlier counted event's 5-session window.
     counted: bool = True
+    # The horizons whose summaries count this event; a repeat at one horizon can count at another.
+    counted_horizons: list[int]
     attributes: dict[str, Any]
 
 

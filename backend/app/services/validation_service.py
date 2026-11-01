@@ -139,6 +139,7 @@ class EvaluatedValidationEvent:
             excess_return_1s_pct=self._outcome_pct(1, "excess_return_pct"),
             excess_return_5s_pct=self._outcome_pct(5, "excess_return_pct"),
             counted=5 not in self.suppressed,
+            counted_horizons=[horizon for horizon in HORIZONS if horizon not in self.suppressed],
             attributes=self.raw.attributes,
         )
 
