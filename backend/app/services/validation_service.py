@@ -47,14 +47,15 @@ FAILURE_CLUSTERS_LIMIT = 5
 PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
-# Events this far before the cutoff are counted so a pick just before it still blocks the
-# repeats after it. ponytail: a longer chain of counted picks can still shift which repeat
-# counts; collect from the first run if that matters.
+# Events this far before the cutoff join the overlap rule, so a pick just before it still
+# blocks the repeats after it. ponytail: a longer chain of overlapping picks can still shift
+# which repeat counts; collect from the first run if that matters.
 OVERLAP_LOOKBEHIND = timedelta(days=14)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
 }
+
 
 def _scored_by(field: str):
     """Whether the row carries ``field``; rows before 20261013_0066 hold it only in details_json."""
