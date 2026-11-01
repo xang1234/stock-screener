@@ -485,29 +485,34 @@ class PriceOutcomeCalculator:
     ) -> tuple[list[EvaluatedValidationEvent], str | None]:
         """Evaluate events over the market's ``sessions``, ignoring bars after the last one;
         also return the benchmark used."""
-        calendar = pd.DatetimeIndex(sessions)
         through = max(sessions, default=None)
-        histories = self._price_cache.get_many_cached_only(
-            sorted({event.symbol for event in events} | set(benchmark_candidates)),
-            period=PRICE_CACHE_PERIOD,
+        histories = {
+            symbol: _normalize_price_history(frame, through)
+            for symbol, frame in self._price_cache.get_many_cached_only(
+                sorted({event.symbol for event in events} | set(benchmark_candidates)),
+                period=PRICE_CACHE_PERIOD,
+            ).items()
+        }
+        calendar = pd.DatetimeIndex(sessions)
+        newest_bar = max(
+            (history.index[-1] for history in histories.values() if history is not None),
+            default=None,
         )
+        if newest_bar is not None:
+            # The calendar counts a session completed before the after-close refresh caches
+            # it; a window past every cached bar is still pending, not missing history.
+            calendar = calendar[calendar <= newest_bar]
         cached_benchmarks = [
-            (candidate, candidate_history)
+            (candidate, histories[candidate])
             for candidate in benchmark_candidates
-            if (candidate_history := _normalize_price_history(histories.get(candidate), through))
-            is not None
+            if histories.get(candidate) is not None
         ]
         # A primary whose feed stopped keeps its old rows; the freshest wins, ties in registry order.
         benchmark_symbol, benchmark = max(
             cached_benchmarks, key=lambda pair: pair[1].index[-1], default=(None, None)
         )
         evaluations = [
-            self._evaluate_one(
-                event,
-                _normalize_price_history(histories.get(event.symbol), through),
-                benchmark,
-                calendar,
-            )
+            self._evaluate_one(event, histories.get(event.symbol), benchmark, calendar)
             for event in events
         ]
         return evaluations, benchmark_symbol
