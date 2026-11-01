@@ -121,9 +121,15 @@ describe('ValidationPage', () => {
     expect(within(eventRow).queryByText('repeat')).not.toBeInTheDocument();
     const repeatRow = screen.getByRole('link', { name: 'AMD' }).closest('tr');
     expect(within(repeatRow).getByText('repeat')).toBeInTheDocument();
+    const fiveSessionHeaders = ['5S', '5S vs SPY', 'MFE', 'MAE'];
     expect(repeatRow).not.toHaveStyle({ opacity: '0.55' });
-    expect(repeatRow.cells[headers.indexOf('1S')]).not.toHaveStyle({ opacity: '0.55' });
-    expect(repeatRow.cells[headers.indexOf('5S')]).toHaveStyle({ opacity: '0.55' });
+    expect(repeatRow.cells[headers.indexOf('1S')].className).toBe(eventRow.cells[headers.indexOf('1S')].className);
+    for (const header of fiveSessionHeaders) {
+      const cell = repeatRow.cells[headers.indexOf(header)];
+      expect(cell.className).not.toBe(eventRow.cells[headers.indexOf(header)].className);
+      expect(cell).toHaveStyle({ color: 'rgb(139, 147, 167)' });
+      expect(cell).not.toHaveStyle({ opacity: '0.55' });
+    }
   });
 
   it('updates the query when source and lookback controls change', async () => {
