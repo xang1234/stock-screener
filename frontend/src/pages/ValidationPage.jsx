@@ -51,7 +51,7 @@ function ValidationPage() {
             Validation
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Deterministic scorecard for published scan picks and theme alerts using cached price history only.
+            Deterministic scorecard for published scan picks, theme alerts, and replayed Minervini picks using cached price history only.
           </Typography>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
             <Box>
@@ -66,6 +66,7 @@ function ValidationPage() {
               >
                 <ToggleButton value="scan_pick">Scan Picks</ToggleButton>
                 <ToggleButton value="theme_alert">Theme Alerts</ToggleButton>
+                <ToggleButton value="replay_pick">Replay (Minervini)</ToggleButton>
               </ToggleButtonGroup>
             </Box>
             <Box>
@@ -84,6 +85,12 @@ function ValidationPage() {
               </ToggleButtonGroup>
             </Box>
           </Stack>
+          {sourceKind === 'replay_pick' && (
+            <Alert severity="info">
+              Price-only Minervini replay: the top 10 per session among stocks passing the template.
+              Survivor-biased (today&apos;s universe) and not the live composite score.
+            </Alert>
+          )}
           {isLoading && data && (
             <Box display="flex" justifyContent="center">
               <CircularProgress size={24} />
