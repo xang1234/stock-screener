@@ -1226,6 +1226,49 @@ def test_a_symbol_whose_batch_has_not_refreshed_yet_is_pending_once_spy_has(sess
     assert payload.degraded_reasons == []
 
 
+def test_a_pre_open_alert_on_the_last_completed_session_is_pending_before_its_refresh(session):
+    theme = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai-infra",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+    )
+    session.add(theme)
+    session.commit()
+    session.refresh(theme)
+    # Before the open of 2026-01-30, the last completed session; every cached bar ends 2026-01-29.
+    session.add(
+        ThemeAlert(
+            theme_cluster_id=theme.id,
+            alert_type="breakout",
+            title="Pre-open alert",
+            severity="warning",
+            related_tickers=["NVDA"],
+            triggered_at=datetime(2026, 1, 30, 8, 0, tzinfo=UTC),
+        )
+    )
+    session.commit()
+    service = _service(
+        {"NVDA": _winter_bars()[:-1], "SPY": _winter_bars()[:-1]},
+        last_completed=date(2026, 1, 30),
+        sessions=WINTER_SESSIONS,
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        lookback_days=30,
+        as_of_date=date(2026, 1, 30),
+    )
+
+    assert [
+        (h.horizon_sessions, h.sample_size, h.skipped_missing_history, h.pending_windows)
+        for h in payload.horizons
+    ] == [(1, 0, 0, 1), (5, 0, 0, 1), (20, 0, 0, 1), (60, 0, 0, 1)]
+    assert payload.degraded_reasons == []
+
+
 def test_histories_stale_for_many_sessions_skip_windows_that_closed(session):
     # Every history ends 2026-01-15, ten sessions before the last completed one.
     payload = _winter_overview(
