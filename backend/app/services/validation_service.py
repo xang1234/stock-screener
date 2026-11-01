@@ -340,6 +340,9 @@ class ThemeAlertValidationSource:
         until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
+        if market != "US":
+            # A legacy US source: same-day entry is timed against the US session.
+            return [], ["theme_alerts_us_only"]
         if EconomicThemeReader(db).source_name == "economic":
             # Theme alerts are legacy-only; economic mode serves none, as /themes/alerts does (#475).
             return [], ["economic_theme_alerts_unavailable"]
@@ -630,7 +633,7 @@ class ValidationService:
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
-            freshness=self._build_freshness(db, as_of_date=effective_as_of_date),
+            freshness=self._build_freshness(db, as_of_date=effective_as_of_date, market=market),
             degraded_reasons=payload["degraded_reasons"],
         )
 
@@ -683,7 +686,7 @@ class ValidationService:
             source_breakdown=source_breakdown,
             recent_events=merged_events[:RECENT_EVENTS_LIMIT],
             failure_clusters=merged_failure_clusters[:FAILURE_CLUSTERS_LIMIT],
-            freshness=self._build_freshness(db, as_of_date=effective_as_of_date),
+            freshness=self._build_freshness(db, as_of_date=effective_as_of_date, market=market),
             degraded_reasons=_dedupe(degraded_reasons),
         )
 
@@ -820,14 +823,18 @@ class ValidationService:
             suppressed_overlapping=suppressed_overlapping,
         )
 
-    def _build_freshness(self, db: Session, *, as_of_date: date | None = None) -> ValidationFreshness:
-        feature_query = db.query(func.max(FeatureRun.as_of_date)).filter(FeatureRun.status == "published")
+    def _build_freshness(
+        self, db: Session, *, market: str, as_of_date: date | None = None
+    ) -> ValidationFreshness:
+        feature_query = db.query(func.max(FeatureRun.as_of_date)).filter(
+            FeatureRun.status == "published", RUN_MARKET == market
+        )
         if as_of_date is not None:
             feature_query = feature_query.filter(FeatureRun.as_of_date <= as_of_date)
         latest_feature_as_of_date = feature_query.scalar()
 
         latest_theme_alert_at = None
-        if EconomicThemeReader(db).source_name != "economic":
+        if market == "US" and EconomicThemeReader(db).source_name != "economic":
             alert_query = db.query(func.max(ThemeAlert.triggered_at)).filter(
                 ThemeAlert.alert_type.in_(THEME_ALERT_TYPES)
             )
