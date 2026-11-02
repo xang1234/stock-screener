@@ -194,21 +194,31 @@ def test_mode_change_rejects_prepared_run_and_validation_never_publishes(store):
         assert db.query(SocialSignalRunPointer).count() == 0
 
 
-def test_failed_publication_closes_its_staged_generation(store):
+@pytest.mark.parametrize("failure", ["version_changed", "database_error"])
+def test_failed_publication_closes_its_staged_generation(store, monkeypatch, failure):
     from app.infra.db.models.social_signals import SocialSourceRegistry
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter, utc
     w = writer(store)
     collected(w)
     w.prepare_run("run", (row("run"),), NOW)
     with store.begin() as db:
         registry = db.get(SocialSourceRegistry, 1)
         version = registry.version
-        registry.version = version + 1
-    with pytest.raises(ValueError, match="version_changed"):
+        if failure == "version_changed":
+            registry.version = version + 1
+
+    def lost_connection(*_args):
+        raise ConnectionError("database_error")
+
+    if failure == "database_error":
+        monkeypatch.setattr(SocialSignalWriter, "_validate_inputs", lost_connection)
+    w.clock = lambda: NOW + timedelta(hours=1)
+    with pytest.raises(Exception, match=failure):
         w.publish("run", version)
     with store() as db:
         run = db.get(SocialSignalRun, "run")
-        assert (run.status, run.application_progress_json["failure"]["reason_code"]) == (
-            "failed", "publication_failed")
+        assert (run.status, run.application_progress_json["failure"]["reason_code"], utc(run.completed_at)) == (
+            "failed", "publication_failed", NOW + timedelta(hours=1))
     assert w.read_run_inputs("run").work_ids == ()
 
 
@@ -580,7 +590,8 @@ def test_current_replay_preserves_terminal_history_and_collection_freshness(stor
         assert tuple(s.last_successful_collection_at for s in db.query(SocialSourceConfiguration).order_by(SocialSourceConfiguration.content_source_id)) == timestamps
 
 
-def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(store):
+@pytest.mark.parametrize("reason", ["analysis_failed", "social_runtime_changed"])
+def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(store, reason):
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
@@ -601,13 +612,13 @@ def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(sto
     )
     w.select_current_inputs("failed")
 
-    w.fail_run("failed", "analysis_failed")
+    w.fail_run("failed", reason)
 
     with store() as db:
         run = db.get(SocialSignalRun, "failed")
         assert run.status == "failed"
         assert run.application_progress_json["failure"] == {
-            "reason_code": "analysis_failed",
+            "reason_code": reason,
             "work_ids": [work_id],
         }
         work = db.get(SocialExtractionWork, work_id)
@@ -619,8 +630,8 @@ def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(sto
     w.create_replay_run("admin-retry", "failed", NOW + timedelta(hours=1))
 
     saved = w.read_run_inputs("admin-retry")
-    assert saved.replay_manifest.saved_run_id == "failed"
-    assert saved.replay_manifest.required_inputs
+    assert (saved.replay_manifest.saved_run_id, saved.replay_manifest.historical_work_ids) == ("failed", (work_id,))
+    assert w.read_run_inputs("failed").work_ids == (work_id,)
 
 
 def test_replay_flushes_run_before_linking_successful_work(store):
