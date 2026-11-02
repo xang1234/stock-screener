@@ -408,6 +408,7 @@ class ScanPickValidationSource:
         events: list[RawValidationEvent] = []
         for row in query.all():
             details = row.details_json or {}
+            setup = details.get("setup_engine")
             events.append(
                 RawValidationEvent(
                     symbol=row.symbol,
@@ -423,8 +424,8 @@ class ScanPickValidationSource:
                         "stage": details.get("stage"),
                         "ibd_industry_group": details.get("ibd_industry_group"),
                         "action_state": details.get("action_state"),
-                        "setup_pattern": (details.get("setup_engine") or {}).get(
-                            "pattern_primary"
+                        "setup_pattern": (
+                            setup.get("pattern_primary") if isinstance(setup, dict) else None
                         ),
                     },
                 )

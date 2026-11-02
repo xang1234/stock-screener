@@ -886,7 +886,7 @@ def test_extension_of_a_pre_open_alert_leaves_out_its_entry_session():
 
 def test_scan_picks_carry_the_action_state_and_setup_pattern_of_their_row(session):
     run = _add_run(session, FIXED_TODAY)
-    for symbol in ("NVDA", "AMD"):
+    for symbol in ("NVDA", "AMD", "TSLA"):
         _add_universe(session, symbol)
     _add_pick(
         session,
@@ -896,6 +896,7 @@ def test_scan_picks_carry_the_action_state_and_setup_pattern_of_their_row(sessio
         details={"action_state": "extended", "setup_engine": {"pattern_primary": "cup_with_handle"}},
     )
     _add_pick(session, run, "AMD", 80.0, details={"setup_engine": None})
+    _add_pick(session, run, "TSLA", 70.0, details={"setup_engine": "cup_with_handle"})
     session.commit()
 
     events, _ = ScanPickValidationSource().collect(
@@ -905,7 +906,7 @@ def test_scan_picks_carry_the_action_state_and_setup_pattern_of_their_row(sessio
     assert [
         (event.symbol, event.attributes["action_state"], event.attributes["setup_pattern"])
         for event in events
-    ] == [("NVDA", "extended", "cup_with_handle"), ("AMD", None, None)]
+    ] == [("NVDA", "extended", "cup_with_handle"), ("AMD", None, None), ("TSLA", None, None)]
 
 
 def test_each_stage_group_summarizes_its_own_picks_with_the_overlap_rule(session):
