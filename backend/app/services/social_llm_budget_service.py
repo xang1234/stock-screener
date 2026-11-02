@@ -283,7 +283,7 @@ class SocialLLMBudgetService:
             return True
 
     def release_pre_dispatch(self, attempt_id):
-        """Refund an attempt only when the caller proves no request was sent."""
+        """Refund an attempt only when the caller proves it was not billed: never sent, or refused."""
         with social_analysis_transaction(self.session_factory) as db:
             attempt = db.get(SocialLLMAttempt, attempt_id)
             if attempt.state != "dispatched":

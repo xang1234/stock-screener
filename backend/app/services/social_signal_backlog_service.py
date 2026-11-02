@@ -17,7 +17,7 @@ from app.domain.social_signals.records import (
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay, SocialRunWork
 from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
 from app.models.stock_universe import StockUniverse
-from app.services.llm.llm_service import LLMPreDispatchError, LLMService
+from app.services.llm.llm_service import LLMPreDispatchError, LLMProviderRejectedError, LLMService
 from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService, VERSION
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
 from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
@@ -220,6 +220,9 @@ class _MeteredCompletion:
             except LLMPreDispatchError:
                 budget.release_pre_dispatch(attempt)
                 raise SocialExtractionError("llm_configuration_error") from None
+            except LLMProviderRejectedError:
+                budget.release_pre_dispatch(attempt)
+                raise SocialExtractionError("provider_rejected") from None
             except Exception as exc:
                 budget.reconcile(attempt, None, None)
                 raise _CompletionUnknown() from exc
@@ -544,6 +547,9 @@ class ProcessSocialBacklog:
                 spare_calls -= 1
             except Exception:
                 logger.exception("Social LLM extraction failed work_ids=%s", work_ids)
+                if not metered.dispatched:
+                    # Nothing was sent: claim expiry releases any reservation and returns the posts to the backlog.
+                    return (0, len(claims), 0, 0), spare_calls
                 return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
         try:
             states = [self._finish(work_id, token, "succeeded", result=self._single_result(post, result))

@@ -89,6 +89,10 @@ class LLMPreDispatchError(LLMError):
     """The provider request is confirmed not to have been dispatched."""
 
 
+class LLMProviderRejectedError(LLMError):
+    """The provider refused the request with a 4xx status, so it was not billed."""
+
+
 class LLMRateLimitError(LLMError):
     """Raised when rate limit is exceeded after retries."""
     def __init__(self, message: str, retry_after: Optional[float] = None):
@@ -310,8 +314,12 @@ class LLMService:
             try:
                 return await acompletion(**params)
             except Exception as exc:
-                # The class tells an expired key from an outage; the message can carry the prompt.
-                logger.warning("Metered LLM dispatch failed: %s", type(exc).__name__)
+                status = getattr(exc, "status_code", None)
+                # The class and status tell an expired key from an outage; the message can carry the prompt.
+                logger.warning("Metered LLM dispatch failed: %s status=%s", type(exc).__name__, status)
+                # A timeout (408) or rate limit (429) may still have been billed.
+                if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                    raise LLMProviderRejectedError("metered_provider_rejected") from None
                 raise LLMError("metered_provider_error") from None
 
         # Build fallback list
