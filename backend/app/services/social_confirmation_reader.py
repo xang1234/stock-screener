@@ -126,7 +126,8 @@ class SocialConfirmationReader:
                     StockUniverse.active_filter()))
                 mic = security_master_resolver.resolve_identity(symbol=symbol, market=market,
                     exchange=security.exchange).mic if security else None
-                fact = self._read(symbol, market, now, mic=mic, pinned_run=pin, context=context)
+                fact = self._read(symbol, market, now, mic=mic, pinned_run=pin, context=context,
+                                  max_sessions_behind=PUBLISHED_FEATURE_LAG_SESSIONS)
                 feature = self.db.get(StockFeatureDaily, (pin.run_id, symbol)) if pin.run_id else None
                 details = feature.details_json or {} if feature else {}
                 rank = dict(group.cohort).get(details.get("ibd_industry_group"))
@@ -287,11 +288,11 @@ class SocialConfirmationReader:
             score_value(exposure.exposure_score) if exposure and freshness.fresh else None,
             benchmark, candidates, self.registry.TABLE_VERSION)
 
-    def _read(self, symbol, market, as_of, *, mic, pinned_run, context=None):
+    def _read(self, symbol, market, as_of, *, mic, pinned_run, context=None, max_sessions_behind=0):
         run = self.db.get(FeatureRun, pinned_run.run_id) if pinned_run.run_id is not None else None
         feature = self.db.get(StockFeatureDaily, (run.id, symbol)) if run else None
         ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic,
-                            max_sessions_behind=PUBLISHED_FEATURE_LAG_SESSIONS)
+                            max_sessions_behind=max_sessions_behind)
         if mic is None:
             ff = replace(ff, fresh=False, reason="listing_mic_unknown")
         reasons = []

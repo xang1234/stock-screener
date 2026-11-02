@@ -274,6 +274,16 @@ def test_explicit_run_pin_is_shared_across_measurements(db_session, basket):
     assert dict(service.measure("chips", "US", NOW, symbols).components)["avg_rs_rating"] == 80
 
 
+def test_theme_rs_needs_features_from_the_measured_session(db_session, basket):
+    from app.services.social_theme_market_service import SocialThemeMarketService
+    _, symbols, calendar = basket(3, 3)
+    one_session_later = datetime(2026, 7, 6, 23, tzinfo=timezone.utc)
+    evidence = SocialThemeMarketService(db_session, calendar=calendar).measure("chips", "US", one_session_later, symbols)
+    assert evidence.session_date == date(2026, 7, 6)
+    assert dict(evidence.components)["avg_rs_rating"] is None
+    assert dict(evidence.reasons)["avg_rs_rating"] == "insufficient_companies"
+
+
 def test_incomplete_listing_calendar_only_removes_its_price_components(db_session, basket, monkeypatch):
     from app.services.social_theme_market_service import SocialThemeMarketService
     _, symbols, calendar = basket(4, 4)
