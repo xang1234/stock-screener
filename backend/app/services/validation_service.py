@@ -727,9 +727,9 @@ def _group_values(event: EvaluatedValidationEvent) -> dict[str, Any]:
 
 
 def _group_order(dimension: str, value: str) -> tuple[int, float, str]:
-    """A value's place in its dimension's ``GROUP_VALUE_ORDER``. Values that lists lack, and
-    those of other dimensions, sort numbers numerically, so Stage 2 comes before Stage 10,
-    then words alphabetically."""
+    """A value's place in its dimension's ``GROUP_VALUE_ORDER``. Values that order lacks, and
+    values of dimensions without one, come after it, numbers numerically so Stage 2 comes
+    before Stage 10, then words alphabetically."""
     order = GROUP_VALUE_ORDER.get(dimension, ())
     if value in order:
         return (0, order.index(value), value)
@@ -888,8 +888,8 @@ class ValidationService:
             # bar while the session is open. A bar fetched mid-session stays partial until the
             # after-close refresh, which can run after this cut-off moves.
             # Starting no later than the cutoff keeps the session before ``through`` in the
-            # calendar even when every event falls on ``through``. The earlier sessions only
-            # serve extension, which reads the 50 before each entry: windows look forward.
+            # calendar even when every event falls on ``through``. The earlier sessions serve
+            # only extension, which reads the 50 before each entry, since windows look forward.
             sessions=self._market_calendar.trading_days(
                 market,
                 min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)])
