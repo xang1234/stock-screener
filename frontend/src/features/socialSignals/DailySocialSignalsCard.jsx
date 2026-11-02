@@ -49,7 +49,7 @@ export default function DailySocialSignalsCard({ market, onOpen }) {
       {data?.available ? (
         <>
           <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ my: 1 }}>
-            <Chip size="small" color={data.stale ? 'warning' : 'success'} label={data.stale ? 'Stale' : 'Fresh'} />
+            <Chip size="small" color={data.stale === false ? 'success' : 'warning'} label={data.stale === false ? 'Fresh' : 'Stale'} />
             <Chip size="small" label={`${data.participating_source_count ?? 0}/${data.enabled_source_count ?? 0} sources`} />
             {featureLag ? <Chip size="small" variant="outlined" color="warning" label={featureLag} /> : null}
             <Typography variant="caption" sx={{ alignSelf: 'center' }}>

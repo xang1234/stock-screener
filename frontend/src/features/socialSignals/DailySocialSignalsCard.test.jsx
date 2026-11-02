@@ -52,7 +52,7 @@ describe('DailySocialSignalsCard', () => {
 
   it('labels top signals scored from one-session-old price features', async () => {
     getSocialSummary.mockResolvedValue({
-      supported: true, available: true, stale: false, published_at: '2026-09-07T06:00:00Z',
+      supported: true, available: true, stale: true, published_at: '2026-09-07T06:00:00Z',
       top_signals: [0, 1].map((behind) => ({
         candidate_key: `US:S${behind}`, canonical_symbol: `S${behind}`, queue_score: 80,
         explanation: { feature_sessions_behind: behind },
@@ -60,6 +60,18 @@ describe('DailySocialSignalsCard', () => {
     });
     renderCard();
     expect(await screen.findByText('Price features 1 session old')).toBeInTheDocument();
+  });
+
+  it.each([
+    [{ stale: false }, 'Fresh'],
+    [{}, 'Stale'],
+  ])('labels a summary with %o as %s', async (freshness, label) => {
+    getSocialSummary.mockResolvedValue({
+      supported: true, available: true, published_at: '2026-09-07T06:00:00Z',
+      top_signals: [], ...freshness,
+    });
+    renderCard();
+    expect(await screen.findByText(label)).toBeInTheDocument();
   });
 
   it('uses typed unavailable copy without inventing zeros', async () => {

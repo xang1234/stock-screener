@@ -46,7 +46,7 @@ const age = (minutes) => (
   minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`
 );
 
-export const socialFreshness = ({ stale = false, published_at: publishedAt } = {}, now = Date.now()) => {
+export const socialFreshness = ({ stale = true, published_at: publishedAt } = {}, now = Date.now()) => {
   const at = Date.parse(publishedAt);
   if (Number.isNaN(at)) return { label: 'Update time unknown', color: 'default' };
   if (stale) return { label: `Delayed, last update ${new Date(at).toLocaleString()}`, color: 'warning' };

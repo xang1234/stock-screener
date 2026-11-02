@@ -25,6 +25,11 @@ describe('Social Signal presentation', () => {
         color: 'warning',
       });
     expect(socialFreshness({ stale: false }, now).label).toBe('Update time unknown');
+    expect(socialFreshness({ published_at: '2026-09-07T12:00:00Z' }, now))
+      .toEqual({
+        label: `Delayed, last update ${new Date('2026-09-07T12:00:00Z').toLocaleString()}`,
+        color: 'warning',
+      });
   });
 
   it('turns state reason codes into plain text', () => {

@@ -45,7 +45,7 @@ const item = {
 const queue = (overrides = {}) => ({
   supported: true, available: true, reason_code: null, market: 'HK', window: '7d',
   view: 'actionable', rank_mode: 'blended', page: 1, page_size: 50,
-  total: 1, items: [item], run_id: 'run-1', stale: false,
+  total: 1, items: [item], run_id: 'run-1', stale: true,
   published_at: '2026-09-07T12:00:00Z', ...overrides,
 });
 
@@ -108,6 +108,7 @@ describe('SocialSignalsTab', () => {
   it('renders a dense queue with one plain freshness chip and no operator detail', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-07T15:00:00Z'));
+    socialApi.getSocialQueue.mockResolvedValue(queue({ stale: false }));
     renderTab();
     expect(await screen.findByText('0700')).toBeInTheDocument();
     expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
