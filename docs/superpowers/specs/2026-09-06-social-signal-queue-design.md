@@ -740,7 +740,9 @@ Listing-level technical inputs from the published feature run may trail the
 required session by one trading session on the listing's calendar, because
 feature runs routinely publish a session late. Those inputs still score and can
 still reach Actionable, and the queue labels the lag as
-`feature_sessions_behind` (0 or 1) in each candidate's explanation. Technical
+`feature_sessions_behind` in each candidate's explanation. It is 0 or 1 when
+the features are fresh, otherwise null. Theme measurement still requires features
+from the required session exactly. Technical
 inputs two or more sessions behind, or with unverifiable freshness, preclude
 Actionable while social evidence stays visible. Market exposure must match the
 required session exactly. Calendar
@@ -816,8 +818,12 @@ candidate ranking.
 `unresolved` retains source evidence that could not be mapped deterministically.
 It never receives fabricated Market or technical data.
 
-The Actionable view includes only `actionable`. All Signals includes every
-state with clear missing-data and exclusion reasons.
+The Actionable view includes only `actionable`. When the published run has
+none, the queue returns that same run's `watch` rows instead, with a `fallback`
+object that gives the Watch and Risk-off counts and one reason. Ready setups
+under Risk-off come first (Market exposure below 50), then stale features with
+the session they wait on, then the most common Watch reason. All Signals
+includes every state with clear missing-data and exclusion reasons.
 
 **Approved All Signals presentation:** Use three clearly separated sections.
 Ranked candidates contain resolved stocks and thematic ETFs in the selected
