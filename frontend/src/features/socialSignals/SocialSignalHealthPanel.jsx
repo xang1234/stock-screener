@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert, AlertTitle, Box, Button, Chip, Collapse, Divider, FormControlLabel, MenuItem,
   Paper, Select, Stack, Switch, Table, TableBody, TableCell, TableHead,
-  TableRow, TextField, Typography,
+  TablePagination, TableRow, TextField, Typography,
 } from '@mui/material';
 
 import {
@@ -14,8 +14,6 @@ import {
   retrySocialAnalysis, testSocialSource, transitionSocialSource,
   updateSocialAdminRuntime, updateSocialCompanyIdentities,
 } from '../../api/socialSignals';
-import { useMarket } from '../../contexts/MarketContext';
-import { isSocialSignalMarket } from './socialSignalMarkets';
 import { ATTEMPT_TITLES } from './socialSignalPresentation';
 
 const money = (value) => `US$${value ?? '—'}`;
@@ -24,8 +22,6 @@ const errorCode = (error) => error?.response?.data?.detail?.code
 
 export default function SocialSignalHealthPanel() {
   const queryClient = useQueryClient();
-  const { selectedMarket } = useMarket();
-  const market = isSocialSignalMarket(selectedMarket) ? selectedMarket : 'US';
   const [keyDraft, setKeyDraft] = useState('');
   const [adminKey, setAdminKey] = useState('');
   const [keyGeneration, setKeyGeneration] = useState(0);
@@ -39,6 +35,7 @@ export default function SocialSignalHealthPanel() {
   const [validation, setValidation] = useState(null);
   const [modeDraft, setModeDraft] = useState(null);
   const [providerDraft, setProviderDraft] = useState(null);
+  const [unresolvedPage, setUnresolvedPage] = useState(1);
   const enabled = Boolean(adminKey);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['socialAdmin'] });
 
@@ -74,8 +71,10 @@ export default function SocialSignalHealthPanel() {
     queryFn: () => getSocialRuns(adminKey), enabled,
   });
   const unresolved = useQuery({
-    queryKey: ['socialAdmin', 'unresolved', keyGeneration, market],
-    queryFn: () => getSocialUnresolved({ market, window: '7d', page: 1, pageSize: 50 }), enabled,
+    queryKey: ['socialAdmin', 'unresolved', keyGeneration, unresolvedPage],
+    // Unresolved tickers are global; the route still requires a market.
+    queryFn: () => getSocialUnresolved({ market: 'US', window: '7d', page: unresolvedPage, pageSize: 50 }),
+    enabled,
   });
   const mutation = useMutation({
     mutationFn: async (work) => work(),
@@ -228,7 +227,7 @@ export default function SocialSignalHealthPanel() {
         <Typography variant="body2" color="text.secondary">
           Mentioned in the last 7 days but not matched to a listing, so they are never ranked.
         </Typography>
-        <UnresolvedTable rows={unresolved.data?.items || []} total={unresolved.data?.total || 0} />
+        <UnresolvedTable query={unresolved} page={unresolvedPage} onPage={setUnresolvedPage} />
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle1" fontWeight={700}>Theme association review</Typography>
         <Alert severity="info" sx={{ my: 1 }}>
@@ -361,14 +360,17 @@ function LatestAttempt({ attempt }) {
   );
 }
 
-function UnresolvedTable({ rows, total }) {
-  if (!rows.length) {
-    return <Typography variant="body2" sx={{ mt: 1 }}>No unresolved tickers in the latest run.</Typography>;
-  }
+function UnresolvedTable({ query, page, onPage }) {
+  const { data } = query;
+  const note = (text) => <Typography variant="body2" sx={{ mt: 1 }}>{text}</Typography>;
+  if (query.isPending) return note('Loading unresolved tickers…');
+  if (query.isError) return <Alert severity="error" sx={{ mt: 1 }}>Unresolved tickers could not be loaded.</Alert>;
+  if (!data.available) return note(`Unresolved tickers are unavailable (${data.reason_code}).`);
+  if (!data.items.length) return note('No unresolved tickers in the latest run.');
   return <>
     <Table size="small" aria-label="Tickers that need resolution"><TableHead><TableRow>
       {['Ticker', 'Mentions', 'Lists', 'Latest mention'].map((value) => <TableCell key={value}>{value}</TableCell>)}
-    </TableRow></TableHead><TableBody>{rows.map((row) => (
+    </TableRow></TableHead><TableBody>{data.items.map((row) => (
       <TableRow key={row.candidate_key}>
         <TableCell>{row.canonical_symbol || row.candidate_key.replace(/^unresolved:/, '')}</TableCell>
         <TableCell>{row.mention_count}</TableCell>
@@ -376,7 +378,8 @@ function UnresolvedTable({ rows, total }) {
         <TableCell>{row.latest_mention ? new Date(row.latest_mention).toLocaleString() : '—'}</TableCell>
       </TableRow>
     ))}</TableBody></Table>
-    {total > rows.length ? <Typography variant="caption">Showing {rows.length} of {total}</Typography> : null}
+    <TablePagination component="div" count={data.total} page={page - 1} rowsPerPage={50}
+      rowsPerPageOptions={[]} onPageChange={(_, next) => onPage(next + 1)} />
   </>;
 }
 

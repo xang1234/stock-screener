@@ -17,6 +17,13 @@ vi.mock('../../api/socialSignals', () => ({
   getSocialCompanyIdentities: vi.fn(), updateSocialCompanyIdentities: vi.fn(),
   getSocialRuns: vi.fn(), getSocialUnresolved: vi.fn(), getSocialValidation: vi.fn(),
 }));
+vi.mock('../../contexts/MarketContext', () => ({ useMarket: () => ({ selectedMarket: 'HK' }) }));
+
+const unresolvedRow = {
+  candidate_key: 'unresolved:$xyz', canonical_symbol: null, market: null,
+  state: 'unresolved', mention_count: 4, observed_list_count: 1, enabled_list_count: 2,
+  latest_mention: null,
+};
 
 const sources = [{
   source_id: '9', name: 'Asia Growth', list_id: '1986290701492232693',
@@ -48,13 +55,7 @@ function seedMocks() {
       ],
     },
   });
-  api.getSocialUnresolved.mockResolvedValue({
-    available: true, total: 1, items: [{
-      candidate_key: 'unresolved:$xyz', canonical_symbol: null, market: null,
-      state: 'unresolved', mention_count: 4, observed_list_count: 1, enabled_list_count: 2,
-      latest_mention: null,
-    }],
-  });
+  api.getSocialUnresolved.mockResolvedValue({ available: true, total: 1, items: [unresolvedRow] });
   api.getSocialAdminSources.mockResolvedValue(sources);
   api.getSocialAnalysis.mockResolvedValue([{ work_id: 4, state: 'outside_window' },
     { work_id: 5, state: 'succeeded', error_code: 'skipped:no_signal' }]);
@@ -118,6 +119,34 @@ describe('SocialSignalHealthPanel', () => {
     expect(api.getSocialUnresolved).toHaveBeenCalledWith(
       { market: 'US', window: '7d', page: 1, pageSize: 50 },
     );
+  });
+
+  it.each([
+    ['loading', () => new Promise(() => {}), 'Loading unresolved tickers…'],
+    ['failed', () => Promise.reject(new Error('down')), 'Unresolved tickers could not be loaded.'],
+    ['unavailable', () => Promise.resolve({
+      available: false, reason_code: 'no_published_run', total: 0, items: [],
+    }), 'Unresolved tickers are unavailable (no_published_run).'],
+    ['empty', () => Promise.resolve({ available: true, total: 0, items: [] }),
+      'No unresolved tickers in the latest run.'],
+  ])('shows the %s unresolved state on its own', async (_, respond, text) => {
+    api.getSocialUnresolved.mockImplementation(respond);
+    renderPanel();
+    await unlock();
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(screen.getAllByText(/unresolved tickers/i).map((node) => node.textContent)).toEqual([text]);
+  });
+
+  it('pages through unresolved tickers', async () => {
+    api.getSocialUnresolved.mockResolvedValue({ available: true, total: 120, items: [unresolvedRow] });
+    renderPanel();
+    await unlock();
+    expect(await screen.findByText('1–50 of 120')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+    await waitFor(() => expect(api.getSocialUnresolved).toHaveBeenLastCalledWith(
+      { market: 'US', window: '7d', page: 2, pageSize: 50 },
+    ));
+    expect(await screen.findByText('51–100 of 120')).toBeInTheDocument();
   });
 
   it('creates pending named lists and tests before enablement', async () => {
