@@ -94,7 +94,7 @@ class SocialSignalQueries:
             observed_at.append(_utc(parsed))
         return min(observed_at) if observed_at else None
 
-    def _latest_attempt(self):
+    def latest_attempt(self):
         run = self.db.scalar(select(SocialSignalRun).where(
             SocialSignalRun.mode == "live"
         ).order_by(
@@ -274,7 +274,7 @@ class SocialSignalQueries:
         except SocialPublicationUnavailable as exc:
             return {
                 **base, "reason_code": exc.reason,
-                "latest_attempt": self._latest_attempt(),
+                "latest_attempt": self.latest_attempt(),
             }
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)

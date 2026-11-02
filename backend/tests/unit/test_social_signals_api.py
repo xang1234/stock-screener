@@ -242,6 +242,19 @@ async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
     assert "private-list-1" not in encoded
     assert "private-list-2" not in encoded
 
+    from app.api.v1 import config
+
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
+    health = await _request(
+        db_session, "GET", "/api/v1/social-signals/admin/health",
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+    assert health.status_code == 200
+    assert health.json()["latest_attempt"] == {
+        **attempt, "started_at": "2026-09-08T05:49:14+00:00",
+    }
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
