@@ -990,7 +990,6 @@ def test_refusals_after_an_answer_are_split_only_within_the_run_call_cap(backlog
 
 
 class PoisonLLM(FakeLLM):
-    """Refuses with 400 any batch holding post 1, as a content filter would, and answers the rest."""
     async def completion(self, **kwargs):
         from app.services.llm.llm_service import LLMProviderRejectedError
         if "1" in {p["post_id"] for p in json.loads(kwargs["messages"][1]["content"])["posts"]}:

@@ -435,8 +435,6 @@ class ProcessSocialBacklog:
                     row.state, row.error_code = "outside_window", "outside_signal_window"
             eligible = [r for r in rows if r.state in {"pending", "waiting_budget", "failed_retryable"}
                 or (r.state == "outside_window" and r.requested_by_admin)]
-            # Posts a provider refused go last and in their own batches, so a run is answered
-            # before it resends them and one refused post can't head every run.
             eligible.sort(key=lambda r: (
                 r.error_code == "provider_rejected", datetime.fromisoformat(r.input_snapshot_json["created_at"]), r.id
             ))
@@ -485,14 +483,14 @@ class ProcessSocialBacklog:
     @staticmethod
     def _groups(claimed, batch_size):
         current = []
-        current_config = None
+        current_key = None
         for item in claimed:
-            config = item[2:6]
-            if current and (config != current_config or len(current) >= batch_size):
+            key = item[2:6]
+            if current and (key != current_key or len(current) >= batch_size):
                 yield current
                 current = []
             current.append(item)
-            current_config = config
+            current_key = key
         if current:
             yield current
 
