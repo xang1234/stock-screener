@@ -23,6 +23,8 @@ const STATE_REASON_TEXT = {
   market_exposure_below_50: 'Market exposure below 50',
 };
 
+const ACTIONABLE_EXPOSURE_FLOOR = 50;
+
 export const ATTEMPT_TITLES = {
   collection_failed: 'Latest collection did not publish',
   failed: 'Latest analysis failed',
@@ -62,10 +64,9 @@ export const featureLagLabel = (explanation = {}) => {
 
 export const noActionableReason = (rows = []) => {
   const explanations = rows.map(explanationMap);
-  // Below 50 nothing can be Actionable, so exposure outranks any per-row reason.
   const exposure = explanations.find((value) => value.market_exposure != null)?.market_exposure;
-  if (exposure != null && Number(exposure) < 50) {
-    return `No actionable signals: market exposure is ${formatSocialScore(exposure)}, below 50.`;
+  if (exposure != null && Number(exposure) < ACTIONABLE_EXPOSURE_FLOOR) {
+    return `No actionable signals: market exposure is ${formatSocialScore(exposure)}, below ${ACTIONABLE_EXPOSURE_FLOOR}.`;
   }
   const counts = new Map();
   explanations.flatMap((value) => value.state_reasons || [])

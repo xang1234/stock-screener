@@ -40,6 +40,8 @@ from app.services.market_calendar_service import MarketCalendarService
 from app.services.opportunity_state_service import read_liquidity_evidence
 from app.services.security_master_service import security_master_resolver
 
+PUBLISHED_FEATURE_LAG_SESSIONS = 1
+
 
 def score_value(value):
     """Only finite observed engine scores on the documented 0–100 scale."""
@@ -288,8 +290,8 @@ class SocialConfirmationReader:
     def _read(self, symbol, market, as_of, *, mic, pinned_run, context=None):
         run = self.db.get(FeatureRun, pinned_run.run_id) if pinned_run.run_id is not None else None
         feature = self.db.get(StockFeatureDaily, (run.id, symbol)) if run else None
-        # Published feature runs routinely land a session late; older ones stay unscored.
-        ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic, max_sessions_behind=1)
+        ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic,
+                            max_sessions_behind=PUBLISHED_FEATURE_LAG_SESSIONS)
         if mic is None:
             ff = replace(ff, fresh=False, reason="listing_mic_unknown")
         reasons = []

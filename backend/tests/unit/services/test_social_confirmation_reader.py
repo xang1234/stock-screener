@@ -189,7 +189,7 @@ def test_batch_rejects_invalid_setup_values(db_session, calendar, field, value):
 
 @pytest.mark.parametrize("clock,behind,setup_score,state", [
     ("2026-07-02T23:00:00", 0, 75, "actionable"),
-    ("2026-07-06T23:00:00", 1, 75, "actionable"),  # the 3 Jul holiday and a weekend are not sessions
+    pytest.param("2026-07-06T23:00:00", 1, 75, "actionable", id="july3_holiday_and_weekend_skipped"),
     ("2026-07-07T23:00:00", 2, None, "watch"),
 ])
 def test_batch_features_may_trail_the_required_session_by_one(db_session, calendar, clock, behind, setup_score, state):
