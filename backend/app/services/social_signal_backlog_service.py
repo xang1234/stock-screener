@@ -518,31 +518,34 @@ class ProcessSocialBacklog:
                 snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
                 snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
                 items.append(((work_id, token), SocialPostRecord(**snapshot)))
-            queue.append((tuple(items), batch[0][2:5], None))
-        refused = []
+            queue.append((tuple(items), batch[0][2:5], None, None))
+        leaves = []
         while queue:
-            items, config, code = queue.popleft()
+            items, config, code, refused_at = queue.popleft()
             claims = tuple(claim for claim, _ in items)
             if ledger.stopped or ledger.calls_left < 1:
                 deferred += self._finish_many(claims, "pending", "provider_rejected" if ledger.stopped else code)
                 continue
             outcome = await self._extract(items, config, current_time, ledger)
+            if outcome == "provider_rejected" and refused_at is None:
+                refused_at = ledger.answered
             if not isinstance(outcome, str):
                 succeeded, deferred, failed, outside = (
                     total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
                 )
             elif len(items) > 1 and outcome not in _UNSPLITTABLE_ERRORS:
                 middle = len(items) // 2
-                queue += ((items[:middle], config, outcome), (items[middle:], config, outcome))
+                queue += ((items[:middle], config, outcome, refused_at), (items[middle:], config, outcome, refused_at))
             elif outcome == "provider_rejected":
                 if self._finish_many(claims, "pending", outcome):
-                    refused += claims
+                    leaves.append((claims, refused_at))
             else:
                 failed += self._finish_many(claims, "failed_terminal", outcome)
-        if ledger.answered:
-            failed += self._settle(refused, "provider_rejected")
-        else:
-            deferred += len(refused)
+        for claims, refused_at in leaves:
+            if ledger.answered > refused_at:
+                failed += self._settle(claims, "provider_rejected")
+            else:
+                deferred += len(claims)
         if ledger.refusal_status and (ledger.stopped or not ledger.answered):
             logger.error("Social LLM provider refused requests with status %s after answering %d this run; "
                          "deferred %d posts", ledger.refusal_status, ledger.answered, deferred)
