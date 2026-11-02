@@ -16,7 +16,6 @@ function renderDrawer(data) {
           selected={{ canonical_symbol: 'CEG' }}
           query={{ data }}
           onOpenChart={() => {}}
-          onOpenTheme={() => {}}
           onScan={() => {}}
         />
       </ThemeProvider>
@@ -77,6 +76,16 @@ describe('SocialEvidenceDrawer', () => {
     expect(screen.getByText('Setup · Bullish').closest('[title]'))
       .toHaveAttribute('title', 'Model hint, not verified');
     expect(screen.getAllByText(/Setup ·/)).toHaveLength(1);
+  });
+
+  it('offers only the actions it can complete', () => {
+    renderDrawer({
+      available: true, posts: [], claims: [],
+      item: { canonical_symbol: 'CEG', explanation: { theme: 'nuclear_power', theme_id: 7 } },
+    });
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Close', 'Open chart & setup', 'Send visible to Scan',
+    ]);
   });
 
   it('says so when no claims were extracted', () => {

@@ -33,8 +33,8 @@ export const visibleSocialRows = (rows = [], filters = {}) => rows.filter((row) 
   if (['context', 'unresolved'].includes(row.state)) return false;
   const explanation = explanationMap(row);
   const haystacks = {
-    source: JSON.stringify(explanation.sources || explanation.source_names || '').toLowerCase(),
-    theme: JSON.stringify(explanation.themes || explanation.theme || '').toLowerCase(),
+    source: JSON.stringify(explanation.source_names || '').toLowerCase(),
+    theme: JSON.stringify(explanation.theme || '').toLowerCase(),
     instrument: String(explanation.security_kind || 'stock').toLowerCase(),
     state: String(row.state || '').toLowerCase(),
     ticker: String(row.canonical_symbol || '').toLowerCase(),

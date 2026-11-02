@@ -34,8 +34,8 @@ const item = {
   enabled_list_count: 2, coverage: ['limited_history'],
   latest_mention: '2026-09-07T12:00:00Z', formula_version: 'social-signal-v1',
   normalization_scope: 'market', explanation: {
-    author_count: 5, setup_score: 76, readiness: 'ready', rs_rating_3m: 91,
-    group_rank: 3, theme: 'AI infrastructure', theme_id: 7,
+    setup_score: 76, readiness: 'ready', rs_rating_3m: 91,
+    group_rank: 3, theme: 'AI infrastructure',
     state_reasons: ['setup_ready', 'market_confirmed'], security_kind: 'stock',
     acceleration: null,
     social_components: { authors: { value: 82, available_weight: 15, total_weight: 15 } },
@@ -99,6 +99,10 @@ describe('SocialSignalsTab', () => {
   it('renders a dense truthful queue with warming-up and stale states', async () => {
     renderTab();
     expect(await screen.findByText('0700')).toBeInTheDocument();
+    expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
+      'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Setup',
+      'RS', 'Group', 'Theme', 'State', 'Freshness',
+    ]);
     expect(screen.getByText('82')).toBeInTheDocument();
     expect(screen.getByText('89')).toBeInTheDocument();
     expect(screen.getByText('1/2 lists · 7D')).toBeInTheDocument();

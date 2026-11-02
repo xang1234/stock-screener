@@ -8,7 +8,7 @@ import {
 } from './socialSignalPresentation';
 
 const HEADINGS = [
-  'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Authors', 'Setup',
+  'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Setup',
   'RS', 'Group', 'Theme', 'State', 'Freshness',
 ];
 
@@ -39,11 +39,10 @@ export default function SocialSignalsTable({ title, items = [], window, onSelect
                   <TableCell>{formatSocialScore(item.social_score)}</TableCell>
                   <TableCell>{formatSocialScore(item.confirmation_score)}</TableCell>
                   <TableCell>{item.mention_count}</TableCell>
-                  <TableCell>{explanation.author_count ?? '—'}</TableCell>
                   <TableCell>{explanation.readiness || formatSocialScore(explanation.setup_score)}</TableCell>
                   <TableCell>{formatSocialScore(explanation.rs_rating_3m ?? explanation.rs_rating_1m)}</TableCell>
                   <TableCell>{explanation.group_rank ?? '—'}</TableCell>
-                  <TableCell>{explanation.theme || explanation.linked_theme || '—'}</TableCell>
+                  <TableCell>{explanation.theme || '—'}</TableCell>
                   <TableCell><Chip size="small" label={socialStateLabel(item.state)} /></TableCell>
                   <TableCell>
                     <Typography variant="caption" display="block">{coverage.label}</Typography>

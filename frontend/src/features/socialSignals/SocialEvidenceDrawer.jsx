@@ -12,7 +12,7 @@ const stateReasons = (value) => Array.isArray(value)
   : String(value || '').split(',').filter(Boolean);
 
 export default function SocialEvidenceDrawer({
-  open, onClose, selected, query, onOpenChart, onOpenTheme, onScan,
+  open, onClose, selected, query, onOpenChart, onScan,
 }) {
   const data = query?.data;
   const item = data?.item || selected;
@@ -37,7 +37,6 @@ export default function SocialEvidenceDrawer({
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Button variant="contained" onClick={onOpenChart}>Open chart & setup</Button>
           <Button variant="outlined" onClick={onScan}>Send visible to Scan</Button>
-          {explanation.theme_id ? <Button onClick={() => onOpenTheme(explanation.theme_id)}>Open theme</Button> : null}
           {item?.canonical_symbol && item?.market ? <AddToWatchlistMenu symbols={item.canonical_symbol} /> : null}
         </Stack>
         <Divider sx={{ my: 2 }} />

@@ -160,7 +160,6 @@ export default function SocialSignalsTab() {
       ) : null}
       <SocialEvidenceDrawer open={Boolean(selected)} onClose={() => setSelected(null)}
         selected={selected} query={evidenceQuery} onOpenChart={() => setChartOpen(true)}
-        onOpenTheme={(themeId) => navigate(`/themes?theme=${encodeURIComponent(themeId)}`)}
         onScan={scanVisible} />
       <ChartViewerModal open={chartOpen} onClose={() => setChartOpen(false)}
         initialSymbol={selected?.canonical_symbol} scanId={null}
