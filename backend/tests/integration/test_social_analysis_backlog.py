@@ -1006,6 +1006,42 @@ def test_refusal_arriving_after_claim_expiry_still_releases_its_charge(backlog):
     assert refusal_outcome(backlog, [work_id])[1:] == (["released"], 0)
 
 
+def test_claim_expiry_ignores_unknown_attempts_from_earlier_claims(backlog, monkeypatch):
+    from decimal import Decimal
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_llm_budget_service import SocialLLMBudgetService
+    from scripts.requeue_social_completion_unknown import requeue
+
+    llm = FakeLLM()
+    work_id = enqueue(backlog, processor(backlog, llm), post(1))
+    budget = SocialLLMBudgetService(backlog)
+    earlier = budget.reserve("earlier-claim", (work_id,), Decimal("0.1"), NOW - timedelta(hours=1))
+    budget.mark_dispatched(earlier)
+    budget.reconcile(earlier, None, None)
+    with backlog.begin() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        work.state, work.error_code = "failed_terminal", "completion_unknown"
+    assert requeue(backlog, NOW, apply=True)["requeue"] == 1
+
+    outage = [True]
+    price = SocialLLMBudgetService.price_in_transaction
+
+    def ledger_outage(db, model):
+        if outage:
+            raise RuntimeError("ledger unavailable")
+        return price(db, model)
+
+    monkeypatch.setattr(SocialLLMBudgetService, "price_in_transaction", staticmethod(ledger_outage))
+    first = asyncio.run(processor(backlog, llm).execute(NOW, 1))
+    outage.clear()
+    later = asyncio.run(processor(backlog, llm).execute(NOW + timedelta(minutes=11), 1))
+
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        assert (first.deferred, later.succeeded, llm.calls, work.state) == (1, 1, 1, "succeeded")
+
+
 def test_failure_before_dispatch_is_left_for_claim_expiry_not_completion_unknown(backlog, monkeypatch):
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
     from app.services.social_llm_budget_service import SocialLLMBudgetService
