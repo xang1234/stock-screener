@@ -23,7 +23,7 @@ function renderCard(onOpen = vi.fn(), market = 'US') {
 describe('DailySocialSignalsCard', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('shows the published top five, themes, posture, coverage, freshness and navigation', async () => {
+  it('shows the published top five, themes, coverage, freshness and navigation', async () => {
     getSocialSummary.mockResolvedValue({
       supported: true, available: true, stale: true,
       published_at: '2026-09-07T06:00:00Z',
@@ -42,8 +42,8 @@ describe('DailySocialSignalsCard', () => {
     expect(screen.getByText('S4')).toBeInTheDocument();
     expect(screen.queryByText('S5')).not.toBeInTheDocument();
     expect(screen.getByText(/AI infrastructure · 4 companies/i)).toBeInTheDocument();
-    expect(screen.getByText(/Exposure 65/)).toBeInTheDocument();
     expect(screen.getByText(/3\/3 sources/)).toBeInTheDocument();
+    expect(screen.queryByText(/Exposure/)).not.toBeInTheDocument();
     expect(screen.getByText('Stale')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Social Signals' }));
     expect(onOpen).toHaveBeenCalledTimes(1);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatSocialScore, socialFreshness, socialStateLabel, stateReasonText,
+  formatSocialScore, noActionableReason, socialFreshness, socialStateLabel, stateReasonText,
   visibleSocialRows,
 } from './socialSignalPresentation';
 
@@ -31,6 +31,13 @@ describe('Social Signal presentation', () => {
     expect(stateReasonText('stale_features')).toBe('Price features out of date');
     expect(stateReasonText('market_exposure_below_50')).toBe('Market exposure below 50');
     expect(stateReasonText('some_new_reason')).toBe('Some new reason');
+  });
+
+  it('names the most common Watch reason when exposure is not the cause', () => {
+    const watch = (reasons) => ({ explanation: { market_exposure: '65', state_reasons: reasons } });
+    expect(noActionableReason([watch(['setup_not_ready']), watch(['setup_not_ready', 'missing_liquidity'])]))
+      .toBe('No actionable signals: setup not ready for most signals.');
+    expect(noActionableReason([])).toBe('No actionable signals right now.');
   });
 
   it('filters sources using the published source-name projection', () => {

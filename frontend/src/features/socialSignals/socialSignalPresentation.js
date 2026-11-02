@@ -55,6 +55,26 @@ export const socialFreshness = ({ stale = false, published_at: publishedAt } = {
 
 export const explanationMap = (item) => item?.explanation || {};
 
+export const noActionableReason = (rows = []) => {
+  const explanations = rows.map(explanationMap);
+  // Below 50 nothing can be Actionable, so exposure outranks any per-row reason.
+  const exposure = explanations.find((value) => value.market_exposure != null)?.market_exposure;
+  if (exposure != null && Number(exposure) < 50) {
+    return `No actionable signals: market exposure is ${formatSocialScore(exposure)}, below 50.`;
+  }
+  const counts = new Map();
+  explanations.flatMap((value) => value.state_reasons || [])
+    .forEach((reason) => counts.set(reason, (counts.get(reason) || 0) + 1));
+  const [top] = [...counts].sort((left, right) => right[1] - left[1])[0] || [];
+  if (top === 'stale_features') {
+    const session = explanations.find((value) => value.feature_required_session)?.feature_required_session;
+    return `No actionable signals: price features not yet updated for ${session || 'the latest session'}.`;
+  }
+  return top
+    ? `No actionable signals: ${stateReasonText(top).toLowerCase()} for most signals.`
+    : 'No actionable signals right now.';
+};
+
 export const visibleSocialRows = (rows = [], filters = {}) => rows.filter((row) => {
   if (['context', 'unresolved'].includes(row.state)) return false;
   const explanation = explanationMap(row);

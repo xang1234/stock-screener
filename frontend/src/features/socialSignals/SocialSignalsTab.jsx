@@ -14,9 +14,14 @@ import { useMarket } from '../../contexts/MarketContext';
 import SocialEvidenceDrawer from './SocialEvidenceDrawer';
 import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import SocialSignalsTable from './SocialSignalsTable';
-import { ATTEMPT_TITLES, socialFreshness, visibleSocialRows } from './socialSignalPresentation';
+import {
+  ATTEMPT_TITLES, noActionableReason, socialFreshness, socialStateLabel, visibleSocialRows,
+} from './socialSignalPresentation';
 
 const EMPTY = [];
+const VIEWS = [
+  ['actionable', 'Actionable'], ['watch', 'Watch'], ['risk_off', 'Risk-off'], ['all', 'All Signals'],
+];
 const FILTERS = [
   ['source', 'Source'], ['theme', 'Theme'], ['instrument', 'Instrument'],
   ['state', 'State'], ['ticker', 'Ticker'],
@@ -46,6 +51,15 @@ export default function SocialSignalsTab() {
     queryKey: socialQueueKey(controls), queryFn: () => getSocialQueue(controls),
     staleTime: 60_000, enabled: marketSupported,
   });
+  const actionableEmpty = view === 'actionable' && queueQuery.data?.available === true
+    && queueQuery.data.total === 0;
+  const watchControls = { ...controls, view: 'watch' };
+  const watchQuery = useQuery({
+    queryKey: socialQueueKey(watchControls), queryFn: () => getSocialQueue(watchControls),
+    staleTime: 60_000, enabled: marketSupported && actionableEmpty,
+  });
+  const fallback = actionableEmpty && watchQuery.data?.total > 0;
+  const shown = fallback ? watchQuery.data : queueQuery.data;
   const contextQuery = useQuery({
     queryKey: ['socialSignals', 'context', market, window, contextPage],
     queryFn: () => getSocialContext({ market, window, page: contextPage, pageSize: 50 }),
@@ -57,8 +71,8 @@ export default function SocialSignalsTab() {
     enabled: marketSupported && Boolean(selected),
   });
   const rows = useMemo(
-    () => visibleSocialRows(queueQuery.data?.items || EMPTY, filters),
-    [filters, queueQuery.data?.items],
+    () => visibleSocialRows(shown?.items || EMPTY, filters),
+    [filters, shown?.items],
   );
   const visibleSymbols = useMemo(
     () => [...new Set(rows.filter((row) => row.market && row.canonical_symbol)
@@ -66,6 +80,10 @@ export default function SocialSignalsTab() {
   );
   const attempt = queueQuery.data?.latest_attempt;
   const freshness = socialFreshness(queueQuery.data);
+  const filtered = Object.values(filters).some((value) => String(value || '').trim());
+  const emptyCopy = filtered ? 'No signals match these filters.'
+    : view === 'all' ? 'No signals in this window.'
+      : `No ${socialStateLabel(view)} signals in this window.`;
   const selectControl = (setter, value) => { setter(value); setPage(1); };
   const scanVisible = () => {
     const params = new URLSearchParams({ market, symbols: visibleSymbols.join(',') });
@@ -86,10 +104,9 @@ export default function SocialSignalsTab() {
             {['1d', '7d', '14d'].map((value) => <Button key={value}
               variant={window === value ? 'contained' : 'outlined'}
               onClick={() => selectControl(setWindow, value)}>{value.toUpperCase()}</Button>)}
-            <Button variant={view === 'actionable' ? 'contained' : 'outlined'}
-              onClick={() => selectControl(setView, 'actionable')}>Actionable</Button>
-            <Button variant={view === 'all' ? 'contained' : 'outlined'}
-              onClick={() => selectControl(setView, 'all')}>All Signals</Button>
+            {VIEWS.map(([value, label]) => <Button key={value}
+              variant={view === value ? 'contained' : 'outlined'}
+              onClick={() => selectControl(setView, value)}>{label}</Button>)}
             <Button variant={rankMode === 'blended' ? 'contained' : 'outlined'}
               onClick={() => selectControl(setRankMode, 'blended')}>Blended</Button>
             <Button variant={rankMode === 'pure_social' ? 'contained' : 'outlined'}
@@ -127,11 +144,14 @@ export default function SocialSignalsTab() {
       {queueQuery.data?.available ? (
         <>
           <Stack direction="row" gap={1} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="caption">{queueQuery.data.total} published candidates</Typography>
+            <Typography variant="caption">{shown.total} published candidates</Typography>
             <Chip size="small" variant="outlined" color={freshness.color} label={freshness.label} />
             <Button size="small" disabled={!visibleSymbols.length} onClick={scanVisible}>Send visible to Scan</Button>
           </Stack>
-          {!rows.length ? <Alert severity="info">No signals match these controls.</Alert> : null}
+          {fallback ? <Alert severity="info" sx={{ mb: 1 }}>
+            {noActionableReason(rows)} Showing Watch.
+          </Alert> : null}
+          {!rows.length && !(actionableEmpty && watchQuery.isLoading) ? <Alert severity="info">{emptyCopy}</Alert> : null}
           <SocialSignalsTable items={rows} onSelect={setSelected} />
           {view === 'all' ? <>
             <SocialSignalsTable title="Context" items={contextQuery.data?.items || EMPTY}
@@ -142,7 +162,7 @@ export default function SocialSignalsTab() {
           <Stack direction="row" justifyContent="flex-end" gap={1}>
             <Button disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button>
             <Typography variant="caption" sx={{ alignSelf: 'center' }}>Page {page}</Typography>
-            <Button disabled={page * 50 >= queueQuery.data.total}
+            <Button disabled={page * 50 >= shown.total}
               onClick={() => setPage((value) => value + 1)}>Next</Button>
           </Stack>
         </>

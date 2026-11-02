@@ -25,8 +25,6 @@ export default function DailySocialSignalsCard({ market, onOpen }) {
   });
   const data = query.data;
   const signals = (data?.top_signals || []).slice(0, 5);
-  const exposure = signals.find((item) => item.explanation?.market_exposure != null)
-    ?.explanation.market_exposure;
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
@@ -52,8 +50,6 @@ export default function DailySocialSignalsCard({ market, onOpen }) {
           <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ my: 1 }}>
             <Chip size="small" color={data.stale ? 'warning' : 'success'} label={data.stale ? 'Stale' : 'Fresh'} />
             <Chip size="small" label={`${data.participating_source_count ?? 0}/${data.enabled_source_count ?? 0} sources`} />
-            <Chip size="small" label={`Exposure ${formatSocialScore(exposure)} · ${exposure == null
-              ? 'Unavailable' : Number(exposure) >= 50 ? 'Risk-on' : 'Risk-off'}`} />
             <Typography variant="caption" sx={{ alignSelf: 'center' }}>
               Last success {data.published_at ? new Date(data.published_at).toLocaleString() : '—'}
             </Typography>
