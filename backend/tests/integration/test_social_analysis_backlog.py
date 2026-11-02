@@ -1148,6 +1148,21 @@ def test_a_refused_retry_keeps_the_unknown_first_outcome_terminal(backlog, caplo
     assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == []
 
 
+def test_a_provider_wide_refusal_on_a_retry_stops_the_run(backlog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = TimesOutThenRefuses(401)
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=2)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 5)]
+
+    result = asyncio.run(worker.execute(NOW, 4))
+
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (0, 2, 2, 2)
+    assert refusal_outcome(backlog, work_ids[:2])[0] == {("failed_terminal", "completion_unknown")}
+    assert refusal_outcome(backlog, work_ids[2:])[0] == {("pending", "provider_rejected")}
+
+
 def test_a_refused_retry_is_terminal_before_the_run_settles_anything(backlog, monkeypatch):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 

@@ -236,9 +236,10 @@ class _MeteredCompletion:
                     raise _CompletionUnknown() from exc
                 raise SocialExtractionError("llm_configuration_error") from None
             except LLMProviderRejectedError as exc:
+                if not self.retry or exc.status_code in _PROVIDER_WIDE_REFUSALS:
+                    self.ledger.refusal_status = exc.status_code
                 if not budget.release_unbilled(attempt) or self.retry:
                     raise _CompletionUnknown() from exc
-                self.ledger.refusal_status = exc.status_code
                 if self.ledger.stopped:
                     self.owner._finish_many(self.claims, "pending", "provider_rejected")
                     raise _Deferred(len(self.claims)) from None
