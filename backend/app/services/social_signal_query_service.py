@@ -212,12 +212,16 @@ class SocialSignalQueries:
             "source_names": source_names,
         }
 
+    @staticmethod
+    def _pinned_reasons(record):
+        reasons = dict(record.pinned_inputs).get("state_reasons") or ""
+        return list(reasons) if not isinstance(reasons, str) else [value for value in reasons.split(",") if value]
+
     @classmethod
     def _item(cls, record, run=None):
         pinned = dict(record.pinned_inputs)
-        reasons = pinned.get("state_reasons")
-        if isinstance(reasons, str):
-            pinned["state_reasons"] = [value for value in reasons.split(",") if value]
+        if "state_reasons" in pinned:
+            pinned["state_reasons"] = cls._pinned_reasons(record)
         pinned.update(cls._candidate_explanation(
             run, record.candidate_key, record.window_days
         ))
@@ -311,10 +315,7 @@ class SocialSignalQueries:
     def _why_not_actionable(self, watch, risk_off, run):
         if not watch and not risk_off.total:
             return None
-        reasons = [
-            [value for value in dict(record.pinned_inputs).get("state_reasons", "").split(",") if value]
-            for record in watch
-        ]
+        reasons = [self._pinned_reasons(record) for record in watch]
         stale = [record for record, values in zip(watch, reasons) if "stale_features" in values]
         counts = Counter(reason for values in reasons for reason in values)
         if risk_off.items:

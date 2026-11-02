@@ -46,14 +46,16 @@ const age = (minutes) => (
   minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`
 );
 
-export const socialFreshness = ({ stale = true, published_at: publishedAt } = {}, now = Date.now()) => {
+export const socialFreshness = ({ stale, published_at: publishedAt } = {}, now = Date.now()) => {
   const at = Date.parse(publishedAt);
   if (Number.isNaN(at)) return { label: 'Update time unknown', color: 'default' };
-  if (stale) return { label: `Delayed, last update ${new Date(at).toLocaleString()}`, color: 'warning' };
+  if (stale !== false) return { label: `Delayed, last update ${new Date(at).toLocaleString()}`, color: 'warning' };
   return { label: `Updated ${age(Math.max(0, Math.floor((now - at) / 60000)))} ago`, color: 'success' };
 };
 
 export const explanationMap = (item) => item?.explanation || {};
+
+export const handleText = (handle) => `@${String(handle || '').replace(/^@+/, '')}`;
 
 export const featureLagLabel = (explanation = {}) => {
   const behind = explanation.feature_sessions_behind;

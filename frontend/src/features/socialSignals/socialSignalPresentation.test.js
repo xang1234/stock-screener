@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  fallbackText, formatSocialScore, socialFreshness, socialStateLabel, stateReasonText,
+  fallbackText, formatSocialScore, handleText, socialFreshness, socialStateLabel, stateReasonText,
   visibleSocialRows,
 } from './socialSignalPresentation';
 
 describe('Social Signal presentation', () => {
+  it('shows one @ whether or not the stored handle has one', () => {
+    expect(handleText('@JonahLupton')).toBe('@JonahLupton');
+    expect(handleText('analyst')).toBe('@analyst');
+  });
+
+  it('treats a null stale flag as not fresh', () => {
+    const publishedAt = '2026-11-02T10:00:00Z';
+    expect(socialFreshness({ stale: null, published_at: publishedAt }).color).toBe('warning');
+    expect(socialFreshness({ stale: false, published_at: publishedAt }, Date.parse('2026-11-02T13:00:00Z')))
+      .toEqual({ label: 'Updated 3h ago', color: 'success' });
+  });
+
   it('keeps missing scores distinct from zero', () => {
     expect(formatSocialScore(null)).toBe('—');
     expect(formatSocialScore(0)).toBe('0');

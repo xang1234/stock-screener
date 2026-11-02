@@ -4,7 +4,7 @@ import {
 
 import AddToWatchlistMenu from '../../components/common/AddToWatchlistMenu';
 import {
-  explanationMap, featureLagLabel, formatSocialScore, socialStateLabel, stateReasonText,
+  explanationMap, featureLagLabel, formatSocialScore, handleText, socialStateLabel, stateReasonText,
 } from './socialSignalPresentation';
 
 const words = (value) => String(value || '').replaceAll('_', ' ');
@@ -134,7 +134,7 @@ function ClaimList({ claims }) {
                       {' shared by '}
                     </>
                   ) : null}
-                  <Link href={claim.url} target="_blank" rel="noreferrer">@{claim.author_handle}</Link>
+                  <Link href={claim.url} target="_blank" rel="noreferrer">{handleText(claim.author_handle)}</Link>
                   {' · '}{new Date(claim.created_at).toLocaleString()}
                 </Typography>
               </Box>
@@ -152,7 +152,7 @@ function PaperPost({ post }) {
   return (
     <Box sx={{ py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
       <Typography variant="caption" color="text.secondary">
-        @{post.author_handle} · {new Date(post.created_at).toLocaleString()}
+        {handleText(post.author_handle)} · {new Date(post.created_at).toLocaleString()}
       </Typography>
       <Typography variant="body2" sx={{ my: 0.75, whiteSpace: 'pre-wrap' }}>{post.excerpt}</Typography>
       <Stack direction="row" gap={0.5} alignItems="center" flexWrap="wrap">
