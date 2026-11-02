@@ -26,6 +26,7 @@ from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 logger = logging.getLogger(__name__)
 
 NO_SIGNAL_GATE = "no_signal_gate"
+_CLAIM_TTL = timedelta(minutes=10)
 # Configuration failures repeat for any subset of posts, and a refused request is not re-sent.
 _UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured", "provider_rejected"})
 # Authentication, payment, permission, and missing-model refusals apply to every request.
@@ -400,7 +401,12 @@ class ProcessSocialBacklog:
                     # A dispatched request may have billed, including after a crash.
                     # Never silently retry it. Reserved-only claims can be released.
                     attempts = [a for a in db.scalars(select(SocialLLMAttempt)).all() if row.id in a.work_ids]
-                    ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"} for a in attempts)
+                    # Requeued work keeps the attempt that stranded it; only this claim's attempts count.
+                    # ponytail: matched by time, so a claim dated before an earlier claim's
+                    # attempts still counts them; key attempts by claim token if that occurs.
+                    claimed_at = _utc(row.claim_expires_at) - _CLAIM_TTL
+                    ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"}
+                                    and _utc(a.created_at) >= claimed_at for a in attempts)
                     for attempt in attempts:
                         if attempt.state == "reserved":
                             day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
@@ -431,7 +437,7 @@ class ProcessSocialBacklog:
             for row in eligible[:limit]:
                 row.state, row.error_code = "running", None
                 row.claim_token = uuid4().hex
-                row.claim_expires_at = now + timedelta(minutes=10)
+                row.claim_expires_at = now + _CLAIM_TTL
                 row.updated_at = now
                 claimed.append((row.id, row.claim_token, row.selected_model, row.prompt_version,
                     row.schema_version, dict(row.input_snapshot_json)))
