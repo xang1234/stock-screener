@@ -73,3 +73,32 @@ def test_requeue_returns_only_unbilled_settled_in_window_work_to_the_backlog(bac
     with backlog() as db:
         assert sorted(attempt.state for attempt in db.scalars(select(SocialLLMAttempt))
                       if unknown in attempt.work_ids) == ["reconciled", "uncertain"]
+
+
+def refuse(factory, work_id, at):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_llm_budget_service import SocialLLMBudgetService
+    budget = SocialLLMBudgetService(factory)
+    budget.release(budget.reserve(f"refused:{work_id}", (work_id,), Decimal("0.1"), at))
+    with factory.begin() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        work.state, work.error_code = "failed_terminal", "provider_rejected"
+
+
+def test_requeue_targets_one_error_code_within_an_attempt_window(backlog):
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    worker = processor(backlog, FakeLLM())
+    earlier, outage, unknown = (enqueue(backlog, worker, post(number)) for number in range(1, 4))
+    refuse(backlog, earlier, NOW - timedelta(days=2))
+    refuse(backlog, outage, NOW - timedelta(hours=1))
+    strand(backlog, unknown, "uncertain")
+    window = {"since": NOW - timedelta(days=1), "until": (NOW - timedelta(minutes=1)).replace(tzinfo=None)}
+
+    assert requeue(backlog, NOW, apply=True, error_code="provider_rejected", **window) == {"requeue": 1}
+    assert states(backlog, earlier, outage, unknown) == [
+        ("failed_terminal", "provider_rejected", None),
+        ("pending", None, None),
+        ("failed_terminal", "completion_unknown", "expired-claim"),
+    ]
