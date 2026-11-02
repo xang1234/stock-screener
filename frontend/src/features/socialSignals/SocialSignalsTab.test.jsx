@@ -221,26 +221,15 @@ describe('SocialSignalsTab', () => {
     ));
   });
 
-  it('says in one line that collection failed and leaves per-list detail to Operations', async () => {
+  it('says in one line that collection failed and points to Operations', async () => {
     socialApi.getSocialQueue.mockResolvedValueOnce(queue({
       available: false, reason_code: 'no_published_run', total: 0, items: [],
-      latest_attempt: {
-        run_id: 'failed-collection-1', status: 'collection_failed',
-        started_at: '2026-09-08T05:49:14Z', completed_at: null,
-        sources: [
-          { name: 'Minervini', read_status: 'failed', received_count: 0,
-            history_status: 'limited', reason_codes: ['provider_unavailable'] },
-          { name: 'AI Investing', read_status: 'failed', received_count: 0,
-            history_status: 'limited', reason_codes: ['provider_timeout'] },
-        ],
-      },
+      latest_attempt: { status: 'collection_failed' },
     }));
 
     renderTab();
 
     expect(await screen.findByText('Latest collection did not publish.')).toBeInTheDocument();
-    expect(screen.queryByText('Minervini')).not.toBeInTheDocument();
-    expect(screen.queryByText('Provider unavailable')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Operations' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/operations#sources');
   });
@@ -248,16 +237,7 @@ describe('SocialSignalsTab', () => {
   it('says analysis failed and points to Operations', async () => {
     socialApi.getSocialQueue.mockResolvedValueOnce(queue({
       available: false, reason_code: 'no_published_run', total: 0, items: [],
-      latest_attempt: {
-        run_id: 'failed-analysis-1', status: 'failed',
-        started_at: '2026-09-08T05:49:14Z', completed_at: '2026-09-08T05:50:14Z',
-        sources: [
-          { name: 'Minervini', read_status: 'success', received_count: 20,
-            history_status: 'limited', reason_codes: [] },
-          { name: 'AI Investing', read_status: 'success', received_count: 50,
-            history_status: 'limited', reason_codes: [] },
-        ],
-      },
+      latest_attempt: { status: 'failed' },
     }));
 
     renderTab();

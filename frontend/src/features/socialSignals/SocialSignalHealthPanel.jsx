@@ -170,7 +170,7 @@ export default function SocialSignalHealthPanel() {
       ) : null}
       <Collapse in={enabled}>
         {health.data ? <HealthSummary health={health.data} /> : null}
-        {health.data?.latest_attempt ? <LatestAttempt attempt={health.data.latest_attempt} /> : null}
+        {health.data?.latest_live_attempt ? <LatestAttempt attempt={health.data.latest_live_attempt} /> : null}
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle1" fontWeight={700}>Runtime</Typography>
         <Alert severity="warning" sx={{ my: 1 }}>
@@ -328,7 +328,7 @@ function LatestAttempt({ attempt }) {
     <Alert severity={failed ? 'error' : 'info'} sx={{ mt: 2 }}>
       <AlertTitle>{ATTEMPT_TITLES[attempt.status] || attempt.status}</AlertTitle>
       <Typography variant="body2" sx={{ mb: 1 }}>
-        Started {new Date(attempt.started_at).toLocaleString()}
+        Live run started {new Date(attempt.started_at).toLocaleString()}
       </Typography>
       <Stack gap={0.75}>
         {(attempt.sources || []).map((source) => {

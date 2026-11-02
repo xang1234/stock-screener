@@ -171,7 +171,7 @@ async def test_live_without_publication_is_typed_unavailable(
     ("success", "processing"),
     ("failed", "collection_failed"),
 ])
-async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
+async def test_unpublished_queue_shows_attempt_status_and_admin_health_the_detail(
     db_session, social_runtime, monkeypatch, second_status, expected_status
 ):
     from datetime import datetime, timezone
@@ -219,11 +219,24 @@ async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
     )
 
     assert response.status_code == 200
-    attempt = response.json().get("latest_attempt")
-    assert attempt == {
+    assert response.json()["latest_attempt"] == {"status": expected_status}
+    encoded = response.text.lower()
+    assert "private-list-1" not in encoded
+    assert "minervini" not in encoded
+
+    from app.api.v1 import config
+
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
+    health = await _request(
+        db_session, "GET", "/api/v1/social-signals/admin/health",
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+    assert health.status_code == 200
+    assert health.json()["latest_live_attempt"] == {
         "run_id": "failed-collection-1",
         "status": expected_status,
-        "started_at": "2026-09-08T05:49:14Z",
+        "started_at": "2026-09-08T05:49:14+00:00",
         "completed_at": None,
         "sources": [
             {
@@ -237,22 +250,6 @@ async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
                 "reason_codes": ["bounded_provider_read"],
             },
         ],
-    }
-    encoded = response.text.lower()
-    assert "private-list-1" not in encoded
-    assert "private-list-2" not in encoded
-
-    from app.api.v1 import config
-
-    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
-    monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
-    health = await _request(
-        db_session, "GET", "/api/v1/social-signals/admin/health",
-        headers={"X-Admin-Key": "admin-secret"},
-    )
-    assert health.status_code == 200
-    assert health.json()["latest_attempt"] == {
-        **attempt, "started_at": "2026-09-08T05:49:14+00:00",
     }
 
 

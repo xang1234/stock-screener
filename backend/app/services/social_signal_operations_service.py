@@ -24,6 +24,7 @@ from app.services.social_signal_runtime_gate import (
     PROVIDER_LEASE_KEY,
 )
 from app.services.social_llm_budget_service import social_budget_period
+from app.services.social_signal_query_service import SocialSignalQueries
 
 
 _PUBLIC_REASON_CODES = {
@@ -198,6 +199,7 @@ class SocialSignalOperationsService:
             "registry_version": registry.version if registry else 0,
             "run_id": run.id if run else None,
             "run_status": run.status if run else None,
+            "latest_live_attempt": SocialSignalQueries(db).latest_live_attempt(),
             "collection_status": "complete" if collection_complete else "incomplete",
             "processing_status": (
                 "complete"

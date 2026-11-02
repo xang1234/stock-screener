@@ -37,7 +37,7 @@ function seedMocks() {
       pricing_status: 'configured', pricing_version: '2026-09' },
     backlog: { waiting: 4, failed: 1, outside_window: 2, no_signal: 9 },
     formula_version: 'social-signal-v1',
-    latest_attempt: {
+    latest_live_attempt: {
       run_id: 'failed-collection-1', status: 'collection_failed',
       started_at: '2026-09-08T05:49:14Z', completed_at: null,
       sources: [
@@ -104,6 +104,7 @@ describe('SocialSignalHealthPanel', () => {
     await unlock();
     expect(screen.getByText('Formula social-signal-v1')).toBeInTheDocument();
     expect(screen.getByText('Latest collection did not publish')).toBeInTheDocument();
+    expect(screen.getByText(/^Live run started /)).toBeInTheDocument();
     expect(screen.getByText('Minervini')).toBeInTheDocument();
     expect(screen.getAllByText('Failed · 0 posts')).toHaveLength(2);
     expect(screen.getByText('Provider unavailable')).toBeInTheDocument();

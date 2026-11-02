@@ -14,22 +14,10 @@ QueueView = Literal["actionable", "all", "watch", "risk_off"]
 RankMode = Literal["blended", "pure_social"]
 
 
-class SocialSourceAttempt(BaseModel):
-    name: str
-    read_status: Literal["pending", "success", "failed"]
-    received_count: int | None = None
-    history_status: str | None = None
-    reason_codes: list[str] = Field(default_factory=list)
-
-
 class SocialLatestAttempt(BaseModel):
-    run_id: str
     status: Literal[
         "collecting", "collection_failed", "processing", "failed", "published"
     ]
-    started_at: datetime
-    completed_at: datetime | None = None
-    sources: list[SocialSourceAttempt] = Field(default_factory=list)
 
 
 class SocialAvailabilityResponse(BaseModel):
