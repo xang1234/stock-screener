@@ -1089,6 +1089,28 @@ def test_a_cap_exhausted_mid_isolation_leaves_unsent_posts_pending(backlog):
     assert refusal_outcome(backlog, work_ids[5:])[0] == {("pending", "provider_rejected")}
 
 
+@pytest.mark.parametrize("answers", [0, 1])
+def test_a_refused_retry_keeps_the_unknown_first_outcome_terminal(backlog, answers):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    class TimesOutThenRefuses(RefusingLLM):
+        async def completion(self, **kwargs):
+            if self.calls == self.answers:
+                self.calls += 1
+                raise TimeoutError("provider timed out")
+            return await super().completion(**kwargs)
+
+    configure_budget(backlog)
+    llm = TimesOutThenRefuses(400, answers=answers)
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=2)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 3 + 2 * answers)]
+
+    result = asyncio.run(worker.execute(NOW, len(work_ids)))
+
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (2 * answers, 0, 2, answers + 2)
+    assert refusal_outcome(backlog, work_ids[2 * answers:])[0] == {("failed_terminal", "completion_unknown")}
+
+
 def test_refusal_arriving_after_claim_expiry_still_releases_its_charge(backlog):
     from app.infra.db.models.social_analysis import SocialLLMAttempt
 
