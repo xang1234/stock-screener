@@ -378,9 +378,8 @@ def test_batch_splitting_stays_within_the_per_run_call_cap(backlog):
 
     result = asyncio.run(worker.execute(NOW, 8))
 
-    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (0, 7, 1, 4)
-    assert refusal_outcome(backlog, work_ids[:1])[0] == {("failed_terminal", "malformed_json")}
-    assert refusal_outcome(backlog, work_ids[1:])[0] == {("pending", "malformed_json")}
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (0, 8, 0, 4)
+    assert refusal_outcome(backlog, work_ids)[0] == {("pending", "malformed_json")}
 
 
 class FlakyLLM(FakeLLM):
@@ -1033,6 +1032,24 @@ def test_refused_posts_in_adjacent_batches_are_each_isolated_in_one_run(backlog)
     assert refusal_outcome(backlog, [work_ids[0], work_ids[20]])[0] == {("failed_terminal", "provider_rejected")}
 
 
+@pytest.mark.parametrize("total,runs", [(45, [(35, 3, 7), (20, 0, 3)]), (100, [(90, 4, 6), (20, 0, 4)])])
+def test_a_refused_head_block_does_not_starve_the_batches_behind_it(backlog, total, runs):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = PoisonLLM(*map(str, range(1, 11)))
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, total + 1)]
+
+    first = asyncio.run(worker.execute(NOW, total))
+    work_ids += [enqueue(backlog, worker, post(number)) for number in range(total + 1, total + 21)]
+    second = asyncio.run(worker.execute(NOW, total + 20))
+
+    assert [(run.succeeded, run.deferred, run.failed) for run in (first, second)] == runs
+    assert refusal_outcome(backlog, work_ids[:10])[0] == {("failed_terminal", "provider_rejected")}
+    assert refusal_outcome(backlog, work_ids[10:])[0] == {("succeeded", None)}
+
+
 def test_a_dead_provider_leaves_every_claimed_post_pending(backlog, caplog):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
@@ -1047,8 +1064,7 @@ def test_a_dead_provider_leaves_every_claimed_post_pending(backlog, caplog):
         "Social LLM provider refused requests with status 400 after answering 0 this run; deferred 45 posts"
     ]
     assert (result.succeeded, result.deferred, result.failed, llm.calls) == (0, 45, 0, 20)
-    assert refusal_outcome(backlog, work_ids[:20]) == ({("pending", "provider_rejected")}, ["released"] * 20, 0)
-    assert refusal_outcome(backlog, work_ids[20:])[0] == {("pending", None)}
+    assert refusal_outcome(backlog, work_ids) == ({("pending", "provider_rejected")}, ["released"] * 20, 0)
 
     llm.answers = 10 ** 6
     retried = asyncio.run(worker.execute(NOW, 45))
@@ -1083,10 +1099,9 @@ def test_a_cap_exhausted_mid_isolation_leaves_unsent_posts_pending(backlog):
 
     result = asyncio.run(worker.execute(NOW, 8))
 
-    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (4, 3, 1, 4)
-    assert refusal_outcome(backlog, work_ids[:4])[0] == {("succeeded", None)}
-    assert refusal_outcome(backlog, work_ids[4:5])[0] == {("failed_terminal", "provider_rejected")}
-    assert refusal_outcome(backlog, work_ids[5:])[0] == {("pending", "provider_rejected")}
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (6, 2, 0, 4)
+    assert refusal_outcome(backlog, work_ids[:4] + work_ids[6:])[0] == {("succeeded", None)}
+    assert refusal_outcome(backlog, work_ids[4:6])[0] == {("pending", "provider_rejected")}
 
 
 @pytest.mark.parametrize("answers", [0, 1])
