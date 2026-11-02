@@ -404,6 +404,8 @@ class ProcessSocialBacklog:
                     attempts = [a for a in db.scalars(select(SocialLLMAttempt)).all() if row.id in a.work_ids]
                     # ponytail: matched by time, so a claim dated before an earlier claim's
                     # attempts still counts them; key attempts by claim token if that occurs.
+                    # Live claims were stamped with the current _CLAIM_TTL, so it must not shrink
+                    # while any are live, or this reads their claim time too late and misses attempts.
                     claimed_at = _utc(row.claim_expires_at) - _CLAIM_TTL
                     claim_attempts = [a for a in attempts if _utc(a.created_at) >= claimed_at]
                     ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"} for a in claim_attempts)
