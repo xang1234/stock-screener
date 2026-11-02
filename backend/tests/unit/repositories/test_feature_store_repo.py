@@ -702,6 +702,51 @@ class TestSortOrdering:
 
         assert [item.symbol for item in result.items] == ["HIGH", "MID", "NEWIPO"]
 
+    def test_sort_composite_score_descending_ranks_fully_scored_rows_first(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(run_id, _ranking_rows())
+
+        descending = repo.query_run(run_id, sort=SortSpec(field="composite_score"))
+        ascending = repo.query_run(
+            run_id, sort=SortSpec(field="composite_score", order=SortOrder.ASC)
+        )
+
+        assert [item.symbol for item in descending.items] == ["BEST", "CANSLIM", "IPO"]
+        assert [item.symbol for item in ascending.items] == ["CANSLIM", "BEST", "IPO"]
+
+
+def _ranking_rows() -> list[FeatureRowWrite]:
+    """IPO carries only the IPO-uplifted composite; the others a core score."""
+    group = {"ibd_industry_group": "Software", "gics_sector": "Technology"}
+    return [
+        FeatureRowWrite(
+            symbol="IPO",
+            as_of_date=date(2026, 2, 17),
+            composite_score=72.0,
+            overall_rating=4,
+            passes_count=1,
+            details={**group, "ipo_score": 65.0, "scan_mode": "ipo_weighted"},
+        ),
+        FeatureRowWrite(
+            symbol="BEST",
+            as_of_date=date(2026, 2, 17),
+            composite_score=65.0,
+            overall_rating=4,
+            passes_count=2,
+            details={**group, "minervini_score": 65.0, "canslim_score": 62.0},
+        ),
+        FeatureRowWrite(
+            symbol="CANSLIM",
+            as_of_date=date(2026, 2, 17),
+            composite_score=60.0,
+            overall_rating=3,
+            passes_count=1,
+            details={**group, "canslim_score": 60.0},
+        ),
+    ]
+
 
 class TestGetFilterOptionsForRun:
     def test_includes_insufficient_data_rating_from_details_when_overall_rating_is_null(
@@ -849,6 +894,18 @@ class TestPeerOrdering:
         peers = repo.get_peers_by_sector_for_run(run_id, "Technology")
 
         assert [peer.symbol for peer in peers] == ["HIGH", "MID", "NULLIPO"]
+
+    def test_peers_rank_fully_scored_rows_first(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(run_id, _ranking_rows())
+
+        industry = repo.get_peers_by_industry_for_run(run_id, "Software")
+        sector = repo.get_peers_by_sector_for_run(run_id, "Technology")
+
+        assert [peer.symbol for peer in industry] == ["BEST", "CANSLIM", "IPO"]
+        assert [peer.symbol for peer in sector] == ["BEST", "CANSLIM", "IPO"]
 
 
 # ---------------------------------------------------------------------------

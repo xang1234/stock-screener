@@ -441,6 +441,68 @@ def test_digest_service_applies_profile_specific_leader_selection(session):
     assert [leader.symbol for leader in risk_off_payload.leaders] == ["NVDA", "AVGO", "MSFT"]
 
 
+def _add_ipo_above_fully_scored_rows(session) -> FeatureRun:
+    """Seed rows with a Minervini score, plus an IPO-only row that outscores them."""
+    _seed_digest_data(session)
+    run = session.query(FeatureRun).one()
+    for row in session.query(StockFeatureDaily):
+        row.details_json = {**row.details_json, "minervini_score": row.composite_score}
+    session.add(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol="IPO",
+            as_of_date=run.as_of_date,
+            composite_score=99.0,
+            overall_rating=4,
+            passes_count=1,
+            details_json={
+                "company_name": "Young IPO",
+                "ibd_industry_group": "Software",
+                "scan_mode": "ipo_weighted",
+                "ipo_score": 70.0,
+                "screeners_run": ["ipo"],
+            },
+        )
+    )
+    session.commit()
+    return run
+
+
+def test_digest_leaders_put_fully_scored_rows_before_a_higher_ipo_only_row(session):
+    _add_ipo_above_fully_scored_rows(session)
+
+    payload = DigestService(validation_service=_FakeValidationService()).get_daily_digest(
+        session, as_of_date=date(2026, 4, 4)
+    )
+
+    assert [leader.symbol for leader in payload.leaders] == ["NVDA", "AVGO", "MSFT", "IPO"]
+
+
+def test_digest_watchlist_leader_overlap_skips_ipo_only_rows_below_the_leader_depth(session):
+    run = _add_ipo_above_fully_scored_rows(session)
+    session.add_all(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol=f"S{index:02d}",
+            as_of_date=run.as_of_date,
+            composite_score=50.0 + index,
+            overall_rating=3,
+            passes_count=1,
+            details_json={"minervini_score": 50.0 + index},
+        )
+        for index in range(20)
+    )
+    watchlist = session.query(UserWatchlist).one()
+    session.add(WatchlistItem(watchlist_id=watchlist.id, symbol="IPO", position=2))
+    session.commit()
+
+    payload = DigestService(validation_service=_FakeValidationService()).get_daily_digest(
+        session, as_of_date=date(2026, 4, 4)
+    )
+
+    assert payload.watchlists[0].matched_symbols == ["NVDA"]
+
+
 def test_digest_service_falls_back_to_ranked_rows_when_threshold_excludes_scored_rows(session):
     _seed_digest_data(session)
     run = session.query(FeatureRun).filter(FeatureRun.as_of_date == date(2026, 4, 4)).first()

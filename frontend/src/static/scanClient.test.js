@@ -284,25 +284,15 @@ describe('static scan client', () => {
     expect(filtered.map((row) => row.symbol)).toEqual(['0100.HK']);
   });
 
-  it('sorts default composite score by score across scan modes', () => {
+  it('ranks rows a core screener scored ahead of IPO-only rows when sorting composite desc', () => {
     const sorted = sortStaticScanRows([
       { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
-      { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
+      { symbol: 'FULL80', scan_mode: 'full', composite_score: 80, minervini_score: 80 },
       { symbol: 'NEW1', scan_mode: 'listing_only', composite_score: null },
-      { symbol: 'FULL70', scan_mode: 'full', composite_score: 70 },
+      { symbol: 'FULL70', scan_mode: 'full', composite_score: 70, canslim_score: 70 },
     ], 'composite_score', 'desc');
 
-    expect(sorted.map((row) => row.symbol)).toEqual(['IPO95', 'FULL80', 'FULL70', 'NEW1']);
-  });
-
-  it('can sort composite score exactly for preset-defined rankings', () => {
-    const sorted = sortStaticScanRows([
-      { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
-      { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
-      { symbol: 'FULL70', scan_mode: 'full', composite_score: 70 },
-    ], 'composite_score', 'desc');
-
-    expect(sorted.map((row) => row.symbol)).toEqual(['IPO95', 'FULL80', 'FULL70']);
+    expect(sorted.map((row) => row.symbol)).toEqual(['FULL80', 'FULL70', 'IPO95', 'NEW1']);
   });
 
   it('keeps null composite scores last while sorting desc across scan modes', () => {
@@ -319,9 +309,9 @@ describe('static scan client', () => {
   it('keeps ascending composite sorts numeric instead of forcing scan-mode grouping', () => {
     const sorted = sortStaticScanRows([
       { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
-      { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
+      { symbol: 'FULL80', scan_mode: 'full', composite_score: 80, minervini_score: 80 },
       { symbol: 'NEW1', scan_mode: 'listing_only', composite_score: null },
-      { symbol: 'FULL70', scan_mode: 'full', composite_score: 70 },
+      { symbol: 'FULL70', scan_mode: 'full', composite_score: 70, canslim_score: 70 },
     ], 'composite_score', 'asc');
 
     expect(sorted.map((row) => row.symbol)).toEqual(['FULL70', 'FULL80', 'IPO95', 'NEW1']);
