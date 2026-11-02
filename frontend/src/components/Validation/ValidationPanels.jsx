@@ -1,3 +1,4 @@
+import { Fragment, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -13,8 +14,21 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
+
+import { ACTION_STATE_META } from '../../features/opportunityState/actionState';
+import { formatPatternName } from '../../utils/formatUtils';
+
+const GROUP_HORIZONS = [1, 5, 20, 60];
+const SMALL_SAMPLE_SIZE = 20;
+// Dimensions whose values have a display name; the others show their value as it is.
+const GROUP_VALUE_LABELS = {
+  action_state: (value) => ACTION_STATE_META[value]?.label ?? value,
+  setup_pattern: formatPatternName,
+};
 
 function formatPercentValue(value) {
   if (value == null) return '-';
@@ -170,39 +184,78 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true, ben
   );
 }
 
-export function ValidationFailureClustersTable({ clusters }) {
+export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) {
+  const [horizonSessions, setHorizonSessions] = useState(20);
   return (
-    <TableContainer>
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Cluster</TableCell>
-            <TableCell align="right">Sample</TableCell>
-            <TableCell align="right">Avg 5S</TableCell>
-            <TableCell align="right">Median 5S</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {(clusters || []).map((cluster) => (
-            <TableRow key={cluster.cluster_key}>
-              <TableCell>{cluster.label}</TableCell>
-              <TableCell align="right">{cluster.sample_size}</TableCell>
-              <TableCell align="right">{formatPercentValue(cluster.avg_return_pct)}</TableCell>
-              <TableCell align="right">{formatPercentValue(cluster.median_return_pct)}</TableCell>
-            </TableRow>
-          ))}
-          {(!clusters || clusters.length === 0) && (
+    <Stack spacing={1}>
+      <ToggleButtonGroup
+        exclusive
+        size="small"
+        aria-label="Group horizon"
+        value={horizonSessions}
+        onChange={(_, value) => value && setHorizonSessions(value)}
+      >
+        {GROUP_HORIZONS.map((value) => (
+          <ToggleButton key={value} value={value}>{value}S</ToggleButton>
+        ))}
+      </ToggleButtonGroup>
+      <TableContainer>
+        <Table size="small" aria-label="By group">
+          <TableHead>
             <TableRow>
-              <TableCell colSpan={4} align="center">
-                <Typography variant="body2" color="text.secondary">
-                  No losing clusters are available for this selection.
-                </Typography>
-              </TableCell>
+              <TableCell>Group</TableCell>
+              <TableCell align="right">Sample</TableCell>
+              <TableCell align="right">Positive</TableCell>
+              <TableCell align="right">Avg Return</TableCell>
+              <TableCell align="right">{`Avg vs ${benchmarkSymbol || 'Benchmark'} (no stop)`}</TableCell>
+              <TableCell align="right">{`Avg with ${stopLossPct}% stop`}</TableCell>
+              <TableCell align="right">Stopped out</TableCell>
             </TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </TableContainer>
+          </TableHead>
+          <TableBody>
+            {(groups || []).map((group, index) => {
+              const horizon = group.horizons.find((item) => item.horizon_sessions === horizonSessions);
+              const sampleSize = horizon?.sample_size ?? 0;
+              const excessSampleSize = horizon?.excess_sample_size ?? 0;
+              const isSmallSample = sampleSize < SMALL_SAMPLE_SIZE;
+              return (
+                <Fragment key={`${group.dimension}:${group.value}`}>
+                  {group.dimension !== groups[index - 1]?.dimension && (
+                    <TableRow>
+                      <TableCell colSpan={7} sx={{ fontWeight: 700 }}>{group.label}</TableCell>
+                    </TableRow>
+                  )}
+                  <TableRow
+                    title={isSmallSample ? `Small sample: fewer than ${SMALL_SAMPLE_SIZE} events` : undefined}
+                    sx={isSmallSample ? { '& td': { color: 'text.secondary' } } : undefined}
+                  >
+                    <TableCell>{GROUP_VALUE_LABELS[group.dimension]?.(group.value) ?? group.value}</TableCell>
+                    <TableCell align="right">{sampleSize}</TableCell>
+                    <TableCell align="right">{formatRate(horizon?.positive_rate)}</TableCell>
+                    <TableCell align="right">{formatPercentValue(horizon?.avg_return_pct)}</TableCell>
+                    <TableCell align="right">
+                      {formatPercentValue(horizon?.avg_excess_return_pct)}
+                      {excessSampleSize < sampleSize && ` (n=${excessSampleSize})`}
+                    </TableCell>
+                    <TableCell align="right">{formatPercentValue(horizon?.avg_stopped_return_pct)}</TableCell>
+                    <TableCell align="right">{formatRate(horizon?.stopped_out_rate)}</TableCell>
+                  </TableRow>
+                </Fragment>
+              );
+            })}
+            {(!groups || groups.length === 0) && (
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  <Typography variant="body2" color="text.secondary">
+                    No grouped results for this selection.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Stack>
   );
 }
 
@@ -218,7 +271,7 @@ export function ValidationDegradedAlert({ degradedReasons }) {
   );
 }
 
-export function ValidationSection({ title, degradedReasons, horizons, recentEvents, failureClusters, showSourceKind = true, benchmarkSymbol, stopLossPct }) {
+export function ValidationSection({ title, degradedReasons, horizons, recentEvents, groups, showSourceKind = true, benchmarkSymbol, stopLossPct }) {
   return (
     <Stack spacing={1.5}>
       {title && (
@@ -236,9 +289,9 @@ export function ValidationSection({ title, degradedReasons, horizons, recentEven
       </Box>
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-          Failure Clusters
+          By Group
         </Typography>
-        <ValidationFailureClustersTable clusters={failureClusters} />
+        <ValidationGroupsTable groups={groups} benchmarkSymbol={benchmarkSymbol} stopLossPct={stopLossPct} />
       </Box>
     </Stack>
   );

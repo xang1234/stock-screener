@@ -85,7 +85,7 @@ class _FakeValidationService:
             stop_loss_pct=7.0,
             horizons=horizons,
             recent_events=[],
-            failure_clusters=[],
+            groups=[],
             freshness=ValidationFreshness(
                 latest_feature_as_of_date="2026-04-04",
                 latest_theme_alert_at="2026-04-04T15:30:00+00:00",

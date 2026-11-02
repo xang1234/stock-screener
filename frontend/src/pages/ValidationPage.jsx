@@ -114,7 +114,7 @@ function ValidationPage() {
           degradedReasons={overview.degraded_reasons}
           horizons={overview.horizons}
           recentEvents={overview.recent_events}
-          failureClusters={overview.failure_clusters}
+          groups={overview.groups}
           benchmarkSymbol={overview.benchmark_symbol}
           stopLossPct={overview.stop_loss_pct}
         />

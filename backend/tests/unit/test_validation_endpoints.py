@@ -308,7 +308,10 @@ async def test_validation_overview_endpoint_returns_theme_alert_metrics(client, 
     payload = response.json()
     assert payload["source_kind"] == "theme_alert"
     assert len(payload["recent_events"]) == 2
-    assert payload["failure_clusters"]
+    assert [(g["label"], g["value"], g["horizons"][0]["sample_size"]) for g in payload["groups"]] == [
+        ("Alert Type", "breakout", 2),
+        ("Severity", "warning", 2),
+    ]
     assert payload["recent_events"][0]["attributes"]["alert_type"] == "breakout"
 
 
@@ -337,10 +340,12 @@ async def test_stock_validation_endpoint_returns_both_source_breakdowns(client, 
     assert response.status_code == 200
     payload = response.json()
     assert (payload["symbol"], payload["stop_loss_pct"]) == ("NVDA", 7.0)
-    assert [item["source_kind"] for item in payload["source_breakdown"]] == [
-        "scan_pick",
-        "theme_alert",
+    # No groups: at 20 and 60 sessions one symbol counts too few picks to clear the small-sample mark.
+    assert [(item["source_kind"], sorted(item)) for item in payload["source_breakdown"]] == [
+        ("scan_pick", ["degraded_reasons", "horizons", "recent_events", "source_kind"]),
+        ("theme_alert", ["degraded_reasons", "horizons", "recent_events", "source_kind"]),
     ]
+    assert "groups" not in payload
     assert len(payload["recent_events"]) == 2
     assert payload["freshness"]["latest_feature_as_of_date"] is not None
 

@@ -34,7 +34,6 @@ import PeerComparisonModal from '../Scan/PeerComparisonModal';
 import MarketThemesList from './MarketThemesList';
 import {
   ValidationDegradedAlert,
-  ValidationFailureClustersTable,
   ValidationRecentEventsTable,
   ValidationSummaryCards,
 } from '../Validation/ValidationPanels';
@@ -734,13 +733,6 @@ function StockDetails() {
                       Recent Events
                     </Typography>
                     <ValidationRecentEventsTable events={validationData.recent_events} showSourceKind />
-                  </Box>
-
-                  <Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-                      Failure Clusters
-                    </Typography>
-                    <ValidationFailureClustersTable clusters={validationData.failure_clusters} />
                   </Box>
                 </Stack>
               )}

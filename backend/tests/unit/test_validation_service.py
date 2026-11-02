@@ -16,9 +16,9 @@ from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import ValidationSourceKind
 from app.services.market_calendar_service import CalendarCoverageExpired
+from app.services.price_row_normalization import normalize_price_frame
 from app.services.validation_service import (
     EvaluatedValidationEvent,
-    FailureClusterBuilder,
     HorizonOutcome,
     PriceOutcomeCalculator,
     RawValidationEvent,
@@ -139,7 +139,9 @@ def _add_universe(session, symbol, *, market="US", industry="Semiconductors", is
     )
 
 
-def _add_pick(session, run, symbol, composite_score, *, minervini_score=80.0, canslim_score=70.0):
+def _add_pick(
+    session, run, symbol, composite_score, *, minervini_score=80.0, canslim_score=70.0, details=None
+):
     session.add(
         StockFeatureDaily(
             run_id=run.id,
@@ -153,6 +155,7 @@ def _add_pick(session, run, symbol, composite_score, *, minervini_score=80.0, ca
                 "ibd_industry_group": "Semis",
                 "minervini_score": minervini_score,
                 "canslim_score": canslim_score,
+                **(details or {}),
             },
         )
     )
@@ -774,42 +777,295 @@ def _outcome(return_pct=0.0):
     )
 
 
-def test_failure_cluster_builder_uses_source_specific_bucket_fields():
-    builder = FailureClusterBuilder()
-    losing_scan_event = EvaluatedValidationEvent(
+def _grouped(source_kind, attributes, *, pct_above_50dma=None):
+    return EvaluatedValidationEvent(
         raw=RawValidationEvent(
             symbol="NVDA",
-            source_kind=ValidationSourceKind.SCAN_PICK,
-            source_ref="run:1",
+            source_kind=source_kind,
+            source_ref="ref",
             event_at=FIXED_TODAY,
-            attributes={"rating": "Buy", "stage": 2, "ibd_industry_group": "Semis"},
+            attributes=attributes,
         ),
         entry_at=FIXED_TODAY,
-        entry_price=100.0,
-        outcomes={1: _outcome(-1.0), 5: _outcome(-3.0)},
-    )
-    losing_theme_event = EvaluatedValidationEvent(
-        raw=RawValidationEvent(
-            symbol="MSFT",
-            source_kind=ValidationSourceKind.THEME_ALERT,
-            source_ref="alert:1",
-            event_at=FIXED_NOW,
-            attributes={"alert_type": "breakout", "severity": "warning", "theme": "AI"},
-        ),
-        entry_at=FIXED_TODAY,
-        entry_price=100.0,
-        outcomes={1: _outcome(-0.5), 5: _outcome(-2.0)},
+        entry_price=10.0,
+        exits={1: FIXED_TODAY},
+        outcomes={1: _outcome(1.0)},
+        pct_above_50dma=pct_above_50dma,
     )
 
-    clusters = builder.build([losing_scan_event, losing_theme_event])
-    cluster_keys = {cluster.cluster_key for cluster in clusters}
 
-    assert "rating:Buy" in cluster_keys
-    assert "stage:2" in cluster_keys
-    assert "ibd_industry_group:Semis" in cluster_keys
-    assert "alert_type:breakout" in cluster_keys
-    assert "severity:warning" in cluster_keys
-    assert len(clusters) == 5
+def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extension():
+    events = [
+        _grouped(ValidationSourceKind.REPLAY_PICK, {}, pct_above_50dma=pct)
+        for pct in (30.0, 10.0, 9.99, 0.0, -0.01, 29.99, None)
+    ]
+
+    groups = _service()._build_groups(events, ValidationSourceKind.REPLAY_PICK)
+
+    assert [(g.dimension, g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
+        ("extension_band", "Extension vs 50DMA", "below 50DMA", 1),
+        ("extension_band", "Extension vs 50DMA", "0-10%", 2),
+        ("extension_band", "Extension vs 50DMA", "10-20%", 1),
+        ("extension_band", "Extension vs 50DMA", "20-30%", 1),
+        ("extension_band", "Extension vs 50DMA", "30%+", 1),
+    ]
+
+
+def test_groups_follow_the_dimension_order_then_each_dimensions_value_order():
+    events = [
+        _grouped(ValidationSourceKind.SCAN_PICK, attributes)
+        for attributes in (
+            {"rating": "Watch", "stage": 10, "setup_pattern": "", "action_state": "setup_ready"},
+            {"rating": "Buy", "stage": 2, "action_state": "data_limited"},
+            {"rating": "Buy", "stage": 2},
+            {"rating": "Strong Buy", "stage": 3, "action_state": "extended", "setup_pattern": "cup_with_handle"},
+            {"rating": "Hold", "action_state": "not_computed", "setup_pattern": "vcp"},
+            {"rating": "Error", "action_state": "breakout"},
+        )
+    ]
+
+    groups = _service()._build_groups(events, ValidationSourceKind.SCAN_PICK)
+
+    assert [(g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
+        ("Rating", "Strong Buy", 1),
+        ("Rating", "Buy", 2),
+        ("Rating", "Watch", 1),
+        ("Rating", "Error", 1),
+        ("Rating", "Hold", 1),
+        ("Stage", "2", 2),
+        ("Stage", "3", 1),
+        ("Stage", "10", 1),
+        ("Action State", "extended", 1),
+        ("Action State", "data_limited", 1),
+        ("Action State", "setup_ready", 1),
+        ("Action State", "breakout", 1),
+        ("Action State", "not_computed", 1),
+        ("Setup Pattern", "cup_with_handle", 1),
+        ("Setup Pattern", "vcp", 1),
+    ]
+
+
+def test_extension_above_the_50dma_reads_only_bars_through_the_signal_date():
+    # The first five closes fall outside the signal's 50-bar window, and the spike comes after it.
+    closes = [1.0] * 5 + [80.0] * 25 + [120.0] * 25 + [1000.0] * 10
+    bad_closes = list(closes)
+    bad_closes[40] = 0.0
+    start = date(2026, 1, 1)
+    history = _history_frame(start, [(close,) * 4 for close in closes])
+    signal = start + timedelta(days=54)
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache(
+            {"NVDA": history, "AMD": _history_frame(start, [(close,) * 4 for close in bad_closes])}
+        )
+    )
+
+    evaluated, _ = calculator.evaluate_many(
+        [
+            _scan_event("NVDA", signal),
+            _scan_event("NVDA", start + timedelta(days=48)),
+            _scan_event("AMD", signal),
+        ],
+        sessions=_sessions_of(history),
+    )
+
+    assert [event.pct_above_50dma for event in evaluated] == [pytest.approx(20.0), None, None]
+
+
+def test_extension_is_unknown_when_a_session_before_entry_lacks_a_cached_bar():
+    start = date(2026, 1, 1)
+    rows = [(100.0,) * 4] * 80
+    rows[10] = (100.0, 100.0, 100.0, float("nan"))
+    rows[70] = (150.0,) * 4
+    history = _history_frame(start, rows)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": normalize_price_frame(history)}))
+
+    evaluated, _ = calculator.evaluate_many(
+        [
+            _scan_event("NVDA", start + timedelta(days=54)),
+            _scan_event("NVDA", start + timedelta(days=70)),
+            # On the last session, so its window is pending.
+            _scan_event("NVDA", start + timedelta(days=79)),
+        ],
+        sessions=_sessions_of(history),
+    )
+
+    assert [event.pct_above_50dma for event in evaluated] == [
+        None,
+        pytest.approx(48.514851),
+        pytest.approx(-0.990099),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("closes", "band"),
+    [
+        ([100.0] * 50, "0-10%"),
+        # 120 over a mean of 100 computes as 19.999999999999996%.
+        ([80.0] * 25 + [120.0] * 25, "20-30%"),
+    ],
+)
+def test_a_pick_on_the_lookback_start_is_banded_by_the_50_sessions_before_its_entry(
+    session, closes, band
+):
+    _add_universe(session, "NVDA")
+    pick_day = FIXED_TODAY - timedelta(days=30)
+    _add_pick(session, _add_run(session, pick_day), "NVDA", 90.0)
+    session.commit()
+    first_day = pick_day - timedelta(days=49)
+    rows = [(close,) * 4 for close in closes] + [(100.0,) * 4] * 30
+    service = _service({"NVDA": _history_frame(first_day, rows)})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (g.value, g.horizons[0].sample_size)
+        for g in payload.groups
+        if g.dimension == "extension_band"
+    ] == [(band, 1)]
+
+
+def test_extension_of_a_pre_open_alert_leaves_out_its_entry_session():
+    start = date(2026, 1, 1)
+    history = _history_frame(start, [(100.0,) * 4] * 50 + [(200.0,) * 4] * 5)
+    entry_day = start + timedelta(days=50)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+
+    evaluated, _ = calculator.evaluate_many(
+        [
+            RawValidationEvent(
+                symbol="NVDA",
+                source_kind=ValidationSourceKind.THEME_ALERT,
+                source_ref="alert:1",
+                # 08:00 ET, before the open, so it enters at this session's open.
+                event_at=datetime(entry_day.year, entry_day.month, entry_day.day, 13, 0, tzinfo=UTC),
+                attributes={"symbol": "NVDA"},
+            )
+        ],
+        sessions=_sessions_of(history),
+    )
+
+    assert evaluated[0].entry_at == entry_day
+    assert evaluated[0].pct_above_50dma == pytest.approx(0.0)
+
+
+def test_scan_picks_carry_the_action_state_and_setup_pattern_of_their_row(session):
+    run = _add_run(session, FIXED_TODAY)
+    for symbol in ("NVDA", "AMD", "TSLA"):
+        _add_universe(session, symbol)
+    _add_pick(
+        session,
+        run,
+        "NVDA",
+        90.0,
+        details={"action_state": "extended", "setup_engine": {"pattern_primary": "cup_with_handle"}},
+    )
+    _add_pick(session, run, "AMD", 80.0, details={"setup_engine": None})
+    _add_pick(session, run, "TSLA", 70.0, details={"setup_engine": "cup_with_handle"})
+    session.commit()
+
+    events, _ = ScanPickValidationSource().collect(
+        session, cutoff_date=FIXED_TODAY, market="US"
+    )
+
+    assert [
+        (event.symbol, event.attributes["action_state"], event.attributes["setup_pattern"])
+        for event in events
+    ] == [("NVDA", "extended", "cup_with_handle"), ("AMD", None, None), ("TSLA", None, None)]
+
+
+def test_each_stage_group_summarizes_its_own_picks_with_the_overlap_rule(session):
+    for symbol in ("NVDA", "AMD"):
+        _add_universe(session, symbol)
+    first, second = _add_run(session, date(2026, 3, 2)), _add_run(session, date(2026, 3, 3))
+    _add_pick(session, first, "NVDA", 90.0)
+    _add_pick(session, second, "NVDA", 90.0)
+    _add_pick(session, first, "AMD", 80.0, details={"stage": 3})
+    session.commit()
+    nvda_rows = [(10, 13, 9.5, close) for close in (10.5, 11, 11.5, 12, 12.5, 13)]
+    service = _service(
+        {
+            "NVDA": _history_frame(date(2026, 3, 3), nvda_rows),
+            "AMD": _history_frame(date(2026, 3, 3), [(20, 21, 19, 19)] * 6),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=60,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (
+            g.value,
+            [
+                (h.horizon_sessions, h.sample_size, h.suppressed_overlapping, h.avg_return_pct)
+                for h in g.horizons
+            ],
+        )
+        for g in payload.groups
+        if g.dimension == "stage"
+    ] == [
+        ("2", [(1, 2, 0, 7.5), (5, 1, 1, 25.0), (20, 0, 1, None), (60, 0, 1, None)]),
+        ("3", [(1, 1, 0, -5.0), (5, 1, 0, -5.0), (20, 0, 0, None), (60, 0, 0, None)]),
+    ]
+
+
+def test_a_repeat_in_another_group_stays_suppressed_and_every_dimension_adds_up(session):
+    for symbol in ("NVDA", "AMD"):
+        _add_universe(session, symbol)
+    first, second = _add_run(session, date(2026, 3, 2)), _add_run(session, date(2026, 3, 3))
+    _add_pick(session, first, "NVDA", 90.0, details={"action_state": "extended"})
+    _add_pick(session, second, "NVDA", 90.0, details={"stage": 3})
+    _add_pick(
+        session,
+        first,
+        "AMD",
+        80.0,
+        details={"stage": None, "setup_engine": {"pattern_primary": "cup_with_handle"}},
+    )
+    session.commit()
+    rows = [(10, 13, 9.5, 11)] * 6
+    service = _service(
+        {
+            "NVDA": _history_frame(date(2026, 3, 3), rows),
+            "AMD": _history_frame(date(2026, 3, 3), rows),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=60,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (g.value, [(h.sample_size, h.suppressed_overlapping) for h in g.horizons[:2]])
+        for g in payload.groups
+        if g.dimension == "stage"
+    ] == [("2", [(1, 0), (1, 0)]), ("3", [(1, 0), (0, 1)])]
+    assert [h.sample_size for h in payload.horizons[:2]] == [3, 2]
+    # Counted picks with no value, at 1 and 5 sessions. NVDA's repeat counts only at 1.
+    valueless = {
+        "rating": [0, 0],
+        "stage": [1, 1],
+        "action_state": [2, 1],
+        "setup_pattern": [2, 1],
+        "extension_band": [3, 2],
+    }
+    for dimension, missing in valueless.items():
+        grouped = [
+            sum(g.horizons[index].sample_size for g in payload.groups if g.dimension == dimension)
+            for index in (0, 1)
+        ]
+        assert [count + extra for count, extra in zip(grouped, missing)] == [3, 2], dimension
 
 
 def test_normalize_price_history_keeps_the_exchange_date_of_tz_aware_bars():
@@ -1843,9 +2099,10 @@ def test_replay_picks_of_the_current_definition_are_scored_as_their_own_source(s
         ),
     ]
     assert [h.sample_size for h in payload.horizons] == [2, 2, 0, 0]
-    assert [(c.cluster_key, c.label, c.sample_size) for c in payload.failure_clusters] == [
-        ("rs_band:80-89", "RS Band: 80-89", 1),
-        ("stage:2", "Stage: 2", 1),
+    assert [(g.label, g.value, g.horizons[1].sample_size) for g in payload.groups] == [
+        ("Stage", "2", 2),
+        ("RS Band", "90-99", 1),
+        ("RS Band", "80-89", 1),
     ]
 
 
@@ -1914,3 +2171,17 @@ def test_freshness_reports_the_latest_replayed_session_of_the_market_and_definit
     ]
 
     assert freshness == ["2026-03-27", "2026-04-01", None]
+
+
+def test_extension_of_a_pick_on_a_session_its_symbol_has_not_refreshed_yet_is_unknown():
+    start = date(2026, 1, 1)
+    history = _history_frame(start, [(100.0,) * 4] * 60)
+    newest = start + timedelta(days=60)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+
+    evaluated, _ = calculator.evaluate_many(
+        [_scan_event("NVDA", newest)],
+        sessions=[*_sessions_of(history), newest],
+    )
+
+    assert evaluated[0].pct_above_50dma is None
