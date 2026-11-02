@@ -161,12 +161,14 @@ class SocialSignalQueries:
         confirmation = candidate.get("confirmation") or {}
         confirmation_components = dict(confirmation.get("components", ()))
         social_components = dict(social.get("components", ()))
-        market_input = None
+        market_input, facts = None, {}
         for batch in context.get("market_batches", ()):
             market_input = next((value for value in batch.get("inputs", ())
                                  if value.get("candidate_key") == candidate_key), None)
             if market_input:
+                facts = dict(batch.get("facts", ())).get(candidate_key.partition(":")[2]) or {}
                 break
+        feature_freshness = facts.get("feature_freshness") or {}
         theme_component = confirmation_components.get("theme") or {}
         memberships = social.get("post_memberships", [])
         source_ids = set()
@@ -196,6 +198,9 @@ class SocialSignalQueries:
             "rs_rating_1m": (market_input or {}).get("rs_rating_1m"),
             "rs_rating_3m": (market_input or {}).get("rs_rating_3m"),
             "group_rank": (market_input or {}).get("group_rank"),
+            "feature_sessions_behind": (feature_freshness.get("sessions_behind")
+                                        if feature_freshness.get("fresh") else None),
+            "feature_required_session": feature_freshness.get("required_session"),
             "theme": theme_component.get("selected_key"),
             "confirmation_components": confirmation_components,
             "social_components": social_components,

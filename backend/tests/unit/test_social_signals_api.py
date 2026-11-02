@@ -364,8 +364,12 @@ def test_published_queue_freshness_uses_oldest_successful_collection(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("feature_freshness", "sessions_behind"), [
+    ({"fresh": True, "reason": None, "sessions_behind": 1}, 1),
+    ({"fresh": False, "reason": "stale_session", "sessions_behind": 2}, None),
+])
 async def test_published_queue_exposes_frozen_candidate_context(
-    db_session, social_runtime, monkeypatch
+    db_session, social_runtime, monkeypatch, feature_freshness, sessions_behind
 ):
     from datetime import datetime, timezone
     from decimal import Decimal
@@ -405,10 +409,16 @@ async def test_published_queue_exposes_frozen_candidate_context(
                 }],
             ]},
         }],
-        "market_batches": [{"inputs": [{
-            "candidate_key": "US:AAA", "rs_rating_1m": "89",
-            "rs_rating_3m": "93", "group_rank": 4,
-        }]}],
+        "market_batches": [{
+            "inputs": [{
+                "candidate_key": "US:AAA", "rs_rating_1m": "89",
+                "rs_rating_3m": "93", "group_rank": 4,
+            }],
+            "facts": [["AAA", {"feature_freshness": {
+                "required_session": "2026-09-04", "actual_session": "2026-09-03",
+                **feature_freshness,
+            }}]],
+        }],
     }
     _publish_rows(db_session, (record,), context=context)
 
@@ -431,6 +441,8 @@ async def test_published_queue_exposes_frozen_candidate_context(
     assert explanation["acceleration"] == "2.5"
     assert explanation["post_memberships"] == ["111"]
     assert explanation["source_names"] == ["One"]
+    assert explanation["feature_sessions_behind"] == sessions_behind
+    assert explanation["feature_required_session"] == "2026-09-04"
 
 
 @pytest.mark.asyncio
