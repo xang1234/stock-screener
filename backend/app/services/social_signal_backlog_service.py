@@ -81,7 +81,7 @@ class _CompletionUnknown(Exception):
 
 class _ProviderBreaker:
     def __init__(self):
-        self.answered = self.open = False
+        self.answered, self.open = 0, False
 
     def provider_wide(self, status):
         return status in _PROVIDER_WIDE_REFUSALS or not self.answered
@@ -238,6 +238,8 @@ class _MeteredCompletion:
                     raise _CompletionUnknown() from exc
                 if self.breaker.provider_wide(exc.status_code):
                     self.breaker.open = True
+                    logger.error("Social LLM provider refused a request with status %s after %d answered this run; "
+                                 "stopping the run work_ids=%s", exc.status_code, self.breaker.answered, list(work_ids))
                     self.owner._finish_many(self.claims, "pending", "provider_rejected")
                     raise _Deferred(len(self.claims)) from None
                 raise SocialExtractionError("provider_rejected") from None
@@ -247,7 +249,7 @@ class _MeteredCompletion:
             except BaseException:
                 budget.reconcile(attempt, None, None)
                 raise
-            self.breaker.answered = True
+            self.breaker.answered += 1
             usage = getattr(response, "usage", None)
             actual_inputs = getattr(usage, "prompt_tokens", None)
             actual_outputs = getattr(usage, "completion_tokens", None)

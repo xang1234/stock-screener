@@ -30,7 +30,7 @@ _SAFE_REASON_CODES = {
     "analysis_failed", "analysis_incomplete", "bounded_provider_read", "daily_budget_exhausted",
     "daily_limit_exhausted", "incremental_gap_suspected",
     "invalid_provider_json", "invalid_provider_schema", "invalid_saved_result", "provider_error",
-    "provider_lease_unavailable", "provider_network_error", "provider_timeout",
+    "provider_lease_unavailable", "provider_network_error", "provider_rejected", "provider_timeout",
     "provider_unavailable",
     "rate_limited", "reauthentication_required", "social_runtime_changed",
     "source_participation_failed", SKIPPED_NO_SIGNAL,
