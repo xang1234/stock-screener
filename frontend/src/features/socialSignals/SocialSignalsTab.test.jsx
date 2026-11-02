@@ -203,6 +203,22 @@ describe('SocialSignalsTab', () => {
     expect(screen.getByRole('button', { name: 'View Risk-off' })).toBeInTheDocument();
   });
 
+  it('says no signals match the filters instead of the fallback when a filter empties Actionable', async () => {
+    socialApi.getSocialQueue.mockImplementation(async ({ filters }) => (filters.ticker
+      ? queue({ total: 0, items: [], fallback: null })
+      : queue({ items: [watchItem], fallback: exposureFallback(1, 2) })));
+    renderTab();
+    expect(await screen.findByText(/^No actionable signals: /)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'ZZZ' } });
+
+    expect(await screen.findByText('No signals match these filters.')).toBeInTheDocument();
+    expect(screen.queryByText(/^No actionable signals/)).not.toBeInTheDocument();
+    expect(socialApi.getSocialQueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ view: 'actionable', filters: { ticker: 'ZZZ' } }),
+    );
+  });
+
   it('labels the queue when price features are one session old', async () => {
     socialApi.getSocialQueue.mockResolvedValue(queue({ items: [
       { ...item, explanation: { ...item.explanation, feature_sessions_behind: 1 } },
