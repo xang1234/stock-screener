@@ -1,5 +1,6 @@
 """Saved-source processing with real durable transactions and synthetic LLM only."""
 import asyncio
+import contextlib
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -1123,16 +1124,17 @@ def test_a_cap_exhausted_mid_isolation_leaves_unsent_posts_pending(backlog):
     assert refusal_outcome(backlog, work_ids[4:6])[0] == {("pending", "provider_rejected")}
 
 
-@pytest.mark.parametrize("answers", [0, 1])
-def test_a_refused_retry_keeps_the_unknown_first_outcome_terminal(backlog, answers):
-    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+class TimesOutThenRefuses(RefusingLLM):
+    async def completion(self, **kwargs):
+        if self.calls == self.answers:
+            self.calls += 1
+            raise TimeoutError("provider timed out")
+        return await super().completion(**kwargs)
 
-    class TimesOutThenRefuses(RefusingLLM):
-        async def completion(self, **kwargs):
-            if self.calls == self.answers:
-                self.calls += 1
-                raise TimeoutError("provider timed out")
-            return await super().completion(**kwargs)
+
+@pytest.mark.parametrize("answers", [0, 1])
+def test_a_refused_retry_keeps_the_unknown_first_outcome_terminal(backlog, caplog, answers):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
     configure_budget(backlog)
     llm = TimesOutThenRefuses(400, answers=answers)
@@ -1143,6 +1145,24 @@ def test_a_refused_retry_keeps_the_unknown_first_outcome_terminal(backlog, answe
 
     assert (result.succeeded, result.deferred, result.failed, llm.calls) == (2 * answers, 0, 2, answers + 2)
     assert refusal_outcome(backlog, work_ids[2 * answers:])[0] == {("failed_terminal", "completion_unknown")}
+    assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == []
+
+
+def test_a_refused_retry_is_terminal_before_the_run_settles_anything(backlog, monkeypatch):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    def worker_dies(*_args):
+        raise RuntimeError("worker died")
+
+    configure_budget(backlog)
+    worker = ProcessSocialBacklog(backlog, llm=TimesOutThenRefuses(400), batch_size=2)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in (1, 2)]
+    monkeypatch.setattr(ProcessSocialBacklog, "_settle", worker_dies)
+
+    with contextlib.suppress(RuntimeError):
+        asyncio.run(worker.execute(NOW, 2))
+
+    assert refusal_outcome(backlog, work_ids)[0] == {("failed_terminal", "completion_unknown")}
 
 
 def test_refusal_arriving_after_claim_expiry_still_releases_its_charge(backlog):
