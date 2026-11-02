@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert, AlertTitle, Box, Button, Chip, Collapse, Divider, FormControlLabel, MenuItem,
   Paper, Select, Stack, Switch, Table, TableBody, TableCell, TableHead,
@@ -17,6 +17,7 @@ import {
 import { ATTEMPT_TITLES } from './socialSignalPresentation';
 
 const UNRESOLVED_PLACEHOLDER_MARKET = 'US';
+const UNRESOLVED_PAGE_SIZE = 50;
 const money = (value) => `US$${value ?? '—'}`;
 const errorCode = (error) => error?.response?.data?.detail?.code
   || error?.response?.data?.detail || error?.message || 'Request failed';
@@ -74,10 +75,16 @@ export default function SocialSignalHealthPanel() {
   const unresolved = useQuery({
     queryKey: ['socialAdmin', 'unresolved', keyGeneration, unresolvedPage],
     queryFn: () => getSocialUnresolved({
-      market: UNRESOLVED_PLACEHOLDER_MARKET, window: '7d', page: unresolvedPage, pageSize: 50,
+      market: UNRESOLVED_PLACEHOLDER_MARKET, window: '7d', page: unresolvedPage,
+      pageSize: UNRESOLVED_PAGE_SIZE,
     }),
     enabled,
+    placeholderData: keepPreviousData,
   });
+  const unresolvedLastPage = Math.max(1, Math.ceil((unresolved.data?.total ?? 0) / UNRESOLVED_PAGE_SIZE));
+  if (unresolved.isSuccess && !unresolved.isPlaceholderData && unresolvedPage > unresolvedLastPage) {
+    setUnresolvedPage(unresolvedLastPage);
+  }
   const mutation = useMutation({
     mutationFn: async (work) => work(),
     onSuccess: () => { setMessage({ severity: 'success', text: 'Social administration updated.' }); refresh(); },
@@ -368,7 +375,7 @@ function UnresolvedTable({ query, page, onPage }) {
   if (query.isPending) return note('Loading unresolved tickers…');
   if (query.isError) return <Alert severity="error" sx={{ mt: 1 }}>Unresolved tickers could not be loaded.</Alert>;
   if (!data.available) return note(`Unresolved tickers are unavailable (${data.reason_code}).`);
-  if (!data.items.length) return note('No unresolved tickers in the latest run.');
+  if (!data.total) return note('No unresolved tickers in the latest run.');
   return <>
     <Table size="small" aria-label="Tickers that need resolution"><TableHead><TableRow>
       {['Ticker', 'Mentions', 'Lists', 'Latest mention'].map((value) => <TableCell key={value}>{value}</TableCell>)}
@@ -380,7 +387,7 @@ function UnresolvedTable({ query, page, onPage }) {
         <TableCell>{row.latest_mention ? new Date(row.latest_mention).toLocaleString() : '—'}</TableCell>
       </TableRow>
     ))}</TableBody></Table>
-    <TablePagination component="div" count={data.total} page={page - 1} rowsPerPage={50}
+    <TablePagination component="div" count={data.total} page={page - 1} rowsPerPage={UNRESOLVED_PAGE_SIZE}
       rowsPerPageOptions={[]} onPageChange={(_, next) => onPage(next + 1)} />
   </>;
 }

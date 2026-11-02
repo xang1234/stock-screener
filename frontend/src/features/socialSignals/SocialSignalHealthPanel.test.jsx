@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createTheme, ThemeProvider } from '@mui/material';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '../../api/socialSignals';
@@ -143,10 +143,35 @@ describe('SocialSignalHealthPanel', () => {
     await unlock();
     expect(await screen.findByText('1–50 of 120')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+    expect(screen.getByRole('table', { name: 'Tickers that need resolution' })).toBeInTheDocument();
+    expect(screen.queryByText('Loading unresolved tickers…')).not.toBeInTheDocument();
     await waitFor(() => expect(api.getSocialUnresolved).toHaveBeenLastCalledWith(
       { market: 'US', window: '7d', page: 2, pageSize: 50 },
     ));
     expect(await screen.findByText('51–100 of 120')).toBeInTheDocument();
+  });
+
+  it('returns to the last page when a newer run has fewer unresolved tickers', async () => {
+    let total = 51;
+    api.getSocialUnresolved.mockImplementation(async ({ page }) => ({
+      available: true, total, items: (page - 1) * 50 < total ? [unresolvedRow] : [],
+    }));
+    const { client } = renderPanel();
+    await unlock();
+    fireEvent.click(await screen.findByRole('button', { name: 'Go to next page' }));
+    expect(await screen.findByText('51–51 of 51')).toBeInTheDocument();
+
+    total = 1;
+    await act(() => client.invalidateQueries({ queryKey: ['socialAdmin', 'unresolved'] }));
+
+    expect(await screen.findByText('1–1 of 1')).toBeInTheDocument();
+    const table = screen.getByRole('table', { name: 'Tickers that need resolution' });
+    expect(within(table).getAllByRole('row').map((row) => row.textContent)).toEqual([
+      'TickerMentionsListsLatest mention', '$xyz41/2—',
+    ]);
+    expect(api.getSocialUnresolved).toHaveBeenLastCalledWith(
+      { market: 'US', window: '7d', page: 1, pageSize: 50 },
+    );
   });
 
   it('creates pending named lists and tests before enablement', async () => {
