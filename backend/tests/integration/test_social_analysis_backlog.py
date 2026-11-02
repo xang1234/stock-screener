@@ -329,7 +329,7 @@ def test_parse_failure_and_ambiguous_billing_are_not_refunded(backlog, malformed
         work = db.get(SocialExtractionWork, work_id)
         assert work.error_code == error
         assert work.actual_model == model and work.actual_provider == "synthetic"
-        assert work.state == ("failed_terminal" if malformed else "succeeded")
+        assert work.state == ("pending" if malformed else "succeeded")
         attempt = db.scalar(select(SocialLLMAttempt))
         assert attempt.state == ("reconciled" if usage and model == "actual-model" else "uncertain")
 
@@ -379,6 +379,23 @@ def test_batch_splitting_stays_within_the_per_run_call_cap(backlog):
     result = asyncio.run(worker.execute(NOW, 8))
 
     assert (result.succeeded, result.deferred, result.failed, llm.calls) == (0, 8, 0, 4)
+    assert refusal_outcome(backlog, work_ids)[0] == {("pending", "malformed_json")}
+
+
+def test_a_model_that_returns_only_unusable_output_defers_every_post_and_logs_once(backlog, caplog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = FakeLLM(malformed=True)
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=8, max_calls_per_run=10)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 9)]
+
+    result = asyncio.run(worker.execute(NOW, 8))
+
+    assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == [
+        "Social LLM returned unusable output with error malformed_json and parsed none this run; deferred 8 posts"
+    ]
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (0, 8, 0, 10)
     assert refusal_outcome(backlog, work_ids)[0] == {("pending", "malformed_json")}
 
 
