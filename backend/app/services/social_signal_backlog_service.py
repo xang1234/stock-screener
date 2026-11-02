@@ -548,7 +548,7 @@ class ProcessSocialBacklog:
             except Exception:
                 logger.exception("Social LLM extraction failed work_ids=%s", work_ids)
                 if not metered.dispatched:
-                    # Nothing was sent: claim expiry releases any reservation and returns the posts to the backlog.
+                    # Nothing was sent; claim expiry releases the reservation and returns the posts.
                     return (0, len(claims), 0, 0), spare_calls
                 return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
         try:

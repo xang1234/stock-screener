@@ -20,8 +20,7 @@ from app.services.social_company_identity_service import SocialCompanyIdentitySe
 from app.services.social_source_admin_service import SocialRuntimeState
 from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 
-# Scoring reads posts published this long before as_of. A generation older than
-# that saved nothing newer than its own read, so the readers skip it.
+# Scoring reads posts up to this old, so it skips generations started earlier.
 RETAINED_EVIDENCE = timedelta(days=15)
 
 

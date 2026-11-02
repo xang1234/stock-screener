@@ -209,7 +209,6 @@ def test_failed_publication_closes_its_staged_generation(store):
         run = db.get(SocialSignalRun, "run")
         assert (run.status, run.application_progress_json["failure"]["reason_code"]) == (
             "failed", "publication_failed")
-    # Its frozen manifest still serves reads and deliberate replays.
     assert w.read_run_inputs("run").work_ids == ()
 
 

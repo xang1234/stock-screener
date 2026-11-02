@@ -85,7 +85,6 @@ def _latest_resumable_run(now):
         published_at = _latest_publication(db)
         if published_at is not None:
             candidates = candidates.where(SocialSignalRun.created_at > published_at)
-        # A replay is created after the run it replays, so the same bound finds every replay of a candidate.
         replayed_run_ids = set(db.scalars(select(
             SocialSignalRun.application_progress_json[("replay", "saved_run_id")].as_string()
         ).where(recent)))

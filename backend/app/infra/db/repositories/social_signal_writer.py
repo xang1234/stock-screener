@@ -30,7 +30,6 @@ from app.services.twitter_content_identity import twitter_external_id
 from app.services.theme_evidence_eligibility_service import grant_eligibility
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
-# Why a collecting generation can end without publishing.
 _RUN_FAILURES = frozenset({
     "analysis_failed", "provider_lease_unavailable", "provider_lease_lost",
     "social_runtime_changed", "source_participation_failed",
@@ -848,10 +847,10 @@ class SocialSignalWriter:
         return result
 
     def publish(self, run_id, expected_mode_version):
+        """Publish a staged generation. Nothing retries one that fails, so a failure closes it."""
         try:
             return self._publish(run_id, expected_mode_version)
         except ValueError:
-            # Nothing retries a staged generation, so one that fails to publish is closed.
             runs = SocialSignalRun.__table__
             with self.session_factory.begin() as db:
                 _lock_registry(db)
