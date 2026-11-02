@@ -819,11 +819,14 @@ candidate ranking.
 It never receives fabricated Market or technical data.
 
 The Actionable view includes only `actionable`. When the published run has
-none, the queue returns that same run's `watch` rows instead, with a `fallback`
-object that gives the Watch and Risk-off counts and one reason. Ready setups
-under Risk-off come first (Market exposure below 50), then stale features with
-the session they wait on, then the most common Watch reason. All Signals
-includes every state with clear missing-data and exclusion reasons.
+none and no filter is applied, the queue returns that same run's `watch` rows
+instead, with a `fallback` object that gives the Watch and Risk-off counts and
+one reason. The reason is a ladder, not a vote. Any Risk-off row makes it
+Market exposure below 50. Otherwise any Watch row with stale features makes it
+`stale_features`, with that row count and the session they wait on, even when
+another reason is more common. Otherwise it is the most common Watch reason. A
+filtered Actionable view with no rows returns no fallback. All Signals includes
+every state with clear missing-data and exclusion reasons.
 
 **Approved All Signals presentation:** Use three clearly separated sections.
 Ranked candidates contain resolved stocks and thematic ETFs in the selected

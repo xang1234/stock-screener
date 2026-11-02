@@ -24,7 +24,6 @@ from app.infra.db.repositories.published_social_signal_reader import (
 
 
 WINDOW_DAYS = {"1d": 1, "7d": 7, "14d": 14}
-ROOT_CAUSE_REASONS = {"stale_features"}
 _PUBLIC_ATTEMPT_REASONS = {
     "bounded_provider_read", "daily_limit_exhausted", "incremental_gap_suspected",
     "provider_error", "provider_network_error",
@@ -281,13 +280,14 @@ class SocialSignalQueries:
         result = self.reader.queue(market, days, view, rank_mode, page, page_size, **scope)
         total, items = result.total, [self._item(item, run) for item in result.items]
         fallback = None
-        if watch_fallback and view == "actionable" and not total:
-            watch = [self._item(record, run)
-                     for record in self.reader.rows(market, days, "watch", rank_mode, **scope)]
-            risk_off = self.reader.queue(market, days, "risk_off", rank_mode, 1, 1, **scope)
+        if watch_fallback and view == "actionable" and not total and not filters:
+            watch = self.reader.rows(market, days, "watch", rank_mode, run_id=run.id)
+            risk_off = self.reader.queue(market, days, "risk_off", rank_mode, 1, 1, run_id=run.id)
             fallback = self._why_not_actionable(watch, risk_off, run)
             if fallback:
-                total, items = len(watch), watch[(page - 1) * page_size:page * page_size]
+                total = len(watch)
+                items = [self._item(record, run)
+                         for record in watch[(page - 1) * page_size:page * page_size]]
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)
         oldest_observation_at = self._oldest_successful_observation_at(run)
@@ -311,21 +311,26 @@ class SocialSignalQueries:
     def _why_not_actionable(self, watch, risk_off, run):
         if not watch and not risk_off.total:
             return None
-        exposure = (self._item(risk_off.items[0], run)["explanation"].get("market_exposure")
-                    if risk_off.items else None)
-        reasons = Counter(reason for item in watch
-                          for reason in item["explanation"].get("state_reasons") or ())
-        if exposure is not None and Decimal(str(exposure)) < ACTIONABLE_EXPOSURE_FLOOR:
+        reasons = [
+            [value for value in dict(record.pinned_inputs).get("state_reasons", "").split(",") if value]
+            for record in watch
+        ]
+        stale = [record for record, values in zip(watch, reasons) if "stale_features" in values]
+        counts = Counter(reason for values in reasons for reason in values)
+        if risk_off.items:
             code = "market_exposure_below_50"
+            exposure = self._candidate_explanation(
+                run, risk_off.items[0].candidate_key, risk_off.items[0].window_days
+            ).get("market_exposure")
             params = {"market_exposure": exposure, "floor": ACTIONABLE_EXPOSURE_FLOOR}
-        elif reasons:
-            code = max(reasons, key=lambda reason: (reasons[reason], reason in ROOT_CAUSE_REASONS))
-            params = {"count": reasons[code]}
-            if code == "stale_features":
-                params["required_session"] = next(
-                    item["explanation"].get("feature_required_session") for item in watch
-                    if code in (item["explanation"].get("state_reasons") or ())
-                )
+        elif stale:
+            code = "stale_features"
+            params = {"count": len(stale), "required_session": self._candidate_explanation(
+                run, stale[0].candidate_key, stale[0].window_days
+            ).get("feature_required_session")}
+        elif counts:
+            code, count = counts.most_common(1)[0]
+            params = {"count": count}
         else:
             code, params = None, {}
         return {

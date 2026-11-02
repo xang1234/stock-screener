@@ -521,6 +521,24 @@ def _publish_states(db, rows, *, exposure):
         "watch_count": 3, "risk_off_count": 0,
     }, id="stale_features_name_their_session"),
     pytest.param([
+        ("AAA", "watch", ["stale_features", "missing_setup_readiness"], 80),
+        ("BBB", "watch", ["missing_setup_readiness"], 70),
+        ("CCC", "watch", ["missing_setup_score"], 60),
+    ], "65", ["AAA", "BBB", "CCC"], {
+        "from": "actionable", "to": "watch", "reason_code": "stale_features",
+        "reason_params": {"count": 1, "required_session": "2026-10-30"},
+        "watch_count": 3, "risk_off_count": 0,
+    }, id="stale_features_outrank_a_more_common_shared_reason"),
+    pytest.param([
+        ("AAA", "watch", ["stale_features"], 80),
+        ("BBB", "watch", ["setup_not_ready"], 70),
+        ("CCC", "watch", ["setup_not_ready"], 60),
+    ], "65", ["AAA", "BBB", "CCC"], {
+        "from": "actionable", "to": "watch", "reason_code": "stale_features",
+        "reason_params": {"count": 1, "required_session": "2026-10-30"},
+        "watch_count": 3, "risk_off_count": 0,
+    }, id="stale_features_outrank_a_more_common_reason"),
+    pytest.param([
         ("AAA", "watch", ["setup_not_ready"], 80),
         ("BBB", "watch", ["liquidity_rejected"], 70),
         ("CCC", "watch", ["setup_not_ready"], 60),
@@ -561,6 +579,53 @@ async def test_empty_actionable_falls_back_to_watch_with_a_reason(
     assert [item["canonical_symbol"] for item in summary.json()["top_signals"]] == [
         symbol for symbol, state, *_ in rows if state == "actionable"
     ]
+
+
+@pytest.mark.asyncio
+async def test_filtered_empty_actionable_does_not_fall_back_to_watch(
+    db_session, social_runtime, monkeypatch,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [
+        ("AAA", "watch", ["setup_not_ready"], 80),
+        ("BBB", "watch", ["setup_not_ready"], 70),
+    ], exposure="65")
+    path = "/api/v1/social-signals/queue?market=US&window=7d&view=actionable"
+
+    filtered = (await _request(db_session, "GET", f"{path}&ticker=AAA")).json()
+    unfiltered = (await _request(db_session, "GET", path)).json()
+
+    assert (filtered["total"], filtered["items"], filtered["fallback"]) == (0, [], None)
+    assert unfiltered["fallback"]["reason_code"] == "setup_not_ready"
+    assert [item["canonical_symbol"] for item in unfiltered["items"]] == ["AAA", "BBB"]
+
+
+@pytest.mark.asyncio
+async def test_watch_fallback_pages_the_watch_rows(db_session, social_runtime, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [
+        ("AAA", "watch", ["setup_not_ready"], 80),
+        ("BBB", "watch", ["stale_features"], 70),
+        ("CCC", "watch", ["setup_not_ready"], 60),
+    ], exposure="65")
+
+    payload = (await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d&view=actionable&page=2&page_size=1",
+    )).json()
+
+    assert payload["total"] == 3
+    assert [item["canonical_symbol"] for item in payload["items"]] == ["BBB"]
+    assert payload["items"][0]["explanation"]["state_reasons"] == ["stale_features"]
+    assert payload["fallback"]["reason_params"] == {"count": 1, "required_session": "2026-10-30"}
 
 
 def _publish_empty_run_during_reads(db, monkeypatch):
