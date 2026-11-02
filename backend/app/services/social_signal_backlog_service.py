@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 NO_SIGNAL_GATE = "no_signal_gate"
 _CLAIM_TTL = timedelta(minutes=10)
-_UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured", "provider_rejected"})
+_UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured"})
 _PROVIDER_WIDE_REFUSALS = frozenset({
     HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND,
 })
@@ -431,14 +431,19 @@ class ProcessSocialBacklog:
                     row.state, row.error_code = "outside_window", "outside_signal_window"
             eligible = [r for r in rows if r.state in {"pending", "waiting_budget", "failed_retryable"}
                 or (r.state == "outside_window" and r.requested_by_admin)]
-            eligible.sort(key=lambda r: (datetime.fromisoformat(r.input_snapshot_json["created_at"]), r.id))
+            # Posts a provider refused go last and in their own batches, so a run is answered
+            # before it resends them and one refused post can't head every run.
+            eligible.sort(key=lambda r: (
+                r.error_code == "provider_rejected", datetime.fromisoformat(r.input_snapshot_json["created_at"]), r.id
+            ))
             for row in eligible[:limit]:
+                refused = row.error_code == "provider_rejected"
                 row.state, row.error_code = "running", None
                 row.claim_token = uuid4().hex
                 row.claim_expires_at = now + _CLAIM_TTL
                 row.updated_at = now
                 claimed.append((row.id, row.claim_token, row.selected_model, row.prompt_version,
-                    row.schema_version, dict(row.input_snapshot_json)))
+                    row.schema_version, refused, dict(row.input_snapshot_json)))
         return claimed, outside, terminal
 
     def _finish(self, work_id, token, state, error=None, result=None):
@@ -478,7 +483,7 @@ class ProcessSocialBacklog:
         current = []
         current_config = None
         for item in claimed:
-            config = item[2:5]
+            config = item[2:6]
             if current and (config != current_config or len(current) >= batch_size):
                 yield current
                 current = []
@@ -514,7 +519,7 @@ class ProcessSocialBacklog:
         breaker = _ProviderBreaker()
         for batch in batches:
             items = []
-            for work_id, token, _, _, _, snapshot in batch:
+            for work_id, token, _, _, _, _, snapshot in batch:
                 snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
                 snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
                 items.append(((work_id, token), SocialPostRecord(**snapshot)))
@@ -538,7 +543,7 @@ class ProcessSocialBacklog:
         claims = tuple(claim for claim, _ in items)
         work_ids = [work_id for work_id, _ in claims]
         if breaker.open:
-            return (0, self._finish_many(claims, "pending", "provider_rejected"), 0, 0), spare_calls
+            return (0, self._finish_many(claims, "pending", "provider_unavailable"), 0, 0), spare_calls
         for retry in range(2):
             metered = _MeteredCompletion(self, claims, current_time, breaker, retry=retry)
             try:
