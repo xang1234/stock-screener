@@ -285,7 +285,7 @@ class SocialLLMBudgetService:
     def release_unbilled(self, attempt_id):
         """Refund an attempt only when the caller proves it was not billed: never sent, or refused.
 
-        Claim expiry may already have marked it uncertain. Returns whether it ends released.
+        Returns whether it ends released.
         """
         with social_analysis_transaction(self.session_factory) as db:
             attempt = db.get(SocialLLMAttempt, attempt_id)

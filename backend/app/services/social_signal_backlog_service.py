@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import hashlib
+from http import HTTPStatus
 import json
 import logging
 import re
@@ -27,10 +28,10 @@ logger = logging.getLogger(__name__)
 
 NO_SIGNAL_GATE = "no_signal_gate"
 _CLAIM_TTL = timedelta(minutes=10)
-# Configuration failures repeat for any subset of posts, and a refused request is not re-sent.
 _UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured", "provider_rejected"})
-# Authentication, payment, permission, and missing-model refusals apply to every request.
-_PROVIDER_WIDE_REFUSALS = frozenset({401, 402, 403, 404})
+_PROVIDER_WIDE_REFUSALS = frozenset({
+    HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND,
+})
 _WORD = re.compile(r"\w+")
 _SYMBOL = re.compile(r"[A-Za-z0-9]+(?:[.\-][A-Za-z]{1,3}\b)?")  # MU, BRK.B, 0700.HK, 3008.TWO
 _CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
@@ -79,14 +80,11 @@ class _CompletionUnknown(Exception):
 
 
 class _ProviderBreaker:
-    """One execute() call's view of the provider. A refusal before any answer means the
-    provider refuses everything, not this post."""
     def __init__(self):
         self.answered = self.open = False
 
-    def trips(self, status):
-        self.open = status in _PROVIDER_WIDE_REFUSALS or not self.answered
-        return self.open
+    def provider_wide(self, status):
+        return status in _PROVIDER_WIDE_REFUSALS or not self.answered
 
 
 class _NoopRequestGate:
@@ -238,7 +236,8 @@ class _MeteredCompletion:
             except LLMProviderRejectedError as exc:
                 if not budget.release_unbilled(attempt):
                     raise _CompletionUnknown() from exc
-                if self.breaker.trips(exc.status_code):
+                if self.breaker.provider_wide(exc.status_code):
+                    self.breaker.open = True
                     self.owner._finish_many(self.claims, "pending", "provider_rejected")
                     raise _Deferred(len(self.claims)) from None
                 raise SocialExtractionError("provider_rejected") from None
@@ -401,12 +400,11 @@ class ProcessSocialBacklog:
                     # A dispatched request may have billed, including after a crash.
                     # Never silently retry it. Reserved-only claims can be released.
                     attempts = [a for a in db.scalars(select(SocialLLMAttempt)).all() if row.id in a.work_ids]
-                    # Requeued work keeps the attempt that stranded it; only this claim's attempts count.
                     # ponytail: matched by time, so a claim dated before an earlier claim's
                     # attempts still counts them; key attempts by claim token if that occurs.
                     claimed_at = _utc(row.claim_expires_at) - _CLAIM_TTL
-                    ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"}
-                                    and _utc(a.created_at) >= claimed_at for a in attempts)
+                    claim_attempts = [a for a in attempts if _utc(a.created_at) >= claimed_at]
+                    ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"} for a in claim_attempts)
                     for attempt in attempts:
                         if attempt.state == "reserved":
                             day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
@@ -535,7 +533,6 @@ class ProcessSocialBacklog:
 
         A request whose outcome is unknown, such as a provider timeout, may have
         billed, so it is retried at most once and only with a call the run's cap left unused.
-        After a provider-wide refusal nothing more is sent this run.
         """
         model, prompt, schema = config
         claims = tuple(claim for claim, _ in items)

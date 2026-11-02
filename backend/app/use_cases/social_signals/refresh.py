@@ -82,11 +82,7 @@ class RefreshSocialSignals:
             (reason,),
         )
 
-    def _close(self, lease_owner, run_id, mode, status, reason, *, sources):
-        """End a generation nothing will resume, so it stops reading as in progress.
-
-        A duplicate delivery shares the run id, so only the lease holder may close it.
-        """
+    def _close_if_lease_held(self, lease_owner, run_id, mode, status, reason, *, sources):
         if not self.provider_lease.renew(lease_owner, self.lease_ttl_seconds):
             return self._result(run_id, mode, "deferred", "provider_lease_lost", sources=sources)
         self.writer.fail_run(run_id, reason)
@@ -164,7 +160,7 @@ class RefreshSocialSignals:
                     if not self.catalog.admitted(
                         version=runtime.version, mode=runtime.mode, provider=runtime.provider
                     ):
-                        return self._close(
+                        return self._close_if_lease_held(
                             lease_owner, run_id, runtime.mode, "blocked", "social_runtime_changed", sources=enabled
                         )
                     if not self.provider_lease.renew(
@@ -181,7 +177,7 @@ class RefreshSocialSignals:
                     saved = self.writer.persist_observations(batch, run_id=run_id)
                     collected_any = collected_any or saved.outcome.read_status == "success"
                 if not collected_any:
-                    return self._close(
+                    return self._close_if_lease_held(
                         lease_owner, run_id, runtime.mode, "blocked", "source_participation_failed", sources=enabled
                     )
             finally:
