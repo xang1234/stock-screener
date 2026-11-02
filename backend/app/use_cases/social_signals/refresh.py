@@ -82,8 +82,13 @@ class RefreshSocialSignals:
             (reason,),
         )
 
-    def _close(self, run_id, mode, status, reason, *, sources):
-        """End a generation nothing will resume, so it stops reading as in progress."""
+    def _close(self, lease_owner, run_id, mode, status, reason, *, sources):
+        """End a generation nothing will resume, so it stops reading as in progress.
+
+        A duplicate delivery shares the run id, so only the lease holder may close it.
+        """
+        if not self.provider_lease.renew(lease_owner, self.lease_ttl_seconds):
+            return self._result(run_id, mode, "deferred", "provider_lease_lost", sources=sources)
         self.writer.fail_run(run_id, reason)
         return self._result(run_id, mode, status, reason, sources=sources)
 
@@ -146,9 +151,6 @@ class RefreshSocialSignals:
             collected = {batch.request.source_id: batch for batch in existing.batches} if existing else {}
             lease_owner = f"{run_id}:{self.lease_owner_factory()}"
             if not self.provider_lease.acquire(lease_owner, self.lease_ttl_seconds):
-                # A duplicate delivery may find its own run's collector holding the lease.
-                if existing is None:
-                    self.writer.fail_run(run_id, "provider_lease_unavailable")
                 return self._result(run_id, runtime.mode, "deferred", "provider_lease_unavailable", sources=enabled)
             try:
                 provider = self._provider(runtime.provider)
@@ -163,12 +165,12 @@ class RefreshSocialSignals:
                         version=runtime.version, mode=runtime.mode, provider=runtime.provider
                     ):
                         return self._close(
-                            run_id, runtime.mode, "blocked", "social_runtime_changed", sources=enabled
+                            lease_owner, run_id, runtime.mode, "blocked", "social_runtime_changed", sources=enabled
                         )
                     if not self.provider_lease.renew(
                         lease_owner, self.lease_ttl_seconds
                     ):
-                        return self._close(
+                        return self._result(
                             run_id,
                             runtime.mode,
                             "deferred",
@@ -180,7 +182,7 @@ class RefreshSocialSignals:
                     collected_any = collected_any or saved.outcome.read_status == "success"
                 if not collected_any:
                     return self._close(
-                        run_id, runtime.mode, "blocked", "source_participation_failed", sources=enabled
+                        lease_owner, run_id, runtime.mode, "blocked", "source_participation_failed", sources=enabled
                     )
             finally:
                 self.provider_lease.release(lease_owner)

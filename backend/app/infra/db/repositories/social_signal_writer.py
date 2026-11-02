@@ -30,10 +30,7 @@ from app.services.twitter_content_identity import twitter_external_id
 from app.services.theme_evidence_eligibility_service import grant_eligibility
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
-_RUN_FAILURES = frozenset({
-    "analysis_failed", "provider_lease_unavailable", "provider_lease_lost",
-    "social_runtime_changed", "source_participation_failed",
-})
+_RUN_FAILURES = frozenset({"analysis_failed", "social_runtime_changed", "source_participation_failed"})
 
 
 def utc(value):
