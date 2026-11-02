@@ -2101,8 +2101,8 @@ def test_replay_picks_of_the_current_definition_are_scored_as_their_own_source(s
     assert [h.sample_size for h in payload.horizons] == [2, 2, 0, 0]
     assert [(g.label, g.value, g.horizons[1].sample_size) for g in payload.groups] == [
         ("Stage", "2", 2),
-        ("RS Band", "80-89", 1),
         ("RS Band", "90-99", 1),
+        ("RS Band", "80-89", 1),
     ]
 
 
@@ -2171,3 +2171,17 @@ def test_freshness_reports_the_latest_replayed_session_of_the_market_and_definit
     ]
 
     assert freshness == ["2026-03-27", "2026-04-01", None]
+
+
+def test_extension_of_a_pick_on_a_session_its_symbol_has_not_refreshed_yet_is_unknown():
+    start = date(2026, 1, 1)
+    history = _history_frame(start, [(100.0,) * 4] * 60)
+    newest = start + timedelta(days=60)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+
+    evaluated, _ = calculator.evaluate_many(
+        [_scan_event("NVDA", newest)],
+        sessions=[*_sessions_of(history), newest],
+    )
+
+    assert evaluated[0].pct_above_50dma is None

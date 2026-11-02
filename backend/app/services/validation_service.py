@@ -93,6 +93,7 @@ EXTENSION_BAND_EDGES = (0.0, 10.0, 20.0, 30.0)
 # The value order of each dimension that has one, such as ratings best first.
 GROUP_VALUE_ORDER = {
     "rating": tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
+    "rs_band": tuple(f"{low}-{low + 9}" for low in range(90, -1, -10)),
     "action_state": tuple(state.value for state in ACTION_STATES),
     "extension_band": EXTENSION_BANDS,
 }
@@ -608,6 +609,9 @@ class PriceOutcomeCalculator:
         benchmark: pd.DataFrame | None,
         calendar: pd.DatetimeIndex,
     ) -> EvaluatedValidationEvent:
+        # Extension reads backward from the full calendar: a pick on a session this symbol's
+        # refresh has not reached is missing a bar, which the trim below would hide.
+        before_entry = calendar[: _entry_session_index(event.event_at, calendar)][-50:]
         if history is not None and len(calendar) > 1 and history.index[-1] == calendar[-2]:
             # The calendar counts a session completed before the after-close refresh reaches
             # this symbol's batch; its window past that session is pending, not missing history.
@@ -626,7 +630,7 @@ class PriceOutcomeCalculator:
             entry_at=None,
             entry_price=None,
             exits=exits,
-            pct_above_50dma=_pct_above_50dma(history, calendar[:start][-50:]),
+            pct_above_50dma=_pct_above_50dma(history, before_entry),
         )
         if sessions.empty:
             return evaluation
