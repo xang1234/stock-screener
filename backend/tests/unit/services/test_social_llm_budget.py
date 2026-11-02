@@ -353,6 +353,30 @@ def test_cancel_before_dispatch_and_idempotency(ledger):
         budget.reserve("a", (2,), Decimal("2"), NOW)
 
 
+def test_economic_pre_dispatch_release_refunds_only_reserved_or_dispatched_attempts(ledger):
+    from app.services.social_llm_budget_service import SocialEconomicReservationManager
+
+    budget = service(ledger)
+    manager = SocialEconomicReservationManager(budget, work_ids=(1,), maximum_usd=Decimal("0.50"), now=NOW,
+        pricing_version="test-v1", input_token_limit=100, output_token_limit=100)
+    reserved, dispatched, uncertain = (
+        manager.reserve(attempt_key=key, logical_request_id=key, operation_kind="extract")
+        for key in ("reserved", "dispatched", "uncertain")
+    )
+    dispatched.mark_dispatched()
+    uncertain.mark_dispatched()
+    budget.reconcile(uncertain.attempt_id, None, None)
+
+    reserved.release_pre_dispatch()
+    dispatched.release_pre_dispatch()
+    for unreleasable in (uncertain, dispatched):
+        with pytest.raises(ValueError, match="social_attempt_not_releasable"):
+            unreleasable.release_pre_dispatch()
+
+    assert (reserved.state, dispatched.state, uncertain.state) == ("released", "released", "uncertain")
+    assert budget.status(NOW).remaining_usd == Decimal("1.50")
+
+
 def test_timezone_change_carries_overlap_without_double_counting(ledger):
     budget = service(ledger)
     attempt = budget.reserve("a", (1,), Decimal("1.80"), NOW)
