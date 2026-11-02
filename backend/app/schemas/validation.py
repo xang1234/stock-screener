@@ -88,7 +88,6 @@ class ValidationSourceBreakdown(BaseModel):
     source_kind: ValidationSourceKind
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
-    groups: list[ValidationGroup]
     degraded_reasons: list[str]
 
 

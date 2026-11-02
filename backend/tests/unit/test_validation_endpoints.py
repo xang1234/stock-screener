@@ -340,12 +340,10 @@ async def test_stock_validation_endpoint_returns_both_source_breakdowns(client, 
     assert response.status_code == 200
     payload = response.json()
     assert (payload["symbol"], payload["stop_loss_pct"]) == ("NVDA", 7.0)
-    assert [
-        (item["source_kind"], [(g["dimension"], g["value"]) for g in item["groups"]])
-        for item in payload["source_breakdown"]
-    ] == [
-        ("scan_pick", [("rating", "Strong Buy"), ("stage", "2")]),
-        ("theme_alert", [("alert_type", "breakout"), ("severity", "warning")]),
+    # No groups: one symbol's picks are too few for any group to clear the small-sample mark.
+    assert [(item["source_kind"], sorted(item)) for item in payload["source_breakdown"]] == [
+        ("scan_pick", ["degraded_reasons", "horizons", "recent_events", "source_kind"]),
+        ("theme_alert", ["degraded_reasons", "horizons", "recent_events", "source_kind"]),
     ]
     assert "groups" not in payload
     assert len(payload["recent_events"]) == 2

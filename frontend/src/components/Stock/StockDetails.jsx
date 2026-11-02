@@ -34,7 +34,6 @@ import PeerComparisonModal from '../Scan/PeerComparisonModal';
 import MarketThemesList from './MarketThemesList';
 import {
   ValidationDegradedAlert,
-  ValidationGroupsTable,
   ValidationRecentEventsTable,
   ValidationSummaryCards,
 } from '../Validation/ValidationPanels';
@@ -725,12 +724,6 @@ function StockDetails() {
                       <Stack spacing={1.5}>
                         <ValidationDegradedAlert degradedReasons={section.degraded_reasons} />
                         <ValidationSummaryCards horizons={section.horizons} stopLossPct={validationData.stop_loss_pct} />
-                        <Box>
-                          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-                            By Group
-                          </Typography>
-                          <ValidationGroupsTable groups={section.groups} stopLossPct={validationData.stop_loss_pct} />
-                        </Box>
                       </Stack>
                     </Box>
                   ))}

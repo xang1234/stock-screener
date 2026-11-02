@@ -787,7 +787,7 @@ class ValidationService:
             stop_loss_pct=STOP_LOSS_PCT,
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
-            groups=payload["groups"],
+            groups=self._build_groups(payload["events"], source_kind),
             freshness=self._build_freshness(
                 db,
                 as_of_date=effective_as_of_date,
@@ -826,7 +826,6 @@ class ValidationService:
                     source_kind=source_kind,
                     horizons=payload["horizons"],
                     recent_events=payload["recent_events"],
-                    groups=payload["groups"],
                     degraded_reasons=payload["degraded_reasons"],
                 )
             )
@@ -921,7 +920,7 @@ class ValidationService:
         return {
             "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
-            "groups": self._build_groups(events, source_kind),
+            "events": events,
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
         }

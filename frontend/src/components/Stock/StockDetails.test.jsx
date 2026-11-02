@@ -1,5 +1,5 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -174,17 +174,6 @@ describe('StockDetails', () => {
             { horizon_sessions: 5, sample_size: 4, positive_rate: 0.5, avg_return_pct: 2.1, median_return_pct: 1.7, avg_mfe_pct: 4.2, avg_mae_pct: -1.8, skipped_missing_history: 1 },
           ],
           recent_events: [],
-          groups: [
-            {
-              dimension: 'stage',
-              label: 'Stage',
-              value: '2',
-              horizons: [
-                { horizon_sessions: 5, sample_size: 4, positive_rate: 0.5, avg_return_pct: 2.1, avg_excess_return_pct: null, avg_stopped_return_pct: 1.6, stopped_out_rate: 0 },
-                { horizon_sessions: 20, sample_size: 3, positive_rate: 0.67, avg_return_pct: 5.2, avg_excess_return_pct: null, avg_stopped_return_pct: 4.0, stopped_out_rate: 0.33 },
-              ],
-            },
-          ],
           degraded_reasons: [],
         },
         {
@@ -194,7 +183,6 @@ describe('StockDetails', () => {
             { horizon_sessions: 5, sample_size: 2, positive_rate: 0.5, avg_return_pct: 1.1, median_return_pct: 1.1, avg_mfe_pct: 2.5, avg_mae_pct: -1.1, skipped_missing_history: 0 },
           ],
           recent_events: [],
-          groups: [],
           degraded_reasons: [],
         },
       ],
@@ -236,13 +224,8 @@ describe('StockDetails', () => {
     expect(screen.getByText('GPU Compute')).toBeInTheDocument();
     expect(screen.getByText('Data Center')).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByText('Historical Validation'));
-    const [scanGroups, themeGroups] = await screen.findAllByRole('table', { name: 'By group' });
-    expect(Array.from(within(scanGroups).getByText('2').closest('tr').cells).map((cell) => cell.textContent)).toEqual(
-      ['2', '3', '67%', '5.2%', '-', '4.0%', '33%'],
-    );
-    expect(within(themeGroups).getByText('No grouped results for this selection.')).toBeInTheDocument();
-    expect(screen.getAllByText('Avg with 7% stop')).toHaveLength(6);
+    expect(screen.getAllByText('Avg with 7% stop')).toHaveLength(4);
+    expect(screen.queryByText('By Group')).not.toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();
   }, 20000);
@@ -280,14 +263,12 @@ describe('StockDetails', () => {
           source_kind: 'scan_pick',
           horizons: [],
           recent_events: [],
-          groups: [],
           degraded_reasons: ['no_matching_scan_picks'],
         },
         {
           source_kind: 'theme_alert',
           horizons: [],
           recent_events: [],
-          groups: [],
           degraded_reasons: ['no_matching_theme_alerts'],
         },
       ],
