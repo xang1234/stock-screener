@@ -16,6 +16,14 @@ JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
+# The US universe refresh reads every finviz listing, funds included, and finviz files
+# them under these industries ("Closed-End Fund - Debt", "- Equity", "- Foreign").
+FUND_INDUSTRY_PREFIXES = ("Exchange Traded Fund", "Closed-End Fund")
+
+
+def is_fund_industry(industry: str | None) -> bool:
+    return bool(industry) and industry.startswith(FUND_INDUSTRY_PREFIXES)
+
 
 @dataclass(frozen=True, slots=True)
 class UniverseLifecycleMetadata:

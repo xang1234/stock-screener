@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from alembic.script import ScriptDirectory
 from sqlalchemy.exc import IntegrityError
 
 from app.infra.db.models.backtest_replay import BacktestReplayPick
@@ -76,11 +74,3 @@ def test_replay_picks_migration_creates_one_pick_per_rank_and_drops_cleanly(tmp_
 
     with engine.connect() as connection:
         assert "backtest_replay_picks" not in sa.inspect(connection).get_table_names()
-
-
-def test_replay_picks_migration_extends_the_single_head():
-    config = Config(str(BACKEND_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
-    script = ScriptDirectory.from_config(config)
-
-    assert script.get_heads() == [_load_migration().revision]

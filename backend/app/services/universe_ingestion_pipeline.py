@@ -19,6 +19,7 @@ from ..domain.universe.ingestion import (
     UniverseLifecycleMetadata,
     UniverseReconciliationPolicy,
     UniverseSourceProvenance,
+    is_fund_industry,
 )
 from ..models.stock_universe import (
     StockUniverse,
@@ -410,9 +411,11 @@ class UniversePersistence:
         existing.currency = row.currency
         existing.timezone = row.timezone
         existing.local_code = row.local_code or existing.local_code
-        existing.is_common_stock = True
         existing.sector = prefer_meaningful(row.sector, existing.sector)
         existing.industry = prefer_meaningful(row.industry, existing.industry)
+        # A non-fund keeps its stored flag so an operator's classification survives.
+        if is_fund_industry(existing.industry):
+            existing.is_common_stock = False
         if row.market_cap is not None:
             existing.market_cap = row.market_cap
 
@@ -517,7 +520,7 @@ class UniversePersistence:
             is_active=lifecycle.is_active,
             status=lifecycle.status,
             status_reason=reason,
-            is_common_stock=True,
+            is_common_stock=not is_fund_industry(row.industry),
             source=source,
             consecutive_fetch_failures=lifecycle.consecutive_fetch_failures,
             added_at=first_seen_at,
