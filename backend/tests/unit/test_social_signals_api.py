@@ -228,6 +228,13 @@ async def test_unpublished_queue_shows_attempt_status_and_admin_health_the_detai
 
     monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
     monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
+    operations = await _request(db_session, "GET", "/api/v1/operations/social-signals")
+    assert operations.status_code == 200
+    assert operations.json()["run_status"] == "running"
+    assert "latest_live_attempt" not in operations.json()
+    assert "minervini" not in operations.text.lower()
+    assert "ai investing" not in operations.text.lower()
+
     health = await _request(
         db_session, "GET", "/api/v1/social-signals/admin/health",
         headers={"X-Admin-Key": "admin-secret"},
