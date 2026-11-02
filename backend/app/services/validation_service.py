@@ -7,8 +7,8 @@ from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from functools import partial
 from datetime import UTC, date, datetime, time, timedelta
+from functools import partial
 from statistics import median
 from typing import Any
 
@@ -18,8 +18,8 @@ from sqlalchemy import and_, case, exists, func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING, RATING_TO_INT
-from app.domain.scanning.opportunity_state.model import ACTION_STATES
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
+from app.domain.scanning.opportunity_state.model import ACTION_STATES
 from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.portability import json_text
