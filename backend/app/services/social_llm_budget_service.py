@@ -282,22 +282,24 @@ class SocialLLMBudgetService:
             attempt.completed_at = datetime.now(timezone.utc)
             return True
 
-    def release_unbilled(self, attempt_id):
+    def release_unbilled(self, attempt_id, *, refused=False):
         """Refund an attempt only when the caller proves it was not billed: never sent, or refused.
 
+        A refusal keeps actual_usd 0 so it still counts toward the daily call limit.
         Returns whether it ends released.
         """
         with social_analysis_transaction(self.session_factory) as db:
             attempt = db.get(SocialLLMAttempt, attempt_id)
-            if attempt.state == "released":
-                return True
-            if attempt.state not in {"dispatched", "uncertain"}:
+            if attempt.state not in {"dispatched", "uncertain", "released"}:
                 return False
-            day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
-            day.reserved_usd -= attempt.estimated_usd
-            day.version += 1
-            attempt.state = "released"
-            attempt.completed_at = datetime.now(timezone.utc)
+            if attempt.state != "released":
+                day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
+                day.reserved_usd -= attempt.estimated_usd
+                day.version += 1
+                attempt.state = "released"
+                attempt.completed_at = datetime.now(timezone.utc)
+            if refused:
+                attempt.actual_usd = ZERO
             return True
 
     def reconcile(self, attempt_id: int, actual_usd: Decimal | None,

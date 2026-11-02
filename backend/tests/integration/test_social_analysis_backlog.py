@@ -1148,6 +1148,21 @@ def test_a_refused_retry_keeps_the_unknown_first_outcome_terminal(backlog, caplo
     assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == []
 
 
+def test_refused_requests_count_toward_the_daily_call_limit(backlog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = RefusingLLM(400)
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=1, max_calls_per_day=1)
+    for number in (1, 2):
+        enqueue(backlog, worker, post(number))
+
+    asyncio.run(worker.execute(NOW, 2))
+    asyncio.run(worker.execute(NOW, 2))
+
+    assert llm.calls == 1
+
+
 def test_a_provider_wide_refusal_on_a_retry_stops_the_run(backlog):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
@@ -1198,7 +1213,9 @@ def test_refusal_arriving_after_claim_expiry_still_releases_its_charge(backlog):
     assert (result.deferred, refusal_outcome(backlog, [work_id])) == (
         1, ({("pending", "provider_rejected")}, ["released"], 0))
     with backlog() as db:
-        attempt_id = db.scalar(select(SocialLLMAttempt.id))
+        attempt = db.scalar(select(SocialLLMAttempt))
+        attempt_id, actual_usd = attempt.id, attempt.actual_usd
+    assert actual_usd == 0  # still counts toward the daily call limit
     assert worker.budget.release_unbilled(attempt_id) is True
     assert refusal_outcome(backlog, [work_id])[1:] == (["released"], 0)
 

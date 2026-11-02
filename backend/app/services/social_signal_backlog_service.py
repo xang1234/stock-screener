@@ -196,7 +196,7 @@ class _MeteredCompletion:
                         SocialLLMBudgetDay.period_end_utc > day.period_start_utc,
                         SocialLLMAttempt.state.in_({
                             "dispatched", "reconciled", "uncertain",
-                        }),
+                        }) | ((SocialLLMAttempt.state == "released") & SocialLLMAttempt.actual_usd.is_not(None)),
                     )
                 ) or 0
                 call_available = calls_today < self.owner.max_calls_per_day
@@ -238,7 +238,7 @@ class _MeteredCompletion:
             except LLMProviderRejectedError as exc:
                 if not self.retry or exc.status_code in _PROVIDER_WIDE_REFUSALS:
                     self.ledger.refusal_status = exc.status_code
-                if not budget.release_unbilled(attempt) or self.retry:
+                if not budget.release_unbilled(attempt, refused=True) or self.retry:
                     raise _CompletionUnknown() from exc
                 if self.ledger.stopped:
                     self.owner._finish_many(self.claims, "pending", "provider_rejected")
