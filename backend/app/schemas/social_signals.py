@@ -56,6 +56,16 @@ class SocialQueueItem(BaseModel):
     explanation: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocialQueueFallback(BaseModel):
+    """Actionable was empty, so the same publication's Watch rows are shown instead."""
+    from_view: Literal["actionable"] = Field(alias="from")
+    to_view: Literal["watch"] = Field(alias="to")
+    reason_code: str | None = None
+    reason_params: dict[str, Any] = Field(default_factory=dict)
+    watch_count: int
+    risk_off_count: int
+
+
 class SocialQueueResponse(SocialAvailabilityResponse):
     window: WindowCode
     view: QueueView
@@ -68,6 +78,7 @@ class SocialQueueResponse(SocialAvailabilityResponse):
     generated_at: datetime | None = None
     published_at: datetime | None = None
     stale: bool | None = None
+    fallback: SocialQueueFallback | None = None
 
 
 class SocialSectionResponse(SocialAvailabilityResponse):
@@ -169,7 +180,7 @@ class SocialCompanyIdentityUpdate(BaseModel):
 __all__ = [
     "MarketCode", "QueueView", "RankMode", "SocialAvailabilityResponse",
     "SocialAssociationDecisionRequest", "SocialCompanyIdentityUpdate",
-    "SocialEvidencePost", "SocialEvidenceResponse", "SocialQueueItem",
+    "SocialEvidencePost", "SocialEvidenceResponse", "SocialQueueFallback", "SocialQueueItem",
     "SocialQueueResponse", "SocialSectionResponse", "SocialSummaryResponse", "WindowCode",
     "SocialRuntimeUpdate", "SocialSourceCreateRequest", "SocialSourceRenameRequest",
     "SocialSourceTransitionRequest", "SocialSourceVersionRequest",

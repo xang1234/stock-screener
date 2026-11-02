@@ -30,20 +30,22 @@ class PublishedSocialSignalReader:
 
     def queue(
         self, market, window_days, view, rank_mode, page, page_size,
-        *, item_filter=None,
+        *, item_filter=None, run_id=None,
     ):
+        """Read run_id, else the latest publication; page_size None reads every row."""
         if market not in SUPPORTED_MARKETS or window_days not in {1, 7, 14}:
             raise ValueError("invalid_market_or_window")
         if view not in {"all", "actionable", "watch", "risk_off", "context", "unresolved"}:
             raise ValueError("invalid_queue_selection")
         ordering = snapshot_rank_order(rank_mode)
-        if page < 1 or not 1 <= page_size <= 200:
+        if page < 1 or page_size is not None and not 1 <= page_size <= 200:
             raise ValueError("invalid_pagination")
         with self.session_factory() as db:
-            pointer = db.get(SocialSignalRunPointer, "latest_published")
-            if pointer is None:
-                raise SocialPublicationUnavailable("no_published_run")
-            run_id = pointer.run_id
+            if run_id is None:
+                pointer = db.get(SocialSignalRunPointer, "latest_published")
+                if pointer is None:
+                    raise SocialPublicationUnavailable("no_published_run")
+                run_id = pointer.run_id
             predicates = [SocialSignalSnapshot.run_id == run_id,
                 SocialSignalSnapshot.window_days == window_days,
                 (SocialSignalSnapshot.market == market) | SocialSignalSnapshot.market.is_(None)]
@@ -64,14 +66,14 @@ class PublishedSocialSignalReader:
                 ordered = column.desc() if direction == "desc" else column.asc()
                 order_by.append(ordered.nulls_last() if null_policy == "last" else ordered.nulls_first())
             query = select(SocialSignalSnapshot).where(*predicates).order_by(*order_by)
-            if item_filter is None:
+            if item_filter is None and page_size is not None:
                 total = db.scalar(select(func.count()).select_from(SocialSignalSnapshot).where(*predicates))
                 rows = db.scalars(query.offset((page-1)*page_size).limit(page_size)).all()
                 items = tuple(self._record(row) for row in rows)
             else:
                 records = tuple(self._record(row) for row in db.scalars(query).all())
-                filtered = tuple(record for record in records if item_filter(record))
-                total = len(filtered)
-                start = (page - 1) * page_size
-                items = filtered[start:start + page_size]
+                items = tuple(record for record in records if item_filter is None or item_filter(record))
+                total = len(items)
+                if page_size is not None:
+                    items = items[(page - 1) * page_size:page * page_size]
             return QueuePage(items, page, page_size, total)

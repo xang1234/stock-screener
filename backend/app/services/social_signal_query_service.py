@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import quote
@@ -11,12 +13,13 @@ from urllib.parse import quote
 from sqlalchemy import select
 
 from app.config import settings
+from app.domain.social_signals.states import ACTIONABLE_EXPOSURE_FLOOR
 from app.infra.db.models.social_signals import (
     SocialPostTicker, SocialSignalRun, SocialSignalRunPointer,
     SocialSignalSnapshot, SocialSourceRegistry,
 )
 from app.infra.db.repositories.published_social_signal_reader import (
-    PublishedSocialSignalReader, SocialPublicationUnavailable,
+    PublishedSocialSignalReader,
 )
 
 
@@ -237,7 +240,8 @@ class SocialSignalQueries:
         }
 
     def queue(
-        self, *, market, window, view, rank_mode, page, page_size, filters=None
+        self, *, market, window, view, rank_mode, page, page_size, filters=None,
+        watch_fallback=True,
     ):
         base = {
             "supported": self._supported(), "available": False,
@@ -253,6 +257,12 @@ class SocialSignalQueries:
             if value is not None and str(value).strip()
         }
         run = self._publication()
+        if run is None:
+            attempt = self.latest_live_attempt()
+            return {
+                **base, "reason_code": "no_published_run",
+                "latest_attempt": attempt and {"status": attempt["status"]},
+            }
 
         def matches(record):
             item = self._item(record, run)
@@ -266,17 +276,17 @@ class SocialSignalQueries:
             }
             return all(value in haystacks.get(key, "") for key, value in filters.items())
 
-        try:
-            result = self.reader.queue(
-                market, WINDOW_DAYS[window], view, rank_mode, page, page_size,
-                item_filter=matches if filters else None,
+        def read(state, page=page, page_size=page_size):
+            return self.reader.queue(
+                market, WINDOW_DAYS[window], state, rank_mode, page, page_size,
+                item_filter=matches if filters else None, run_id=run.id,
             )
-        except SocialPublicationUnavailable as exc:
-            attempt = self.latest_live_attempt()
-            return {
-                **base, "reason_code": exc.reason,
-                "latest_attempt": attempt and {"status": attempt["status"]},
-            }
+
+        result = read(view)
+        total, items = result.total, [self._item(item, run) for item in result.items]
+        fallback = None
+        if watch_fallback and view == "actionable" and not total:
+            total, items, fallback = self._watch_fallback(read, run, page, page_size)
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)
         oldest_observation_at = self._oldest_successful_observation_at(run)
@@ -284,8 +294,8 @@ class SocialSignalQueries:
             **base,
             "available": True,
             "reason_code": None,
-            "total": result.total,
-            "items": [self._item(item, run) for item in result.items],
+            "total": total,
+            "items": items,
             "run_id": run.id,
             "generated_at": generated_at,
             "published_at": published_at,
@@ -294,6 +304,38 @@ class SocialSignalQueries:
                 or (self.clock() - oldest_observation_at).total_seconds()
                 > settings.social_stale_after_hours * 3600
             ),
+            "fallback": fallback,
+        }
+
+    def _watch_fallback(self, read, run, page, page_size):
+        """The same run's Watch rows for an empty Actionable view, and why it is empty."""
+        watch = [self._item(record, run) for record in read("watch", 1, None).items]
+        risk_off = read("risk_off", 1, 1)
+        if not watch and not risk_off.total:
+            return 0, [], None
+        exposure = (self._item(risk_off.items[0], run)["explanation"].get("market_exposure")
+                    if risk_off.items else None)
+        reasons = Counter(reason for item in watch
+                          for reason in item["explanation"].get("state_reasons") or ())
+        if exposure is not None and Decimal(str(exposure)) < ACTIONABLE_EXPOSURE_FLOOR:
+            code = "market_exposure_below_50"
+            params = {"market_exposure": exposure, "floor": ACTIONABLE_EXPOSURE_FLOOR}
+        elif reasons:
+            # Stale features null every setup input, so they tie with the missing_* reasons they cause.
+            code = max(reasons, key=lambda reason: (reasons[reason], reason == "stale_features"))
+            params = {"count": reasons[code]}
+            if code == "stale_features":
+                params["required_session"] = next(
+                    item["explanation"].get("feature_required_session") for item in watch
+                    if code in item["explanation"]["state_reasons"]
+                )
+        else:
+            code, params = None, {}
+        start = (page - 1) * page_size
+        return len(watch), watch[start:start + page_size], {
+            "from": "actionable", "to": "watch", "reason_code": code,
+            "reason_params": params, "watch_count": len(watch),
+            "risk_off_count": risk_off.total,
         }
 
     def section(self, *, market, window, section, page, page_size):
@@ -347,7 +389,6 @@ class SocialSignalQueries:
             datetime.fromisoformat(data["latest_mention"])
             if data["latest_mention"] else None
         )
-        from decimal import Decimal
         from app.domain.social_signals.records import SocialSnapshotRecord
         for field in ("social_score", "confirmation_score", "queue_score"):
             data[field] = Decimal(data[field]) if data[field] is not None else None
@@ -504,7 +545,7 @@ class SocialSignalQueries:
             }
         queue = self.queue(
             market=market, window="7d", view="actionable",
-            rank_mode="blended", page=1, page_size=5,
+            rank_mode="blended", page=1, page_size=5, watch_fallback=False,
         )
         if not queue["available"]:
             return {

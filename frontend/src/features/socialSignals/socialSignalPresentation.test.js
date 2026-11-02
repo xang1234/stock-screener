@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatSocialScore, noActionableReason, socialFreshness, socialStateLabel, stateReasonText,
+  fallbackText, formatSocialScore, socialFreshness, socialStateLabel, stateReasonText,
   visibleSocialRows,
 } from './socialSignalPresentation';
 
@@ -33,11 +33,20 @@ describe('Social Signal presentation', () => {
     expect(stateReasonText('some_new_reason')).toBe('Some new reason');
   });
 
-  it('names the most common Watch reason when exposure is not the cause', () => {
-    const watch = (reasons) => ({ explanation: { market_exposure: '65', state_reasons: reasons } });
-    expect(noActionableReason([watch(['setup_not_ready']), watch(['setup_not_ready', 'missing_liquidity'])]))
-      .toBe('No actionable signals: setup not ready for most signals.');
-    expect(noActionableReason([])).toBe('No actionable signals right now.');
+  it('says why Actionable is empty from the server fallback reason', () => {
+    const fallback = (reasonCode, reasonParams, watchCount, riskOffCount = 0) => fallbackText({
+      from: 'actionable', to: 'watch', reason_code: reasonCode, reason_params: reasonParams,
+      watch_count: watchCount, risk_off_count: riskOffCount,
+    });
+    expect(fallback('market_exposure_below_50', { market_exposure: '42.4', floor: 50 }, 3, 2))
+      .toBe('No actionable signals: market exposure is 42, below 50, so 2 ready setups are under Risk-off. Showing Watch.');
+    expect(fallback('market_exposure_below_50', { market_exposure: '42', floor: 50 }, 0, 1))
+      .toBe('No actionable signals: market exposure is 42, below 50, so 1 ready setup is under Risk-off.');
+    expect(fallback('stale_features', { count: 2, required_session: '2026-10-30' }, 3))
+      .toBe('No actionable signals: price features for 2 of 3 Watch signals are not yet updated for 2026-10-30. Showing Watch.');
+    expect(fallback('setup_not_ready', { count: 2 }, 3))
+      .toBe('No actionable signals: setup not ready for 2 of 3 Watch signals. Showing Watch.');
+    expect(fallback(null, {}, 1)).toBe('No actionable signals. Showing Watch.');
   });
 
   it('filters sources using the published source-name projection', () => {

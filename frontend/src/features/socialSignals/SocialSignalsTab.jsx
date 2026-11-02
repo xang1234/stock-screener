@@ -15,7 +15,7 @@ import SocialEvidenceDrawer from './SocialEvidenceDrawer';
 import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import SocialSignalsTable from './SocialSignalsTable';
 import {
-  ATTEMPT_TITLES, explanationMap, featureLagLabel, noActionableReason, socialFreshness,
+  ATTEMPT_TITLES, explanationMap, fallbackText, featureLagLabel, socialFreshness,
   socialStateLabel, visibleSocialRows,
 } from './socialSignalPresentation';
 
@@ -52,15 +52,8 @@ export default function SocialSignalsTab() {
     queryKey: socialQueueKey(controls), queryFn: () => getSocialQueue(controls),
     staleTime: 60_000, enabled: marketSupported,
   });
-  const actionableEmpty = view === 'actionable' && queueQuery.data?.available === true
-    && queueQuery.data.total === 0;
-  const watchControls = { ...controls, view: 'watch' };
-  const watchQuery = useQuery({
-    queryKey: socialQueueKey(watchControls), queryFn: () => getSocialQueue(watchControls),
-    staleTime: 60_000, enabled: marketSupported && actionableEmpty,
-  });
-  const fallback = actionableEmpty && watchQuery.data?.total > 0;
-  const shown = fallback ? watchQuery.data : queueQuery.data;
+  const { data } = queueQuery;
+  const fallback = data?.fallback;
   const contextQuery = useQuery({
     queryKey: ['socialSignals', 'context', market, window, contextPage],
     queryFn: () => getSocialContext({ market, window, page: contextPage, pageSize: 50 }),
@@ -72,15 +65,15 @@ export default function SocialSignalsTab() {
     enabled: marketSupported && Boolean(selected),
   });
   const rows = useMemo(
-    () => visibleSocialRows(shown?.items || EMPTY, filters),
-    [filters, shown?.items],
+    () => visibleSocialRows(data?.items || EMPTY, filters),
+    [filters, data?.items],
   );
   const visibleSymbols = useMemo(
     () => [...new Set(rows.filter((row) => row.market && row.canonical_symbol)
       .map((row) => row.canonical_symbol))], [rows],
   );
-  const attempt = queueQuery.data?.latest_attempt;
-  const freshness = socialFreshness(queueQuery.data);
+  const attempt = data?.latest_attempt;
+  const freshness = socialFreshness(data);
   const featureLag = rows.map((row) => featureLagLabel(explanationMap(row))).find(Boolean);
   const filtered = Object.values(filters).some((value) => String(value || '').trim());
   const emptyCopy = filtered ? 'No signals match these filters.'
@@ -134,27 +127,29 @@ export default function SocialSignalsTab() {
       {queueQuery.isError ? <Alert severity="error">
         {queueQuery.error?.response?.status === 401 ? 'Your session expired. Sign in again.' : 'Social Signals could not be loaded.'}
       </Alert> : null}
-      {queueQuery.data?.available === false ? (
+      {data?.available === false ? (
         <Alert severity={['collection_failed', 'failed'].includes(attempt?.status) ? 'error' : 'info'}
           action={attempt ? <Button size="small" onClick={() => navigate('/operations#sources')}>
             Open Operations</Button> : null}>
           {attempt
             ? `${ATTEMPT_TITLES[attempt.status] || 'Collection is in progress'}.`
-            : unavailableCopy[queueQuery.data.reason_code] || 'Social Signals are temporarily unavailable.'}
+            : unavailableCopy[data.reason_code] || 'Social Signals are temporarily unavailable.'}
         </Alert>
       ) : null}
-      {queueQuery.data?.available ? (
+      {data?.available ? (
         <>
           <Stack direction="row" gap={1} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="caption">{shown.total} published candidates</Typography>
+            <Typography variant="caption">{data.total} published candidates</Typography>
             <Chip size="small" variant="outlined" color={freshness.color} label={freshness.label} />
             {featureLag ? <Chip size="small" variant="outlined" color="warning" label={featureLag} /> : null}
             <Button size="small" disabled={!visibleSymbols.length} onClick={scanVisible}>Send visible to Scan</Button>
           </Stack>
-          {fallback ? <Alert severity="info" sx={{ mb: 1 }}>
-            {noActionableReason(rows)} Showing Watch.
+          {fallback ? <Alert severity="info" sx={{ mb: 1 }}
+            action={fallback.risk_off_count ? <Button size="small"
+              onClick={() => selectControl(setView, 'risk_off')}>View Risk-off</Button> : null}>
+            {fallbackText(fallback)}
           </Alert> : null}
-          {!rows.length && !(actionableEmpty && watchQuery.isLoading) ? <Alert severity="info">{emptyCopy}</Alert> : null}
+          {!rows.length && !fallback ? <Alert severity="info">{emptyCopy}</Alert> : null}
           <SocialSignalsTable items={rows} onSelect={setSelected} />
           {view === 'all' ? <>
             <SocialSignalsTable title="Context" items={contextQuery.data?.items || EMPTY}
@@ -165,7 +160,7 @@ export default function SocialSignalsTab() {
           <Stack direction="row" justifyContent="flex-end" gap={1}>
             <Button disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button>
             <Typography variant="caption" sx={{ alignSelf: 'center' }}>Page {page}</Typography>
-            <Button disabled={page * 50 >= shown.total}
+            <Button disabled={page * 50 >= data.total}
               onClick={() => setPage((value) => value + 1)}>Next</Button>
           </Stack>
         </>

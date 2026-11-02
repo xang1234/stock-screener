@@ -23,8 +23,6 @@ const STATE_REASON_TEXT = {
   market_exposure_below_50: 'Market exposure below 50',
 };
 
-const ACTIONABLE_EXPOSURE_FLOOR = 50;
-
 export const ATTEMPT_TITLES = {
   collection_failed: 'Latest collection did not publish',
   failed: 'Latest analysis failed',
@@ -62,23 +60,20 @@ export const featureLagLabel = (explanation = {}) => {
   return behind > 0 ? `Price features ${behind} session${behind > 1 ? 's' : ''} old` : null;
 };
 
-export const noActionableReason = (rows = []) => {
-  const explanations = rows.map(explanationMap);
-  const exposure = explanations.find((value) => value.market_exposure != null)?.market_exposure;
-  if (exposure != null && Number(exposure) < ACTIONABLE_EXPOSURE_FLOOR) {
-    return `No actionable signals: market exposure is ${formatSocialScore(exposure)}, below ${ACTIONABLE_EXPOSURE_FLOOR}.`;
-  }
-  const counts = new Map();
-  explanations.flatMap((value) => value.state_reasons || [])
-    .forEach((reason) => counts.set(reason, (counts.get(reason) || 0) + 1));
-  const [top] = [...counts].sort((left, right) => right[1] - left[1])[0] || [];
-  if (top === 'stale_features') {
-    const session = explanations.find((value) => value.feature_required_session)?.feature_required_session;
-    return `No actionable signals: price features not yet updated for ${session || 'the latest session'}.`;
-  }
-  return top
-    ? `No actionable signals: ${stateReasonText(top).toLowerCase()} for most signals.`
-    : 'No actionable signals right now.';
+const FALLBACK_REASONS = {
+  market_exposure_below_50: ({ market_exposure: exposure, floor }, { risk_off_count: count }) => (
+    `market exposure is ${formatSocialScore(exposure)}, below ${floor}, so ${count} ready setup${count === 1 ? ' is' : 's are'} under Risk-off`
+  ),
+  stale_features: ({ count, required_session: session }, { watch_count: total }) => (
+    `price features for ${count} of ${total} Watch signals are not yet updated for ${session || 'the latest session'}`
+  ),
+};
+
+export const fallbackText = (fallback) => {
+  const { reason_code: code, reason_params: params = {}, watch_count: watchCount } = fallback;
+  const reason = code && (FALLBACK_REASONS[code]?.(params, fallback)
+    ?? `${stateReasonText(code).toLowerCase()} for ${params.count} of ${watchCount} Watch signals`);
+  return `No actionable signals${reason ? `: ${reason}` : ''}.${watchCount ? ' Showing Watch.' : ''}`;
 };
 
 export const visibleSocialRows = (rows = [], filters = {}) => rows.filter((row) => {

@@ -49,11 +49,15 @@ const queue = (overrides = {}) => ({
   published_at: '2026-09-07T12:00:00Z', ...overrides,
 });
 
-const byView = (views) => async ({ view }) => views[view] || queue({ view, total: 0, items: [] });
-
-const watchItem = (explanation) => ({
+const watchItem = {
   ...item, candidate_key: 'HK:0005', canonical_symbol: '0005', state: 'watch',
-  explanation: { ...item.explanation, ...explanation },
+  explanation: { ...item.explanation, market_exposure: '42' },
+};
+
+const exposureFallback = (watchCount, riskOffCount) => ({
+  from: 'actionable', to: 'watch', reason_code: 'market_exposure_below_50',
+  reason_params: { market_exposure: '42', floor: 50 },
+  watch_count: watchCount, risk_off_count: riskOffCount,
 });
 
 function LocationProbe() {
@@ -163,34 +167,39 @@ describe('SocialSignalsTab', () => {
     const first = renderTab();
     expect(await screen.findByText(/first Social Signal run/)).toBeInTheDocument();
     first.unmount();
-    socialApi.getSocialQueue.mockImplementation(byView({}));
+    socialApi.getSocialQueue.mockResolvedValue(queue({ total: 0, items: [] }));
     renderTab();
     expect(await screen.findByText('No Actionable signals in this window.')).toBeInTheDocument();
   });
 
-  it('opens on Watch with the market exposure reason when nothing is actionable', async () => {
-    socialApi.getSocialQueue.mockImplementation(byView({ watch: queue({ view: 'watch', items: [
-      watchItem({ market_exposure: '42', state_reasons: ['setup_not_ready'] }),
-    ] }) }));
+  it('shows the Watch rows and reason the Actionable response falls back to', async () => {
+    socialApi.getSocialQueue.mockResolvedValue(queue({
+      items: [watchItem], fallback: exposureFallback(1, 2),
+    }));
     renderTab();
     expect(await screen.findByText(
-      'No actionable signals: market exposure is 42, below 50. Showing Watch.',
+      'No actionable signals: market exposure is 42, below 50, so 2 ready setups are under Risk-off. Showing Watch.',
     )).toBeInTheDocument();
     expect(screen.getByText('0005')).toBeInTheDocument();
+    expect(screen.getByText('1 published candidates')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Actionable' })).toHaveClass('MuiButton-contained');
+    expect(socialApi.getSocialQueue.mock.calls.map(([controls]) => controls.view)).toEqual(['actionable']);
+    fireEvent.click(screen.getByRole('button', { name: 'View Risk-off' }));
+    await waitFor(() => expect(socialApi.getSocialQueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ view: 'risk_off' }),
+    ));
   });
 
-  it('names the session stale price features are waiting on', async () => {
-    socialApi.getSocialQueue.mockImplementation(byView({ watch: queue({ view: 'watch', items: [
-      watchItem({ market_exposure: '65', feature_required_session: '2026-10-30',
-        state_reasons: ['stale_features', 'missing_setup_score'] }),
-      { ...watchItem({ market_exposure: '65', state_reasons: ['stale_features'] }),
-        candidate_key: 'HK:0011', canonical_symbol: '0011' },
-    ], total: 2 }) }));
+  it('explains an empty Watch when the ready setups are under Risk-off', async () => {
+    socialApi.getSocialQueue.mockResolvedValue(queue({
+      total: 0, items: [], fallback: exposureFallback(0, 1),
+    }));
     renderTab();
     expect(await screen.findByText(
-      'No actionable signals: price features not yet updated for 2026-10-30. Showing Watch.',
+      'No actionable signals: market exposure is 42, below 50, so 1 ready setup is under Risk-off.',
     )).toBeInTheDocument();
+    expect(screen.queryByText('No Actionable signals in this window.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Risk-off' })).toBeInTheDocument();
   });
 
   it('labels the queue when price features are one session old', async () => {
