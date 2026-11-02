@@ -18,7 +18,7 @@ const LATEST_ONLY_QUERY_ROOTS = new Set([
   'scanResultsQuery',
 ]);
 
-export const PERSISTED_QUERY_CACHE_BUSTER = 'v3';
+export const PERSISTED_QUERY_CACHE_BUSTER = 'v4';
 
 const isLatestInFamily = (query, queryCache) => {
   if (!queryCache) return true;

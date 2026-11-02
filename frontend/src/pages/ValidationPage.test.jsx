@@ -36,10 +36,41 @@ const emptyOverview = (market) => ({
   benchmark_symbol: null,
   horizons: [],
   recent_events: [],
-  failure_clusters: [],
+  groups: [],
   freshness: {},
   degraded_reasons: [],
 });
+
+const groupHorizon = (horizonSessions, sampleSize, avgReturnPct) => ({
+  horizon_sessions: horizonSessions,
+  sample_size: sampleSize,
+  positive_rate: 0.6,
+  avg_return_pct: avgReturnPct,
+  avg_excess_return_pct: 1.2,
+  avg_stopped_return_pct: -0.5,
+  stopped_out_rate: 0.25,
+});
+
+const stageGroups = [
+  {
+    dimension: 'stage',
+    label: 'Stage',
+    value: '2',
+    horizons: [groupHorizon(1, 40, 0.3), groupHorizon(5, 18, 1.4), groupHorizon(20, 32, 4.6), groupHorizon(60, 0, null)],
+  },
+  {
+    dimension: 'stage',
+    label: 'Stage',
+    value: '3',
+    horizons: [groupHorizon(1, 9, -0.2), groupHorizon(5, 8, -1.1), groupHorizon(20, 6, -3.8), groupHorizon(60, 0, null)],
+  },
+  {
+    dimension: 'extension_band',
+    label: 'Extension vs 50DMA',
+    value: '30%+',
+    horizons: [groupHorizon(1, 25, 0.9), groupHorizon(5, 24, 2.2), groupHorizon(20, 21, 5.1), groupHorizon(60, 0, null)],
+  },
+];
 
 describe('ValidationPage', () => {
   beforeEach(() => {
@@ -47,7 +78,7 @@ describe('ValidationPage', () => {
     window.localStorage.clear();
   });
 
-  it('renders overview metrics, events, and failure clusters', async () => {
+  it('renders overview metrics, events, and an empty group table', async () => {
     getValidationOverview.mockResolvedValue({
       source_kind: 'scan_pick',
       lookback_days: 90,
@@ -91,15 +122,7 @@ describe('ValidationPage', () => {
           attributes: { symbol: 'AMD' },
         },
       ],
-      failure_clusters: [
-        {
-          cluster_key: 'rating:Buy',
-          label: 'Rating: Buy',
-          sample_size: 4,
-          avg_return_pct: -3.2,
-          median_return_pct: -2.5,
-        },
-      ],
+      groups: [],
       freshness: {
         latest_feature_as_of_date: '2026-04-01',
         latest_theme_alert_at: '2026-04-02T03:00:00Z',
@@ -116,9 +139,9 @@ describe('ValidationPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Validation' })).toBeInTheDocument();
     expect(screen.getByText('Recent Events')).toBeInTheDocument();
-    expect(screen.getByText('Failure Clusters')).toBeInTheDocument();
+    expect(screen.getByText('By Group')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'NVDA' })).toHaveAttribute('href', '/stocks/NVDA');
-    expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
+    expect(screen.getByText('No grouped results for this selection.')).toBeInTheDocument();
     expect(screen.getByText(formatDate('2026-04-01'))).toBeInTheDocument();
     expect(screen.getByText(formatDate('2026-04-02'))).toBeInTheDocument();
     const cardTitles = screen.getAllByText(/^\d+ Sessions?$/).map((title) => title.textContent);
@@ -164,7 +187,7 @@ describe('ValidationPage', () => {
         market: 'US',
         horizons: [],
         recent_events: [],
-        failure_clusters: [],
+        groups: [],
         freshness: {},
         degraded_reasons: [],
       })
@@ -174,7 +197,7 @@ describe('ValidationPage', () => {
         market: 'US',
         horizons: [],
         recent_events: [],
-        failure_clusters: [],
+        groups: [],
         freshness: {},
         degraded_reasons: [],
       })
@@ -184,7 +207,7 @@ describe('ValidationPage', () => {
         market: 'US',
         horizons: [],
         recent_events: [],
-        failure_clusters: [],
+        groups: [],
         freshness: {},
         degraded_reasons: ['missing_price_cache'],
       });
@@ -201,6 +224,51 @@ describe('ValidationPage', () => {
 
     expect(await screen.findByText(/validation is partially degraded/i)).toBeInTheDocument();
     expect(getValidationOverview).toHaveBeenCalledWith('theme_alert', 180, 'US');
+  });
+
+  it('switches group stats with the horizon picker and marks small samples', async () => {
+    getValidationOverview.mockResolvedValue({
+      ...emptyOverview('US'),
+      benchmark_symbol: 'SPY',
+      stop_loss_pct: 7,
+      groups: stageGroups,
+    });
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    const table = await screen.findByRole('table', { name: 'By group' });
+    const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
+    expect(headers).toEqual(['Group', 'Sample', 'Positive', 'Avg Return', 'Avg vs SPY', 'Avg with 7% stop', 'Stopped out']);
+    const rowText = () => within(table).getAllByRole('row').slice(1).map((row) => (
+      Array.from(row.cells).map((cell) => cell.textContent)
+    ));
+    expect(rowText()).toEqual([
+      ['Stage'],
+      ['2', '32', '60%', '4.6%', '1.2%', '-0.5%', '25%'],
+      ['3', '6', '60%', '-3.8%', '1.2%', '-0.5%', '25%'],
+      ['Extension vs 50DMA'],
+      ['30%+', '21', '60%', '5.1%', '1.2%', '-0.5%', '25%'],
+    ]);
+    const stageThree = within(table).getByText('3').closest('tr');
+    expect(stageThree).toHaveAttribute('title', 'Small sample: fewer than 20 picks');
+    expect(stageThree.cells[1]).toHaveStyle({ color: 'rgb(139, 147, 167)' });
+    expect(within(table).getByText('2').closest('tr')).not.toHaveAttribute('title');
+
+    fireEvent.click(screen.getByRole('button', { name: '5S' }));
+
+    expect(rowText()).toEqual([
+      ['Stage'],
+      ['2', '18', '60%', '1.4%', '1.2%', '-0.5%', '25%'],
+      ['3', '8', '60%', '-1.1%', '1.2%', '-0.5%', '25%'],
+      ['Extension vs 50DMA'],
+      ['30%+', '24', '60%', '2.2%', '1.2%', '-0.5%', '25%'],
+    ]);
+    expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 picks');
+    expect(within(table).getByText('30%+').closest('tr')).not.toHaveAttribute('title');
   });
 
   it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
