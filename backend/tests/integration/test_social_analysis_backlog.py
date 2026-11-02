@@ -925,34 +925,85 @@ def test_confirmed_pre_dispatch_failure_releases_budget_without_retry(backlog):
         assert work.error_code == "llm_configuration_error"
 
 
-def test_refused_request_releases_its_charge_and_is_not_retried(backlog):
-    from app.infra.db.models.social_analysis import (
-        SocialExtractionWork,
-        SocialLLMAttempt,
-        SocialLLMBudgetDay,
-    )
-    from app.services.llm.llm_service import LLMProviderRejectedError
+class RefusingLLM(FakeLLM):
+    def __init__(self, status, *, answers=0):
+        super().__init__()
+        self.status, self.answers = status, answers
 
-    class RefusingLLM:
-        calls = 0
+    async def completion(self, **kwargs):
+        from app.services.llm.llm_service import LLMProviderRejectedError
+        if self.calls < self.answers:
+            return await super().completion(**kwargs)
+        self.calls += 1
+        raise LLMProviderRejectedError("metered_provider_rejected", self.status)
 
-        async def completion(self, **_kwargs):
-            self.calls += 1
-            raise LLMProviderRejectedError("metered_provider_rejected")
 
-    llm = RefusingLLM()
-    worker = processor(backlog, llm)
+def refusal_outcome(backlog, work_ids):
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay
+    with backlog() as db:
+        works = {(work.state, work.error_code) for work in (db.get(SocialExtractionWork, i) for i in work_ids)}
+        attempts = sorted(attempt.state for attempt in db.scalars(select(SocialLLMAttempt)))
+        reserved = sum(day.reserved_usd for day in db.scalars(select(SocialLLMBudgetDay)))
+    return works, attempts, reserved
+
+
+@pytest.mark.parametrize("status,answers", [(400, 0), (401, 1), (402, 1), (403, 1), (404, 1)])
+def test_provider_wide_refusal_returns_every_claimed_post_and_stops_the_run(backlog, status, answers):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog, output_rate="244.140625")
+    llm = RefusingLLM(status, answers=answers)
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 46)]
+
+    result = asyncio.run(worker.execute(NOW, 45))
+    returned = work_ids[20 * answers:]
+
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20 * answers, len(returned), 0, answers + 1)
+    assert refusal_outcome(backlog, returned) == (
+        {("pending", "provider_rejected")}, ["reconciled"] * answers + ["released"], 0)
+
+    llm.answers = 10 ** 6
+    retried = asyncio.run(worker.execute(NOW, 45))
+    assert (retried.succeeded, retried.deferred, retried.failed) == (len(returned), 0, 0)
+
+
+def test_refusal_after_an_answer_fails_only_its_batch_without_splitting_it(backlog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog, output_rate="244.140625")
+    llm = RefusingLLM(400, answers=1)
+    worker = ProcessSocialBacklog(backlog, llm=llm, batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 46)]
+
+    result = asyncio.run(worker.execute(NOW, 45))
+
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 0, 25, 3)
+    assert refusal_outcome(backlog, work_ids[20:]) == (
+        {("failed_terminal", "provider_rejected")}, ["reconciled", "released", "released"], 0)
+
+
+def test_refusal_arriving_after_claim_expiry_still_releases_its_charge(backlog):
+    from app.infra.db.models.social_analysis import SocialLLMAttempt
+
+    worker = processor(backlog, None)
+
+    class ExpiresThenRefuses(RefusingLLM):
+        async def completion(self, **kwargs):
+            worker._claim(NOW + timedelta(minutes=11), 1, ())
+            return await super().completion(**kwargs)
+
+    worker.llm = ExpiresThenRefuses(400)
     work_id = enqueue(backlog, worker, post(1))
 
     result = asyncio.run(worker.execute(NOW, 1))
 
+    assert (result.deferred, refusal_outcome(backlog, [work_id])) == (
+        1, ({("pending", "provider_rejected")}, ["released"], 0))
     with backlog() as db:
-        attempts = [attempt.state for attempt in db.scalars(select(SocialLLMAttempt))]
-        day = db.scalar(select(SocialLLMBudgetDay))
-        work = db.get(SocialExtractionWork, work_id)
-        assert (result.failed, llm.calls, attempts, day.reserved_usd, day.actual_usd) == (
-            1, 1, ["released"], 0, 0)
-        assert (work.state, work.error_code) == ("failed_terminal", "provider_rejected")
+        attempt_id = db.scalar(select(SocialLLMAttempt.id))
+    assert worker.budget.release_unbilled(attempt_id) is True
+    assert refusal_outcome(backlog, [work_id])[1:] == (["released"], 0)
 
 
 def test_failure_before_dispatch_is_left_for_claim_expiry_not_completion_unknown(backlog, monkeypatch):

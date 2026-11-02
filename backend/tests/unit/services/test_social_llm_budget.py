@@ -464,6 +464,7 @@ def test_metered_transport_separates_refused_requests_from_unknown_outcomes(
                     allow_fallbacks=False, num_retries=0, metered=True)
             return error.value
     error = asyncio.run(run())
-    assert isinstance(error, LLMProviderRejectedError) is refused
+    assert (isinstance(error, LLMProviderRejectedError), getattr(error, "status_code", None)) == (
+        refused, status if refused else None)
     assert f"status={status}" in caplog.text
     assert "synthetic-private-response" not in caplog.text
