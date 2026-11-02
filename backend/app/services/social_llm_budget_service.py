@@ -270,10 +270,10 @@ class SocialLLMBudgetService:
             attempt.state = "dispatched"
             return True
 
-    def release(self, attempt_id):
+    def release(self, attempt_id, states=("reserved",)):
         with social_analysis_transaction(self.session_factory) as db:
             attempt = db.get(SocialLLMAttempt, attempt_id)
-            if attempt.state != "reserved":
+            if attempt.state not in states:
                 return False
             day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
             day.reserved_usd -= attempt.estimated_usd
@@ -347,13 +347,7 @@ class SocialBudgetReservation:
             raise ValueError("social_attempt_not_reserved")
 
     def release_pre_dispatch(self) -> None:
-        state = self.state
-        released = (
-            self.budget.release(self.attempt_id)
-            if state == "reserved"
-            else self.budget.release_unbilled(self.attempt_id)
-        )
-        if not released:
+        if not self.budget.release(self.attempt_id, ("reserved", "dispatched")):
             raise ValueError("social_attempt_not_releasable")
 
     def reconcile(
