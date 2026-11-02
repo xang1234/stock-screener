@@ -318,8 +318,7 @@ def test_projection_and_pointer_roll_back_together_after_apply(store, monkeypatc
     with store() as db:
         assert db.query(ThemeCluster).count() == 0
         assert db.get(SocialSignalRunPointer, "latest_published").run_id == "prior"
-    monkeypatch.setattr(SocialThemeProjectionService, "apply_live", original)
-    assert w.publish("new", version).published
+        assert db.get(SocialSignalRun, "new").status == "failed"
 
 
 def test_published_social_work_is_admitted_to_economic_processing(store):
@@ -978,8 +977,8 @@ def test_grace_boundary_during_final_publication_lock_is_rejected(store):
     collected(w, "run", at)
     context = publication_context(store, at)
     prepared = w.prepare_run("run", (), at, context=context)
-    ticks = iter((at, at+timedelta(seconds=1)))
-    w.clock = lambda: next(ticks)
+    ticks = iter((at,))
+    w.clock = lambda: next(ticks, at+timedelta(seconds=1))
     with pytest.raises(ValueError, match="market_context_changed"):
         w.publish("run", prepared.registry_version)
     with store() as db:
