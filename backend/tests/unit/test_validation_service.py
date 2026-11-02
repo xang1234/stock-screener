@@ -16,6 +16,7 @@ from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import ValidationSourceKind
 from app.services.market_calendar_service import CalendarCoverageExpired
+from app.services.price_row_normalization import normalize_price_frame
 from app.services.validation_service import (
     EvaluatedValidationEvent,
     HorizonOutcome,
@@ -868,6 +869,62 @@ def test_extension_above_the_50dma_reads_only_bars_through_the_signal_date():
     )
 
     assert [event.pct_above_50dma for event in evaluated] == [pytest.approx(20.0), None, None]
+
+
+def test_extension_is_unknown_when_a_session_before_entry_lacks_a_cached_bar():
+    start = date(2026, 1, 1)
+    rows = [(100.0,) * 4] * 80
+    rows[10] = (100.0, 100.0, 100.0, float("nan"))
+    rows[70] = (150.0,) * 4
+    history = _history_frame(start, rows)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": normalize_price_frame(history)}))
+
+    evaluated, _ = calculator.evaluate_many(
+        [
+            _scan_event("NVDA", start + timedelta(days=54)),
+            _scan_event("NVDA", start + timedelta(days=70)),
+            # On the last session, so its window is pending.
+            _scan_event("NVDA", start + timedelta(days=79)),
+        ],
+        sessions=_sessions_of(history),
+    )
+
+    assert [event.pct_above_50dma for event in evaluated] == [
+        None,
+        pytest.approx(48.514851),
+        pytest.approx(-0.990099),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("closes", "band"),
+    [
+        ([100.0] * 50, "0-10%"),
+    ],
+)
+def test_a_pick_on_the_lookback_start_is_banded_by_the_50_sessions_before_its_entry(
+    session, closes, band
+):
+    _add_universe(session, "NVDA")
+    pick_day = FIXED_TODAY - timedelta(days=30)
+    _add_pick(session, _add_run(session, pick_day), "NVDA", 90.0)
+    session.commit()
+    first_day = pick_day - timedelta(days=49)
+    rows = [(close,) * 4 for close in closes] + [(100.0,) * 4] * 30
+    service = _service({"NVDA": _history_frame(first_day, rows)})
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=30,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (g.value, g.horizons[0].sample_size)
+        for g in payload.groups
+        if g.dimension == "extension_band"
+    ] == [(band, 1)]
 
 
 def test_extension_of_a_pre_open_alert_leaves_out_its_entry_session():

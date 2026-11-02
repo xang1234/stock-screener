@@ -64,6 +64,9 @@ STOP_LOSS_PCT = 7.0
 # path: replay every earlier pick of the window's symbols, which means ranking every earlier run.
 # Replay picks are stored already, so they count over all of them instead.
 OVERLAP_LOOKBEHIND = timedelta(days=math.ceil(max(HORIZONS) * 7 / 5) + 21)
+# Calendar days that hold the 50 sessions before an entry that extension reads, with the
+# same holiday margin.
+EXTENSION_LOOKBEHIND = timedelta(days=math.ceil(50 * 7 / 5) + 21)
 NO_EVENTS_REASONS = {
     ValidationSourceKind.SCAN_PICK: "no_matching_scan_picks",
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
@@ -618,12 +621,15 @@ class PriceOutcomeCalculator:
             return EvaluatedValidationEvent(
                 raw=event, entry_at=None, entry_price=None, exits=exits, history_missing=True
             )
-        signal_end = pd.Timestamp(_event_date(event.event_at)) + pd.Timedelta(days=1)
-        extension = _pct_above_50dma(history, signal_end if sessions.empty else sessions[0])
+        evaluation = EvaluatedValidationEvent(
+            raw=event,
+            entry_at=None,
+            entry_price=None,
+            exits=exits,
+            pct_above_50dma=_pct_above_50dma(history, calendar[:start][-50:]),
+        )
         if sessions.empty:
-            return EvaluatedValidationEvent(
-                raw=event, entry_at=None, entry_price=None, pct_above_50dma=extension
-            )
+            return evaluation
 
         # Score only the sessions before the first one the cache lacks: past a gap, every
         # later bar would stand in for an earlier session.
@@ -632,30 +638,25 @@ class PriceOutcomeCalculator:
         entry_at = sessions[0].date()
         entry_price = float(window["Open"].iloc[0]) if cached[0] else math.nan
         if not entry_price > 0:
-            return EvaluatedValidationEvent(
-                raw=event,
-                entry_at=entry_at,
-                entry_price=None,
-                exits=exits,
-                pct_above_50dma=extension,
-            )
-        return EvaluatedValidationEvent(
-            raw=event,
+            return replace(evaluation, entry_at=entry_at)
+        return replace(
+            evaluation,
             entry_at=entry_at,
             entry_price=entry_price,
-            exits=exits,
             outcomes=_horizon_outcomes(window, entry_price, benchmark),
-            pct_above_50dma=extension,
         )
 
 
-def _pct_above_50dma(history: pd.DataFrame, entry: pd.Timestamp) -> float | None:
-    """The last close before the ``entry`` session against the mean of the 50 closes ending there.
+def _pct_above_50dma(history: pd.DataFrame, before_entry: pd.DatetimeIndex) -> float | None:
+    """The last close of the 50 sessions ``before_entry`` against their mean close.
 
-    Bars from the entry session on are left out: they were unknown when the position opened.
+    Sessions from the entry on are left out: they were unknown when the position opened. A
+    session the cache lacks leaves the extension unknown rather than averaging across the gap.
     """
-    closes = history.loc[history.index < entry, "Close"].to_numpy(dtype=float)[-50:]
-    if len(closes) < 50 or not (closes > 0).all():
+    if len(before_entry) < 50 or not before_entry.isin(history.index).all():
+        return None
+    closes = history.loc[before_entry, "Close"].to_numpy(dtype=float)
+    if not (closes > 0).all():
         return None
     return (closes[-1] / closes.mean() - 1.0) * 100.0
 
@@ -886,10 +887,12 @@ class ValidationService:
             # bar while the session is open. A bar fetched mid-session stays partial until the
             # after-close refresh, which can run after this cut-off moves.
             # Starting no later than the cutoff keeps the session before ``through`` in the
-            # calendar even when every event falls on ``through``.
+            # calendar even when every event falls on ``through``. The earlier sessions only
+            # serve extension, which reads the 50 before each entry: windows look forward.
             sessions=self._market_calendar.trading_days(
                 market,
-                min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)]),
+                min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)])
+                - EXTENSION_LOOKBEHIND,
                 through,
             ),
         )
