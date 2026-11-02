@@ -24,6 +24,7 @@ from app.infra.db.repositories.published_social_signal_reader import (
 
 
 WINDOW_DAYS = {"1d": 1, "7d": 7, "14d": 14}
+ROOT_CAUSE_REASONS = {"stale_features"}
 _PUBLIC_ATTEMPT_REASONS = {
     "bounded_provider_read", "daily_limit_exhausted", "incremental_gap_suspected",
     "provider_error", "provider_network_error",
@@ -276,17 +277,17 @@ class SocialSignalQueries:
             }
             return all(value in haystacks.get(key, "") for key, value in filters.items())
 
-        def read(state, page=page, page_size=page_size):
-            return self.reader.queue(
-                market, WINDOW_DAYS[window], state, rank_mode, page, page_size,
-                item_filter=matches if filters else None, run_id=run.id,
-            )
-
-        result = read(view)
+        days, scope = WINDOW_DAYS[window], {"item_filter": matches if filters else None, "run_id": run.id}
+        result = self.reader.queue(market, days, view, rank_mode, page, page_size, **scope)
         total, items = result.total, [self._item(item, run) for item in result.items]
         fallback = None
         if watch_fallback and view == "actionable" and not total:
-            total, items, fallback = self._watch_fallback(read, run, page, page_size)
+            watch = [self._item(record, run)
+                     for record in self.reader.rows(market, days, "watch", rank_mode, **scope)]
+            risk_off = self.reader.queue(market, days, "risk_off", rank_mode, 1, 1, **scope)
+            fallback = self._why_not_actionable(watch, risk_off, run)
+            if fallback:
+                total, items = len(watch), watch[(page - 1) * page_size:page * page_size]
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)
         oldest_observation_at = self._oldest_successful_observation_at(run)
@@ -307,12 +308,9 @@ class SocialSignalQueries:
             "fallback": fallback,
         }
 
-    def _watch_fallback(self, read, run, page, page_size):
-        """The same run's Watch rows for an empty Actionable view, and why it is empty."""
-        watch = [self._item(record, run) for record in read("watch", 1, None).items]
-        risk_off = read("risk_off", 1, 1)
+    def _why_not_actionable(self, watch, risk_off, run):
         if not watch and not risk_off.total:
-            return 0, [], None
+            return None
         exposure = (self._item(risk_off.items[0], run)["explanation"].get("market_exposure")
                     if risk_off.items else None)
         reasons = Counter(reason for item in watch
@@ -321,8 +319,7 @@ class SocialSignalQueries:
             code = "market_exposure_below_50"
             params = {"market_exposure": exposure, "floor": ACTIONABLE_EXPOSURE_FLOOR}
         elif reasons:
-            # Stale features null every setup input, so they tie with the missing_* reasons they cause.
-            code = max(reasons, key=lambda reason: (reasons[reason], reason == "stale_features"))
+            code = max(reasons, key=lambda reason: (reasons[reason], reason in ROOT_CAUSE_REASONS))
             params = {"count": reasons[code]}
             if code == "stale_features":
                 params["required_session"] = next(
@@ -331,8 +328,7 @@ class SocialSignalQueries:
                 )
         else:
             code, params = None, {}
-        start = (page - 1) * page_size
-        return len(watch), watch[start:start + page_size], {
+        return {
             "from": "actionable", "to": "watch", "reason_code": code,
             "reason_params": params, "watch_count": len(watch),
             "risk_off_count": risk_off.total,

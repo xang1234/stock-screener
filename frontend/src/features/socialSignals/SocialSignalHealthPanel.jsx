@@ -16,6 +16,7 @@ import {
 } from '../../api/socialSignals';
 import { ATTEMPT_TITLES } from './socialSignalPresentation';
 
+const UNRESOLVED_PLACEHOLDER_MARKET = 'US';
 const money = (value) => `US$${value ?? '—'}`;
 const errorCode = (error) => error?.response?.data?.detail?.code
   || error?.response?.data?.detail || error?.message || 'Request failed';
@@ -72,8 +73,9 @@ export default function SocialSignalHealthPanel() {
   });
   const unresolved = useQuery({
     queryKey: ['socialAdmin', 'unresolved', keyGeneration, unresolvedPage],
-    // Unresolved tickers are global; the route still requires a market.
-    queryFn: () => getSocialUnresolved({ market: 'US', window: '7d', page: unresolvedPage, pageSize: 50 }),
+    queryFn: () => getSocialUnresolved({
+      market: UNRESOLVED_PLACEHOLDER_MARKET, window: '7d', page: unresolvedPage, pageSize: 50,
+    }),
     enabled,
   });
   const mutation = useMutation({

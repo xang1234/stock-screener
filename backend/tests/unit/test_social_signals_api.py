@@ -456,7 +456,6 @@ async def test_published_queue_exposes_frozen_candidate_context(
 
 
 def _publish_states(db, rows, *, exposure):
-    """Publish (symbol, state, reasons, queue score) rows with their frozen context."""
     from datetime import datetime, timezone
     from decimal import Decimal
     from app.domain.social_signals.records import SocialSnapshotRecord
