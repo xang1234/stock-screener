@@ -369,20 +369,29 @@ async def test_budget_pause_keeps_work_and_does_not_prepare():
     assert writer.failures == []
 
 
+def lose_lease(refresh, *renewals):
+    refresh.provider_lease.renew_results = list(renewals)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("interrupt,status,reason", [
-    (lambda refresh: setattr(refresh.provider_lease, "acquired", False), "deferred", "provider_lease_unavailable"),
-    (lambda refresh: setattr(refresh.provider_lease, "renew_results", [True, False]), "deferred", "provider_lease_lost"),
-    (lambda refresh: setattr(refresh.catalog, "current", False), "blocked", "social_runtime_changed"),
-    (lambda refresh: refresh.providers["official"].fail_sources.update({"1", "2"}), "blocked",
-     "source_participation_failed"),
+@pytest.mark.parametrize("interrupt,status,reason,closes", [
+    (lambda refresh: setattr(refresh.provider_lease, "acquired", False),
+     "deferred", "provider_lease_unavailable", False),
+    (lambda refresh: lose_lease(refresh, True, False), "deferred", "provider_lease_lost", False),
+    (lambda refresh: setattr(refresh.catalog, "current", False), "blocked", "social_runtime_changed", True),
+    (lambda refresh: (setattr(refresh.catalog, "current", False), lose_lease(refresh, False)),
+     "deferred", "provider_lease_lost", False),
+    (lambda refresh: refresh.providers["official"].fail_sources.update({"1", "2"}),
+     "blocked", "source_participation_failed", True),
+    (lambda refresh: (refresh.providers["official"].fail_sources.update({"1", "2"}), lose_lease(refresh, True, True, False)),
+     "deferred", "provider_lease_lost", False),
 ])
-async def test_collection_nothing_can_resume_closes_its_generation(interrupt, status, reason):
+async def test_only_the_lease_holder_closes_a_generation_nothing_can_resume(interrupt, status, reason, closes):
     refresh, _, _, writer, backlog, _ = use_case()
     interrupt(refresh)
     result = await refresh.execute("scheduled", NOW)
     assert (result.processing_status, result.reason_codes) == (status, (reason,))
-    assert writer.failures == [("scheduled-202609071200", reason)]
+    assert writer.failures == ([("scheduled-202609071200", reason)] if closes else [])
     assert not backlog.enqueued
 
 
