@@ -1,5 +1,6 @@
 """Resume saved posts under the shared budget; collection/publication live elsewhere."""
 import asyncio
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -80,7 +81,7 @@ class _CompletionUnknown(Exception):
 
 class _RunLedger:
     def __init__(self, calls):
-        self.calls_left, self.answered, self.refused_leaves, self.refusal_status = calls, 0, [], None
+        self.calls_left, self.answered, self.refusal_status = calls, 0, None
 
     @property
     def stopped(self):
@@ -510,34 +511,47 @@ class ProcessSocialBacklog:
         )
         succeeded = deferred = 0
         ledger = _RunLedger(self.max_calls_per_run)
+        queue = deque()
         for batch in self._groups(claimed, self.batch_size):
             items = []
             for work_id, token, _, _, _, snapshot in batch:
                 snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
                 snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
                 items.append(((work_id, token), SocialPostRecord(**snapshot)))
-            outcome = await self._extract(tuple(items), batch[0][2:5], current_time, ledger)
-            if isinstance(outcome, str):
-                outcome = await self._isolate(tuple(items), batch[0][2:5], current_time, outcome, ledger)
-            succeeded, deferred, failed, outside = (
-                total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
-            )
+            queue.append((tuple(items), batch[0][2:5], None))
+        refused = []
+        while queue:
+            items, config, code = queue.popleft()
+            claims = tuple(claim for claim, _ in items)
+            if ledger.stopped or ledger.calls_left < 1:
+                deferred += self._finish_many(claims, "pending", "provider_rejected" if ledger.stopped else code)
+                continue
+            outcome = await self._extract(items, config, current_time, ledger)
+            if not isinstance(outcome, str):
+                succeeded, deferred, failed, outside = (
+                    total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
+                )
+            elif len(items) > 1 and outcome not in _UNSPLITTABLE_ERRORS:
+                middle = len(items) // 2
+                queue += ((items[:middle], config, outcome), (items[middle:], config, outcome))
+            elif outcome == "provider_rejected":
+                if self._finish_many(claims, "pending", outcome):
+                    refused += claims
+            else:
+                failed += self._finish_many(claims, "failed_terminal", outcome)
         if ledger.answered:
-            failed += self._settle(ledger.refused_leaves, "provider_rejected")
+            failed += self._settle(refused, "provider_rejected")
         else:
-            deferred += len(ledger.refused_leaves)
+            deferred += len(refused)
         if ledger.refusal_status and (ledger.stopped or not ledger.answered):
             logger.error("Social LLM provider refused requests with status %s after answering %d this run; "
                          "deferred %d posts", ledger.refusal_status, ledger.answered, deferred)
         return BacklogResult(succeeded, deferred, failed, outside, self.budget.status(current_time()).next_reset_at)
 
-    async def _extract(self, items, config, current_time, ledger, unsent_error=None):
+    async def _extract(self, items, config, current_time, ledger):
         model, prompt, schema = config
         claims = tuple(claim for claim, _ in items)
         work_ids = [work_id for work_id, _ in claims]
-        if ledger.stopped or ledger.calls_left < 1:
-            code = "provider_rejected" if ledger.stopped else unsent_error
-            return (0, self._finish_many(claims, "pending", code), 0, 0)
         for retry in range(2):
             metered = _MeteredCompletion(self, claims, current_time, ledger, retry=retry)
             try:
@@ -580,21 +594,3 @@ class ProcessSocialBacklog:
             logger.exception("Saving social LLM results failed work_ids=%s", work_ids)
             return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0)
         return (states.count("succeeded"), 0, states.count("failed_terminal"), 0)
-
-    async def _isolate(self, items, config, current_time, code, ledger):
-        """Narrow an unusable batch response to the posts that provoke it."""
-        claims = tuple(claim for claim, _ in items)
-        if len(items) == 1 and code == "provider_rejected":
-            if self._finish_many(claims, "pending", code):
-                ledger.refused_leaves += claims
-            return (0, 0, 0, 0)
-        if len(items) == 1 or code in _UNSPLITTABLE_ERRORS:
-            return (0, 0, self._finish_many(claims, "failed_terminal", code), 0)
-        middle = len(items) // 2
-        totals = (0, 0, 0, 0)
-        for half in (items[:middle], items[middle:]):
-            outcome = await self._extract(half, config, current_time, ledger, code)
-            if isinstance(outcome, str):
-                outcome = await self._isolate(half, config, current_time, outcome, ledger)
-            totals = tuple(total + part for total, part in zip(totals, outcome))
-        return totals

@@ -982,11 +982,10 @@ def test_refusals_after_an_answer_are_isolated_only_within_the_run_call_cap(back
 
     result = asyncio.run(worker.execute(NOW, 45))
 
-    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 16, 9, 20)
-    assert refusal_outcome(backlog, work_ids[20:29]) == (
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 22, 3, 20)
+    assert refusal_outcome(backlog, work_ids[40:43]) == (
         {("failed_terminal", "provider_rejected")}, ["reconciled"] + ["released"] * 19, 0)
-    assert refusal_outcome(backlog, work_ids[29:40])[0] == {("pending", "provider_rejected")}
-    assert refusal_outcome(backlog, work_ids[40:])[0] == {("pending", None)}
+    assert refusal_outcome(backlog, work_ids[20:40] + work_ids[43:])[0] == {("pending", "provider_rejected")}
 
 
 class PoisonLLM(FakeLLM):
