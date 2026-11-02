@@ -154,9 +154,11 @@ class Writer:
     def current_inputs_ready(self, run_id):
         return True
 
-    def fail_analysis(self, run_id, reason_code):
-        self.events.append("writer.fail_analysis")
+    def fail_run(self, run_id, reason_code):
+        self.events.append("writer.fail_run")
         self.failures.append((run_id, reason_code))
+
+    fail_analysis = fail_run
 
     def prepare_run(self, run_id, rows, as_of, *, theme_evidence=(), context=None):
         self.events.append("writer.prepare")
@@ -361,11 +363,46 @@ async def test_provider_lease_is_renewed_before_each_source_read():
 
 @pytest.mark.asyncio
 async def test_budget_pause_keeps_work_and_does_not_prepare():
-    refresh, events, _, _, backlog, _ = use_case(deferred=1)
+    refresh, events, _, writer, backlog, _ = use_case(deferred=1)
     result = await refresh.execute("scheduled", NOW)
     assert result.processing_status == "deferred"
     assert backlog.enqueued
     assert "writer.prepare" not in events
+    assert writer.failures == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt,status,reason", [
+    (lambda refresh: setattr(refresh.provider_lease, "acquired", False), "deferred", "provider_lease_unavailable"),
+    (lambda refresh: setattr(refresh.provider_lease, "renew_results", [True, False]), "deferred", "provider_lease_lost"),
+    (lambda refresh: setattr(refresh.catalog, "current", False), "blocked", "social_runtime_changed"),
+    (lambda refresh: refresh.providers["official"].fail_sources.update({"1", "2"}), "blocked",
+     "source_participation_failed"),
+])
+async def test_collection_nothing_can_resume_closes_its_generation(interrupt, status, reason):
+    refresh, _, _, writer, backlog, _ = use_case()
+    interrupt(refresh)
+    result = await refresh.execute("scheduled", NOW)
+    assert (result.processing_status, result.reason_codes) == (status, (reason,))
+    assert writer.failures == [("scheduled-202609071200", reason)]
+    assert not backlog.enqueued
+
+
+@pytest.mark.asyncio
+async def test_duplicate_delivery_without_the_lease_leaves_the_generation_to_its_collector():
+    refresh, _, provider, writer, _, _ = use_case()
+
+    def already_exists(run_id, as_of):
+        raise ValueError("run_exists")
+
+    writer.create_run = already_exists
+    writer.read_run_inputs = lambda run_id: SavedSocialRunInputs(run_id, NOW, 7, (), (), ())
+    refresh.provider_lease.acquired = False
+
+    result = await refresh.execute("scheduled", NOW)
+
+    assert (result.processing_status, result.reason_codes) == ("deferred", ("provider_lease_unavailable",))
+    assert writer.failures == [] and not provider.requests
 
 
 @pytest.mark.asyncio
@@ -811,3 +848,38 @@ async def test_unavailable_post_leaves_mention_history_incomplete(tmp_path):
 
     assert [(item.candidate_key, item.history_complete) for item in evidence] == [("US:AAA", False)]
     engine.dispose()
+
+
+def test_scoring_evidence_never_reads_generations_older_than_its_window(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+    from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
+    from app.infra.db.repositories.social_refresh_support import SocialScoringEvidenceReader
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    from app.services.social_source_admin_service import SocialSourceAdminService
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'aged-social.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    with sessions() as db:
+        SocialSourceAdminService(db).ensure_seed_sources()
+    with sessions.begin() as db:
+        registry = db.get(SocialSourceRegistry, 1)
+        registry.mode, registry.provider = "live", "official"
+    SocialSignalWriter(sessions, clock=lambda: NOW).create_run("current", NOW)
+    with sessions.begin() as db:
+        db.add(SocialSignalRun(
+            id="aged", registry_id=1, registry_version=db.get(SocialSourceRegistry, 1).version,
+            mode="live", provider="official", status="failed", created_at=NOW - timedelta(days=16),
+            source_outcomes_json={"1": {"read_status": "success"}},
+            application_progress_json={"sources": {}, "observations": {
+                "1": {"inputs": [{"content_item_id": 1, "post": {"unreadable": True}}]},
+            }},
+            feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        ))
+
+    reader = SocialScoringEvidenceReader(sessions)
+    assert reader.retained_posts("current", NOW) == ()
+    assert reader.read("current", NOW) == ()

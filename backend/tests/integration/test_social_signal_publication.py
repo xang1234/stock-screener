@@ -194,6 +194,25 @@ def test_mode_change_rejects_prepared_run_and_validation_never_publishes(store):
         assert db.query(SocialSignalRunPointer).count() == 0
 
 
+def test_failed_publication_closes_its_staged_generation(store):
+    from app.infra.db.models.social_signals import SocialSourceRegistry
+    w = writer(store)
+    collected(w)
+    w.prepare_run("run", (row("run"),), NOW)
+    with store.begin() as db:
+        registry = db.get(SocialSourceRegistry, 1)
+        version = registry.version
+        registry.version = version + 1
+    with pytest.raises(ValueError, match="version_changed"):
+        w.publish("run", version)
+    with store() as db:
+        run = db.get(SocialSignalRun, "run")
+        assert (run.status, run.application_progress_json["failure"]["reason_code"]) == (
+            "failed", "publication_failed")
+    # Its frozen manifest still serves reads and deliberate replays.
+    assert w.read_run_inputs("run").work_ids == ()
+
+
 def test_prepared_run_cannot_be_retimed_after_backlog(store):
     w = writer(store)
     collected(w)

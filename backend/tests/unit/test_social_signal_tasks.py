@@ -180,6 +180,50 @@ def test_budget_resume_ignores_generation_with_replay_descendant(
     assert tasks._latest_resumable_run() is None
 
 
+def test_budget_resume_ignores_generations_older_than_the_evidence_window(
+    db_session, monkeypatch
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database
+    from app.infra.db.models.social_signals import (
+        SocialSignalRun,
+        SocialSourceRegistry,
+    )
+    from app.interfaces.tasks import social_signal_tasks as tasks
+
+    registry = db_session.get(SocialSourceRegistry, 1)
+    if registry is None:
+        registry = SocialSourceRegistry(id=1, version=1)
+        db_session.add(registry)
+    elif registry.version is None:
+        registry.version = 1
+    registry.mode, registry.provider = "live", "official"
+
+    def collected(run_id, age):
+        return SocialSignalRun(
+            id=run_id, registry_id=1, registry_version=registry.version,
+            mode="live", provider="official", status="running",
+            source_outcomes_json={"1": {"read_status": "success"}, "2": {"read_status": "success"}},
+            application_progress_json={"sources": {"1": {}, "2": {}}, "observations": {"1": {}, "2": {}}},
+            feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+            created_at=NOW - age,
+        )
+
+    db_session.add(collected("aged", timedelta(days=16)))
+    db_session.commit()
+    monkeypatch.setattr(
+        database,
+        "SessionLocal",
+        sessionmaker(db_session.get_bind(), expire_on_commit=False),
+    )
+
+    assert tasks._latest_resumable_run(NOW) is None
+    db_session.add(collected("recent", timedelta(days=1)))
+    db_session.commit()
+    assert tasks._latest_resumable_run(NOW) == "recent"
+
+
 def test_budget_resume_skips_generations_older_than_the_latest_publication(
     db_session, monkeypatch
 ):
