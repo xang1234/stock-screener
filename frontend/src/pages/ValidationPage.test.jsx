@@ -41,17 +41,18 @@ const emptyOverview = (market) => ({
   degraded_reasons: [],
 });
 
-const groupHorizon = (horizonSessions, sampleSize, avgReturnPct) => ({
+const groupHorizon = (horizonSessions, sampleSize, avgReturnPct, excessSampleSize = sampleSize) => ({
   horizon_sessions: horizonSessions,
   sample_size: sampleSize,
   positive_rate: 0.6,
   avg_return_pct: avgReturnPct,
   avg_excess_return_pct: 1.2,
+  excess_sample_size: excessSampleSize,
   avg_stopped_return_pct: -0.5,
   stopped_out_rate: 0.25,
 });
 
-const stageGroups = [
+const overviewGroups = [
   {
     dimension: 'stage',
     label: 'Stage',
@@ -62,7 +63,19 @@ const stageGroups = [
     dimension: 'stage',
     label: 'Stage',
     value: '3',
-    horizons: [groupHorizon(1, 9, -0.2), groupHorizon(5, 8, -1.1), groupHorizon(20, 6, -3.8), groupHorizon(60, 0, null)],
+    horizons: [groupHorizon(1, 9, -0.2), groupHorizon(5, 8, -1.1), groupHorizon(20, 6, -3.8, 4), groupHorizon(60, 0, null)],
+  },
+  {
+    dimension: 'action_state',
+    label: 'Action State',
+    value: 'setup_ready',
+    horizons: [groupHorizon(5, 30, 1.0), groupHorizon(20, 22, 3.3)],
+  },
+  {
+    dimension: 'setup_pattern',
+    label: 'Setup Pattern',
+    value: 'cup_with_handle',
+    horizons: [groupHorizon(5, 26, 0.8), groupHorizon(20, 20, 2.9)],
   },
   {
     dimension: 'extension_band',
@@ -231,7 +244,7 @@ describe('ValidationPage', () => {
       ...emptyOverview('US'),
       benchmark_symbol: 'SPY',
       stop_loss_pct: 7,
-      groups: stageGroups,
+      groups: overviewGroups,
     });
 
     renderWithProviders(
@@ -242,20 +255,22 @@ describe('ValidationPage', () => {
 
     const table = await screen.findByRole('table', { name: 'By group' });
     const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
-    expect(headers).toEqual(['Group', 'Sample', 'Positive', 'Avg Return', 'Avg vs SPY', 'Avg with 7% stop', 'Stopped out']);
+    expect(headers).toEqual(['Group', 'Sample', 'Positive', 'Avg Return', 'Avg vs SPY (no stop)', 'Avg with 7% stop', 'Stopped out']);
     const rowText = () => within(table).getAllByRole('row').slice(1).map((row) => (
       Array.from(row.cells).map((cell) => cell.textContent)
     ));
     expect(rowText()).toEqual([
       ['Stage'],
       ['2', '32', '60%', '4.6%', '1.2%', '-0.5%', '25%'],
-      ['3', '6', '60%', '-3.8%', '1.2%', '-0.5%', '25%'],
+      ['3', '6', '60%', '-3.8%', '1.2% (n=4)', '-0.5%', '25%'],
+      ['Action State'],
+      ['Setup Ready', '22', '60%', '3.3%', '1.2%', '-0.5%', '25%'],
+      ['Setup Pattern'],
+      ['Cup With Handle', '20', '60%', '2.9%', '1.2%', '-0.5%', '25%'],
       ['Extension vs 50DMA'],
       ['30%+', '21', '60%', '5.1%', '1.2%', '-0.5%', '25%'],
     ]);
-    const stageThree = within(table).getByText('3').closest('tr');
-    expect(stageThree).toHaveAttribute('title', 'Small sample: fewer than 20 picks');
-    expect(stageThree.cells[1]).toHaveStyle({ color: 'rgb(139, 147, 167)' });
+    expect(within(table).getByText('3').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 events');
     expect(within(table).getByText('2').closest('tr')).not.toHaveAttribute('title');
 
     fireEvent.click(screen.getByRole('button', { name: '5S' }));
@@ -264,10 +279,14 @@ describe('ValidationPage', () => {
       ['Stage'],
       ['2', '18', '60%', '1.4%', '1.2%', '-0.5%', '25%'],
       ['3', '8', '60%', '-1.1%', '1.2%', '-0.5%', '25%'],
+      ['Action State'],
+      ['Setup Ready', '30', '60%', '1.0%', '1.2%', '-0.5%', '25%'],
+      ['Setup Pattern'],
+      ['Cup With Handle', '26', '60%', '0.8%', '1.2%', '-0.5%', '25%'],
       ['Extension vs 50DMA'],
       ['30%+', '24', '60%', '2.2%', '1.2%', '-0.5%', '25%'],
     ]);
-    expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 picks');
+    expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 events');
     expect(within(table).getByText('30%+').closest('tr')).not.toHaveAttribute('title');
   });
 

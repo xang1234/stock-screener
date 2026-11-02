@@ -19,8 +19,16 @@ import {
   Typography,
 } from '@mui/material';
 
+import { actionStateMeta } from '../../features/opportunityState/actionState';
+import { formatPatternName } from '../../utils/formatUtils';
+
 const GROUP_HORIZONS = [1, 5, 20, 60];
 const SMALL_SAMPLE_SIZE = 20;
+// Dimensions whose values have a display name; the others show their value as it is.
+const GROUP_VALUE_LABELS = {
+  action_state: (value) => actionStateMeta(value).label,
+  setup_pattern: formatPatternName,
+};
 
 function formatPercentValue(value) {
   if (value == null) return '-';
@@ -199,7 +207,7 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
               <TableCell align="right">Sample</TableCell>
               <TableCell align="right">Positive</TableCell>
               <TableCell align="right">Avg Return</TableCell>
-              <TableCell align="right">{`Avg vs ${benchmarkSymbol || 'Benchmark'}`}</TableCell>
+              <TableCell align="right">{`Avg vs ${benchmarkSymbol || 'Benchmark'} (no stop)`}</TableCell>
               <TableCell align="right">{`Avg with ${stopLossPct}% stop`}</TableCell>
               <TableCell align="right">Stopped out</TableCell>
             </TableRow>
@@ -208,6 +216,7 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
             {(groups || []).map((group, index) => {
               const horizon = group.horizons.find((item) => item.horizon_sessions === horizonSessions);
               const sampleSize = horizon?.sample_size ?? 0;
+              const excessSampleSize = horizon?.excess_sample_size ?? 0;
               const isSmallSample = sampleSize < SMALL_SAMPLE_SIZE;
               return (
                 <Fragment key={`${group.dimension}:${group.value}`}>
@@ -217,14 +226,17 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
                     </TableRow>
                   )}
                   <TableRow
-                    title={isSmallSample ? `Small sample: fewer than ${SMALL_SAMPLE_SIZE} picks` : undefined}
+                    title={isSmallSample ? `Small sample: fewer than ${SMALL_SAMPLE_SIZE} events` : undefined}
                     sx={isSmallSample ? { '& td': { color: 'text.secondary' } } : undefined}
                   >
-                    <TableCell>{group.value}</TableCell>
+                    <TableCell>{GROUP_VALUE_LABELS[group.dimension]?.(group.value) ?? group.value}</TableCell>
                     <TableCell align="right">{sampleSize}</TableCell>
                     <TableCell align="right">{formatRate(horizon?.positive_rate)}</TableCell>
                     <TableCell align="right">{formatPercentValue(horizon?.avg_return_pct)}</TableCell>
-                    <TableCell align="right">{formatPercentValue(horizon?.avg_excess_return_pct)}</TableCell>
+                    <TableCell align="right">
+                      {formatPercentValue(horizon?.avg_excess_return_pct)}
+                      {excessSampleSize < sampleSize && ` (n=${excessSampleSize})`}
+                    </TableCell>
                     <TableCell align="right">{formatPercentValue(horizon?.avg_stopped_return_pct)}</TableCell>
                     <TableCell align="right">{formatRate(horizon?.stopped_out_rate)}</TableCell>
                   </TableRow>
