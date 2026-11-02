@@ -27,7 +27,6 @@ from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 logger = logging.getLogger(__name__)
 
 NO_SIGNAL_GATE = "no_signal_gate"
-_CLAIM_TTL = timedelta(minutes=10)
 _UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured"})
 _PROVIDER_WIDE_REFUSALS = frozenset({
     HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND,
@@ -404,10 +403,7 @@ class ProcessSocialBacklog:
                     attempts = [a for a in db.scalars(select(SocialLLMAttempt)).all() if row.id in a.work_ids]
                     # ponytail: matched by time, so a claim dated before an earlier claim's
                     # attempts still counts them; key attempts by claim token if that occurs.
-                    # Live claims were stamped with the current _CLAIM_TTL, so it must not shrink
-                    # while any are live, or this reads their claim time too late and misses attempts.
-                    claimed_at = _utc(row.claim_expires_at) - _CLAIM_TTL
-                    claim_attempts = [a for a in attempts if _utc(a.created_at) >= claimed_at]
+                    claim_attempts = [a for a in attempts if _utc(a.created_at) >= _utc(row.updated_at)]
                     ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"} for a in claim_attempts)
                     for attempt in attempts:
                         if attempt.state == "reserved":
@@ -439,7 +435,7 @@ class ProcessSocialBacklog:
             for row in eligible[:limit]:
                 row.state, row.error_code = "running", None
                 row.claim_token = uuid4().hex
-                row.claim_expires_at = now + _CLAIM_TTL
+                row.claim_expires_at = now + timedelta(minutes=10)
                 row.updated_at = now
                 claimed.append((row.id, row.claim_token, row.selected_model, row.prompt_version,
                     row.schema_version, dict(row.input_snapshot_json)))
