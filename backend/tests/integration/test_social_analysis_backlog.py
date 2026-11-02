@@ -972,7 +972,7 @@ def test_provider_wide_refusal_returns_every_claimed_post_and_stops_the_run(back
     assert (retried.succeeded, retried.deferred, retried.failed) == (len(returned), 0, 0)
 
 
-def test_refusals_after_an_answer_are_isolated_only_within_the_run_call_cap(backlog):
+def test_a_provider_that_starts_refusing_mid_run_leaves_the_refused_posts_pending(backlog):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
     configure_budget(backlog, output_rate="244.140625")
@@ -982,10 +982,13 @@ def test_refusals_after_an_answer_are_isolated_only_within_the_run_call_cap(back
 
     result = asyncio.run(worker.execute(NOW, 45))
 
-    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 22, 3, 20)
-    assert refusal_outcome(backlog, work_ids[40:43]) == (
-        {("failed_terminal", "provider_rejected")}, ["reconciled"] + ["released"] * 19, 0)
-    assert refusal_outcome(backlog, work_ids[20:40] + work_ids[43:])[0] == {("pending", "provider_rejected")}
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 25, 0, 20)
+    assert refusal_outcome(backlog, work_ids[20:]) == (
+        {("pending", "provider_rejected")}, ["reconciled"] + ["released"] * 19, 0)
+
+    llm.answers = 10 ** 6
+    retried = asyncio.run(worker.execute(NOW, 45))
+    assert (retried.succeeded, retried.deferred, retried.failed) == (25, 0, 0)
 
 
 class PoisonLLM(FakeLLM):
