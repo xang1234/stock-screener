@@ -51,10 +51,15 @@ _HK_SECOND_LINE = re.compile(r"-(s|sw|r|wr|swr)$", re.IGNORECASE)
 _SAME_ISSUER_MARKETS = {"HK": "CN", "CN": "HK"}
 
 # ASCII lookbehind: Python counts CJK letters as \w, and "关注$NVDA" is a cashtag.
-_CASHTAG = re.compile(r"(?<![A-Za-z0-9_$])\$[A-Za-z0-9][A-Za-z0-9.\-]{0,19}")
-# "$10K", "$1.5bn", "$10K-" (a range), "$300." are money; "$6758.T" is Tokyo. Numeric
-# listings ("$0700") never resolve without a market either, so a pure number is dropped too.
-_MONEY = re.compile(r"\$\d+(?:\.\d+)?(?:[kmbt]|bn|mm|tn)?[.\-]?", re.IGNORECASE)
+# It ends on a letter or digit, so "$CRDO." is CRDO while "$6758.T" keeps its suffix.
+_CASHTAG = re.compile(r"(?<![A-Za-z0-9_$])\$[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,18}[A-Za-z0-9])?")
+# "$10K", "$1.5bn", "$300" are money; "$6758.T" is Tokyo. Numeric listings ("$0700")
+# never resolve without a market either, so a pure number is dropped too.
+_MONEY = re.compile(r"\$\d+(?:\.\d+)?(?:[kmbt]|bn|mm|tn)?", re.IGNORECASE)
+# Acronyms posts use as words that are also US tickers ("AI" is C3.ai). Bare, they
+# name the word; a cashtag or a canonical symbol with its market is the listing.
+# ponytail: the collisions seen in extracted claims; other bare tickers stay explicit.
+_WORD_ACRONYMS = frozenset({"AI", "GPT"})
 
 
 def cashtags(text: str | None) -> list[str]:
@@ -82,7 +87,9 @@ class SocialTickerResolver:
             return unresolved("unsupported_market")
         token = security_master_resolver.normalize_symbol(raw_token)
         raw = raw_token.strip().lstrip("$")
-        explicit = raw_token.strip().startswith("$") or (raw == raw.upper() and bool(TICKER_SHAPE_RE.fullmatch(raw)))
+        bare_ticker = (raw == raw.upper() and bool(TICKER_SHAPE_RE.fullmatch(raw))
+                       and (raw not in _WORD_ACRONYMS or explicit_market is not None))
+        explicit = raw_token.strip().startswith("$") or bare_ticker
         with self.db.no_autoflush:
             # An explicit ticker is never redirected to a company alias (HSBC).
             if explicit:
