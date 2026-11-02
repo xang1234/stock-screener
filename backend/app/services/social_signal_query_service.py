@@ -327,7 +327,7 @@ class SocialSignalQueries:
             if code == "stale_features":
                 params["required_session"] = next(
                     item["explanation"].get("feature_required_session") for item in watch
-                    if code in item["explanation"]["state_reasons"]
+                    if code in (item["explanation"].get("state_reasons") or ())
                 )
         else:
             code, params = None, {}
@@ -552,7 +552,7 @@ class SocialSignalQueries:
                 "supported": True, "available": False,
                 "reason_code": queue["reason_code"], "market": market,
             }
-        run = self._publication()
+        run = self.db.get(SocialSignalRun, queue["run_id"])
         pins = run.application_progress_json.get("sources", {})
         observations = run.application_progress_json.get("observations", {})
         themes = [value for value in (run.prepared_json or {}).get("theme_evidence", [])

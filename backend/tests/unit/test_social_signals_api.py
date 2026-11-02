@@ -557,40 +557,45 @@ async def test_empty_actionable_falls_back_to_watch_with_a_reason(
     ]
 
 
-@pytest.mark.asyncio
-async def test_watch_fallback_reads_the_run_the_actionable_read_used(
-    db_session, social_runtime, monkeypatch,
-):
+def _publish_empty_run_during_reads(db, monkeypatch):
+    """After each published-row read, point latest_published at an empty newer run."""
     from app.infra.db.models.social_signals import SocialSignalRun, SocialSignalRunPointer
     from app.infra.db.repositories.published_social_signal_reader import (
         PublishedSocialSignalReader,
     )
+
+    old = db.get(SocialSignalRun, "published-1")
+    db.add(SocialSignalRun(
+        id="published-2", registry_id=1, registry_version=2, mode="live",
+        provider="official", status="published", source_outcomes_json={},
+        application_progress_json={"sources": {}, "observations": {}},
+        prepared_json={"context": {}}, feature_run_ids_json={},
+        exposure_dates_json={}, coverage_json={}, created_at=old.created_at,
+        completed_at=old.completed_at, published_at=old.published_at,
+    ))
+    db.commit()
+    read = PublishedSocialSignalReader.queue
+
+    def publish_during_read(self, *args, **kwargs):
+        page = read(self, *args, **kwargs)
+        db.get(SocialSignalRunPointer, "latest_published").run_id = "published-2"
+        db.flush()
+        return page
+
+    monkeypatch.setattr(PublishedSocialSignalReader, "queue", publish_during_read)
+
+
+@pytest.mark.asyncio
+async def test_watch_fallback_reads_the_run_the_actionable_read_used(
+    db_session, social_runtime, monkeypatch,
+):
     from app.services import server_auth
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     runtime = social_runtime.read_runtime()
     social_runtime.apply_runtime("live", "official", runtime.version, "admin")
     _publish_states(db_session, [("AAA", "watch", ["setup_not_ready"], 80)], exposure="65")
-    old = db_session.get(SocialSignalRun, "published-1")
-    db_session.add(SocialSignalRun(
-        id="published-2", registry_id=1, registry_version=2, mode="live",
-        provider="official", status="published",
-        source_outcomes_json=old.source_outcomes_json,
-        application_progress_json=old.application_progress_json,
-        prepared_json={"context": {}}, feature_run_ids_json={},
-        exposure_dates_json={}, coverage_json={}, created_at=old.created_at,
-        completed_at=old.completed_at, published_at=old.published_at,
-    ))
-    db_session.commit()
-    read = PublishedSocialSignalReader.queue
-
-    def publish_during_read(self, *args, **kwargs):
-        page = read(self, *args, **kwargs)
-        db_session.get(SocialSignalRunPointer, "latest_published").run_id = "published-2"
-        db_session.flush()
-        return page
-
-    monkeypatch.setattr(PublishedSocialSignalReader, "queue", publish_during_read)
+    _publish_empty_run_during_reads(db_session, monkeypatch)
 
     payload = (await _request(
         db_session, "GET",
@@ -600,6 +605,26 @@ async def test_watch_fallback_reads_the_run_the_actionable_read_used(
     assert payload["run_id"] == "published-1"
     assert [item["canonical_symbol"] for item in payload["items"]] == ["AAA"]
     assert payload["fallback"]["reason_code"] == "setup_not_ready"
+
+
+@pytest.mark.asyncio
+async def test_summary_counts_sources_of_the_run_its_signals_came_from(
+    db_session, social_runtime, monkeypatch,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [("AAA", "actionable", [], 80)], exposure="65")
+    _publish_empty_run_during_reads(db_session, monkeypatch)
+
+    payload = (await _request(
+        db_session, "GET", "/api/v1/social-signals/summary?market=US",
+    )).json()
+
+    assert [item["canonical_symbol"] for item in payload["top_signals"]] == ["AAA"]
+    assert (payload["enabled_source_count"], payload["participating_source_count"]) == (2, 2)
 
 
 @pytest.mark.asyncio
