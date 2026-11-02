@@ -18,7 +18,6 @@ from app.schemas.validation import ValidationSourceKind
 from app.services.market_calendar_service import CalendarCoverageExpired
 from app.services.validation_service import (
     EvaluatedValidationEvent,
-    FailureClusterBuilder,
     HorizonOutcome,
     PriceOutcomeCalculator,
     RawValidationEvent,
@@ -139,7 +138,9 @@ def _add_universe(session, symbol, *, market="US", industry="Semiconductors", is
     )
 
 
-def _add_pick(session, run, symbol, composite_score, *, minervini_score=80.0, canslim_score=70.0):
+def _add_pick(
+    session, run, symbol, composite_score, *, minervini_score=80.0, canslim_score=70.0, details=None
+):
     session.add(
         StockFeatureDaily(
             run_id=run.id,
@@ -153,6 +154,7 @@ def _add_pick(session, run, symbol, composite_score, *, minervini_score=80.0, ca
                 "ibd_industry_group": "Semis",
                 "minervini_score": minervini_score,
                 "canslim_score": canslim_score,
+                **(details or {}),
             },
         )
     )
@@ -774,42 +776,151 @@ def _outcome(return_pct=0.0):
     )
 
 
-def test_failure_cluster_builder_uses_source_specific_bucket_fields():
-    builder = FailureClusterBuilder()
-    losing_scan_event = EvaluatedValidationEvent(
+def _grouped(source_kind, attributes, *, pct_above_50dma=None):
+    return EvaluatedValidationEvent(
         raw=RawValidationEvent(
             symbol="NVDA",
-            source_kind=ValidationSourceKind.SCAN_PICK,
-            source_ref="run:1",
+            source_kind=source_kind,
+            source_ref="ref",
             event_at=FIXED_TODAY,
-            attributes={"rating": "Buy", "stage": 2, "ibd_industry_group": "Semis"},
+            attributes=attributes,
         ),
         entry_at=FIXED_TODAY,
-        entry_price=100.0,
-        outcomes={1: _outcome(-1.0), 5: _outcome(-3.0)},
-    )
-    losing_theme_event = EvaluatedValidationEvent(
-        raw=RawValidationEvent(
-            symbol="MSFT",
-            source_kind=ValidationSourceKind.THEME_ALERT,
-            source_ref="alert:1",
-            event_at=FIXED_NOW,
-            attributes={"alert_type": "breakout", "severity": "warning", "theme": "AI"},
-        ),
-        entry_at=FIXED_TODAY,
-        entry_price=100.0,
-        outcomes={1: _outcome(-0.5), 5: _outcome(-2.0)},
+        entry_price=10.0,
+        exits={1: FIXED_TODAY},
+        outcomes={1: _outcome(1.0)},
+        pct_above_50dma=pct_above_50dma,
     )
 
-    clusters = builder.build([losing_scan_event, losing_theme_event])
-    cluster_keys = {cluster.cluster_key for cluster in clusters}
 
-    assert "rating:Buy" in cluster_keys
-    assert "stage:2" in cluster_keys
-    assert "ibd_industry_group:Semis" in cluster_keys
-    assert "alert_type:breakout" in cluster_keys
-    assert "severity:warning" in cluster_keys
-    assert len(clusters) == 5
+def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extension():
+    events = [
+        _grouped(ValidationSourceKind.REPLAY_PICK, {}, pct_above_50dma=pct)
+        for pct in (30.0, 10.0, 9.99, 0.0, -0.01, 29.99, None)
+    ]
+
+    groups = _service()._build_groups(events, ValidationSourceKind.REPLAY_PICK)
+
+    assert [(g.dimension, g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
+        ("extension_band", "Extension vs 50DMA", "below 50DMA", 1),
+        ("extension_band", "Extension vs 50DMA", "0-10%", 2),
+        ("extension_band", "Extension vs 50DMA", "10-20%", 1),
+        ("extension_band", "Extension vs 50DMA", "20-30%", 1),
+        ("extension_band", "Extension vs 50DMA", "30%+", 1),
+    ]
+
+
+def test_groups_follow_the_dimension_order_then_numeric_or_alphabetical_values():
+    events = [
+        _grouped(ValidationSourceKind.SCAN_PICK, attributes)
+        for attributes in (
+            {"rating": "Watch", "stage": 10, "setup_pattern": ""},
+            {"rating": "Buy", "stage": 2, "action_state": "setup_ready"},
+            {"rating": "Buy", "stage": 3, "action_state": "extended", "setup_pattern": "cup_with_handle"},
+        )
+    ]
+
+    groups = _service()._build_groups(events, ValidationSourceKind.SCAN_PICK)
+
+    assert [(g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
+        ("Rating", "Buy", 2),
+        ("Rating", "Watch", 1),
+        ("Stage", "2", 1),
+        ("Stage", "3", 1),
+        ("Stage", "10", 1),
+        ("Action State", "extended", 1),
+        ("Action State", "setup_ready", 1),
+        ("Setup Pattern", "cup_with_handle", 1),
+    ]
+
+
+def test_extension_above_the_50dma_reads_only_bars_through_the_signal_date():
+    # The first five closes fall outside the signal's 50-bar window, and the spike comes after it.
+    closes = [1.0] * 5 + [80.0] * 25 + [120.0] * 25 + [1000.0] * 10
+    bad_closes = list(closes)
+    bad_closes[40] = 0.0
+    start = date(2026, 1, 1)
+    history = _history_frame(start, [(close,) * 4 for close in closes])
+    signal = start + timedelta(days=54)
+    calculator = PriceOutcomeCalculator(
+        _FakePriceCache(
+            {"NVDA": history, "AMD": _history_frame(start, [(close,) * 4 for close in bad_closes])}
+        )
+    )
+
+    evaluated, _ = calculator.evaluate_many(
+        [
+            _scan_event("NVDA", signal),
+            _scan_event("NVDA", start + timedelta(days=48)),
+            _scan_event("AMD", signal),
+        ],
+        sessions=_sessions_of(history),
+    )
+
+    assert [event.pct_above_50dma for event in evaluated] == [pytest.approx(20.0), None, None]
+
+
+def test_scan_picks_carry_the_action_state_and_setup_pattern_of_their_row(session):
+    run = _add_run(session, FIXED_TODAY)
+    for symbol in ("NVDA", "AMD"):
+        _add_universe(session, symbol)
+    _add_pick(
+        session,
+        run,
+        "NVDA",
+        90.0,
+        details={"action_state": "extended", "setup_engine": {"pattern_primary": "cup_with_handle"}},
+    )
+    _add_pick(session, run, "AMD", 80.0, details={"setup_engine": None})
+    session.commit()
+
+    events, _ = ScanPickValidationSource().collect(
+        session, cutoff_date=FIXED_TODAY, market="US"
+    )
+
+    assert [
+        (event.symbol, event.attributes["action_state"], event.attributes["setup_pattern"])
+        for event in events
+    ] == [("NVDA", "extended", "cup_with_handle"), ("AMD", None, None)]
+
+
+def test_each_stage_group_summarizes_its_own_picks_with_the_overlap_rule(session):
+    for symbol in ("NVDA", "AMD"):
+        _add_universe(session, symbol)
+    first, second = _add_run(session, date(2026, 3, 2)), _add_run(session, date(2026, 3, 3))
+    _add_pick(session, first, "NVDA", 90.0)
+    _add_pick(session, second, "NVDA", 90.0)
+    _add_pick(session, first, "AMD", 80.0, details={"stage": 3})
+    session.commit()
+    nvda_rows = [(10, 13, 9.5, close) for close in (10.5, 11, 11.5, 12, 12.5, 13)]
+    service = _service(
+        {
+            "NVDA": _history_frame(date(2026, 3, 3), nvda_rows),
+            "AMD": _history_frame(date(2026, 3, 3), [(20, 21, 19, 19)] * 6),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=60,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (
+            g.value,
+            [
+                (h.horizon_sessions, h.sample_size, h.suppressed_overlapping, h.avg_return_pct)
+                for h in g.horizons
+            ],
+        )
+        for g in payload.groups
+        if g.dimension == "stage"
+    ] == [
+        ("2", [(1, 2, 0, 7.5), (5, 1, 1, 25.0), (20, 0, 1, None), (60, 0, 1, None)]),
+        ("3", [(1, 1, 0, -5.0), (5, 1, 0, -5.0), (20, 0, 0, None), (60, 0, 0, None)]),
+    ]
 
 
 def test_normalize_price_history_keeps_the_exchange_date_of_tz_aware_bars():
@@ -1843,9 +1954,10 @@ def test_replay_picks_of_the_current_definition_are_scored_as_their_own_source(s
         ),
     ]
     assert [h.sample_size for h in payload.horizons] == [2, 2, 0, 0]
-    assert [(c.cluster_key, c.label, c.sample_size) for c in payload.failure_clusters] == [
-        ("rs_band:80-89", "RS Band: 80-89", 1),
-        ("stage:2", "Stage: 2", 1),
+    assert [(g.label, g.value, g.horizons[1].sample_size) for g in payload.groups] == [
+        ("Stage", "2", 2),
+        ("RS Band", "80-89", 1),
+        ("RS Band", "90-99", 1),
     ]
 
 

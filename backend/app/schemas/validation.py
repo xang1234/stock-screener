@@ -73,14 +73,13 @@ class ValidationEvent(BaseModel):
     attributes: dict[str, Any]
 
 
-class ValidationFailureCluster(BaseModel):
-    """Aggregate of losing events by one deterministic bucket."""
+class ValidationGroup(BaseModel):
+    """Horizon stats for the events sharing one value of one dimension, such as Stage 2."""
 
-    cluster_key: str
+    dimension: str
     label: str
-    sample_size: int
-    avg_return_pct: float
-    median_return_pct: float
+    value: str
+    horizons: list[ValidationHorizonSummary]
 
 
 class ValidationSourceBreakdown(BaseModel):
@@ -89,7 +88,7 @@ class ValidationSourceBreakdown(BaseModel):
     source_kind: ValidationSourceKind
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
-    failure_clusters: list[ValidationFailureCluster]
+    groups: list[ValidationGroup]
     degraded_reasons: list[str]
 
 
@@ -103,7 +102,7 @@ class ValidationOverviewResponse(BaseModel):
     stop_loss_pct: float
     horizons: list[ValidationHorizonSummary]
     recent_events: list[ValidationEvent]
-    failure_clusters: list[ValidationFailureCluster]
+    groups: list[ValidationGroup]
     freshness: ValidationFreshness
     degraded_reasons: list[str]
 
@@ -116,6 +115,5 @@ class StockValidationResponse(BaseModel):
     stop_loss_pct: float
     source_breakdown: list[ValidationSourceBreakdown]
     recent_events: list[ValidationEvent]
-    failure_clusters: list[ValidationFailureCluster]
     freshness: ValidationFreshness
     degraded_reasons: list[str]

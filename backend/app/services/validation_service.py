@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -25,8 +26,8 @@ from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import (
     StockValidationResponse,
     ValidationEvent,
-    ValidationFailureCluster,
     ValidationFreshness,
+    ValidationGroup,
     ValidationHorizonSummary,
     ValidationOverviewResponse,
     ValidationSourceBreakdown,
@@ -48,7 +49,6 @@ from app.utils.market_hours import (
 
 SCAN_PICK_TOP_N = 10
 RECENT_EVENTS_LIMIT = 25
-FAILURE_CLUSTERS_LIMIT = 5
 PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
@@ -67,14 +67,24 @@ NO_EVENTS_REASONS = {
     ValidationSourceKind.THEME_ALERT: "no_matching_theme_alerts",
     ValidationSourceKind.REPLAY_PICK: "no_matching_replay_picks",
 }
-# The event attributes each source's losing events are bucketed by.
-FAILURE_CLUSTER_FIELDS = {
-    ValidationSourceKind.SCAN_PICK: ("rating", "stage", "ibd_industry_group"),
-    ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "theme"),
-    ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band"),
+# The dimensions each source's events are grouped by, in display order. Industry group and
+# theme are left out: they split the picks into too many groups to mean anything.
+GROUP_DIMENSIONS = {
+    ValidationSourceKind.SCAN_PICK: (
+        "rating",
+        "stage",
+        "action_state",
+        "setup_pattern",
+        "extension_band",
+    ),
+    ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band", "extension_band"),
+    ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "extension_band"),
 }
-# Labels that title-casing the field name gets wrong.
-FAILURE_CLUSTER_LABELS = {"rs_band": "RS Band"}
+# Labels that title-casing the dimension name gets wrong.
+GROUP_LABELS = {"rs_band": "RS Band", "extension_band": "Extension vs 50DMA"}
+EXTENSION_BANDS = ("below 50DMA", "0-10%", "10-20%", "20-30%", "30%+")
+# Where each band after the first starts, in percent above the 50-day average.
+EXTENSION_BAND_EDGES = (0.0, 10.0, 20.0, 30.0)
 
 
 # Runs before 2026-04-26 carry only universe.market; a run with neither counts as US.
@@ -141,6 +151,7 @@ class EvaluatedValidationEvent:
     # Horizons at which this event repeats inside an earlier counted event's window.
     suppressed: frozenset[int] = frozenset()
     history_missing: bool = False
+    pct_above_50dma: float | None = None
 
     def to_response(self) -> ValidationEvent:
         return ValidationEvent(
@@ -411,6 +422,10 @@ class ScanPickValidationSource:
                         "rating": INT_TO_RATING.get(row.overall_rating, details.get("rating")),
                         "stage": details.get("stage"),
                         "ibd_industry_group": details.get("ibd_industry_group"),
+                        "action_state": details.get("action_state"),
+                        "setup_pattern": (details.get("setup_engine") or {}).get(
+                            "pattern_primary"
+                        ),
                     },
                 )
             )
@@ -594,8 +609,11 @@ class PriceOutcomeCalculator:
             return EvaluatedValidationEvent(
                 raw=event, entry_at=None, entry_price=None, exits=exits, history_missing=True
             )
+        extension = _pct_above_50dma(history, _event_date(event.event_at))
         if sessions.empty:
-            return EvaluatedValidationEvent(raw=event, entry_at=None, entry_price=None)
+            return EvaluatedValidationEvent(
+                raw=event, entry_at=None, entry_price=None, pct_above_50dma=extension
+            )
 
         # Score only the sessions before the first one the cache lacks: past a gap, every
         # later bar would stand in for an earlier session.
@@ -605,7 +623,11 @@ class PriceOutcomeCalculator:
         entry_price = float(window["Open"].iloc[0]) if cached[0] else math.nan
         if not entry_price > 0:
             return EvaluatedValidationEvent(
-                raw=event, entry_at=entry_at, entry_price=None, exits=exits
+                raw=event,
+                entry_at=entry_at,
+                entry_price=None,
+                exits=exits,
+                pct_above_50dma=extension,
             )
         return EvaluatedValidationEvent(
             raw=event,
@@ -613,7 +635,19 @@ class PriceOutcomeCalculator:
             entry_price=entry_price,
             exits=exits,
             outcomes=_horizon_outcomes(window, entry_price, benchmark),
+            pct_above_50dma=extension,
         )
+
+
+def _pct_above_50dma(history: pd.DataFrame, signal_date: date) -> float | None:
+    """The last close through ``signal_date`` against the mean of the 50 closes ending there.
+
+    Later bars are left out: they were unknown when the signal fired.
+    """
+    closes = history.loc[: pd.Timestamp(signal_date), "Close"].to_numpy(dtype=float)[-50:]
+    if len(closes) < 50 or not (closes > 0).all():
+        return None
+    return (closes[-1] / closes.mean() - 1.0) * 100.0
 
 
 def _entry_session_index(event_at: date | datetime, calendar: pd.DatetimeIndex) -> int:
@@ -672,51 +706,20 @@ def _horizon_outcomes(
     return outcomes
 
 
-class FailureClusterBuilder:
-    """Bucket losing events into deterministic failure clusters."""
+def _group_value(event: EvaluatedValidationEvent, dimension: str) -> str | None:
+    if dimension == "extension_band":
+        pct = event.pct_above_50dma
+        return None if pct is None else EXTENSION_BANDS[bisect_right(EXTENSION_BAND_EDGES, pct)]
+    value = event.raw.attributes.get(dimension)
+    return None if value is None or value == "" else str(value)
 
-    def build(self, events: list[EvaluatedValidationEvent]) -> list[ValidationFailureCluster]:
-        bucket_values: dict[tuple[str, str], list[float]] = defaultdict(list)
-        labels: dict[tuple[str, str], str] = {}
 
-        for event in events:
-            outcome = event.outcomes.get(5)
-            if outcome is None or outcome.return_pct >= 0:
-                continue
-            for cluster_key, label in self._cluster_labels(event):
-                bucket_values[cluster_key].append(outcome.return_pct)
-                labels[cluster_key] = label
-
-        ranked_buckets = sorted(
-            bucket_values.items(),
-            key=lambda item: (-len(item[1]), sum(item[1]) / len(item[1]), item[0][0], item[0][1]),
-        )[:FAILURE_CLUSTERS_LIMIT]
-
-        return [
-            ValidationFailureCluster(
-                cluster_key=f"{key[0]}:{key[1]}",
-                label=labels[key],
-                sample_size=len(values),
-                avg_return_pct=round(sum(values) / len(values), 4),
-                median_return_pct=round(float(median(values)), 4),
-            )
-            for key, values in ranked_buckets
-        ]
-
-    def _cluster_labels(
-        self,
-        event: EvaluatedValidationEvent,
-    ) -> list[tuple[tuple[str, str], str]]:
-        attrs = event.raw.attributes
-        clusters: list[tuple[tuple[str, str], str]] = []
-        for name in FAILURE_CLUSTER_FIELDS[event.raw.source_kind]:
-            value = attrs.get(name)
-            if value is None or value == "":
-                continue
-            normalized = str(value)
-            label = FAILURE_CLUSTER_LABELS.get(name) or name.replace("_", " ").title()
-            clusters.append(((name, normalized), f"{label}: {normalized}"))
-        return clusters
+def _natural_order(value: str) -> tuple[int, float, str]:
+    """Numbers numerically, so Stage 2 comes before Stage 10, and words alphabetically."""
+    try:
+        return (0, float(value), value)
+    except ValueError:
+        return (1, 0.0, value)
 
 
 class ValidationService:
@@ -729,7 +732,6 @@ class ValidationService:
         theme_alert_source: ThemeAlertValidationSource | None = None,
         replay_pick_source: ReplayPickValidationSource | None = None,
         outcome_calculator: PriceOutcomeCalculator | None = None,
-        failure_cluster_builder: FailureClusterBuilder | None = None,
         market_calendar: MarketCalendarService | None = None,
     ) -> None:
         from app.wiring.bootstrap import get_market_calendar_service, get_price_cache
@@ -742,7 +744,6 @@ class ValidationService:
             ValidationSourceKind.REPLAY_PICK: replay_pick_source or ReplayPickValidationSource(),
         }
         self._outcome_calculator = outcome_calculator or PriceOutcomeCalculator(price_cache)
-        self._failure_cluster_builder = failure_cluster_builder or FailureClusterBuilder()
 
     def get_overview(
         self,
@@ -770,7 +771,7 @@ class ValidationService:
             stop_loss_pct=STOP_LOSS_PCT,
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
-            failure_clusters=payload["failure_clusters"],
+            groups=payload["groups"],
             freshness=self._build_freshness(
                 db,
                 as_of_date=effective_as_of_date,
@@ -793,7 +794,6 @@ class ValidationService:
         effective_as_of_date = self._effective_as_of_date(as_of_date)
         source_breakdown: list[ValidationSourceBreakdown] = []
         merged_events: list[ValidationEvent] = []
-        merged_failure_clusters: list[ValidationFailureCluster] = []
         degraded_reasons: list[str] = []
 
         for source_kind in (ValidationSourceKind.SCAN_PICK, ValidationSourceKind.THEME_ALERT):
@@ -810,18 +810,14 @@ class ValidationService:
                     source_kind=source_kind,
                     horizons=payload["horizons"],
                     recent_events=payload["recent_events"],
-                    failure_clusters=payload["failure_clusters"],
+                    groups=payload["groups"],
                     degraded_reasons=payload["degraded_reasons"],
                 )
             )
             merged_events.extend(payload["recent_events"])
-            merged_failure_clusters.extend(payload["failure_clusters"])
             degraded_reasons.extend(payload["degraded_reasons"])
 
         merged_events.sort(key=lambda item: (item.event_at, item.source_ref), reverse=True)
-        merged_failure_clusters.sort(
-            key=lambda item: (-item.sample_size, item.avg_return_pct, item.cluster_key)
-        )
 
         return StockValidationResponse(
             symbol=symbol,
@@ -829,7 +825,6 @@ class ValidationService:
             stop_loss_pct=STOP_LOSS_PCT,
             source_breakdown=source_breakdown,
             recent_events=merged_events[:RECENT_EVENTS_LIMIT],
-            failure_clusters=merged_failure_clusters[:FAILURE_CLUSTERS_LIMIT],
             freshness=self._build_freshness(db, as_of_date=effective_as_of_date, market=market),
             degraded_reasons=_dedupe(degraded_reasons),
         )
@@ -906,17 +901,42 @@ class ValidationService:
         ]
 
         return {
-            "horizons": [
-                self._summarize_horizon(events, horizon_sessions=horizon_sessions)
-                for horizon_sessions in HORIZONS
-            ],
+            "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
-            "failure_clusters": self._failure_cluster_builder.build(
-                [event for event in events if 5 not in event.suppressed]
-            ),
+            "groups": self._build_groups(events, source_kind),
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
         }
+
+    def _build_groups(
+        self, events: list[EvaluatedValidationEvent], source_kind: ValidationSourceKind
+    ) -> list[ValidationGroup]:
+        groups: list[ValidationGroup] = []
+        for dimension in GROUP_DIMENSIONS[source_kind]:
+            members: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
+            for event in events:
+                value = _group_value(event, dimension)
+                if value is not None:
+                    members[value].append(event)
+            order = EXTENSION_BANDS.index if dimension == "extension_band" else _natural_order
+            groups.extend(
+                ValidationGroup(
+                    dimension=dimension,
+                    label=GROUP_LABELS.get(dimension) or dimension.replace("_", " ").title(),
+                    value=value,
+                    horizons=self._summarize_horizons(members[value]),
+                )
+                for value in sorted(members, key=order)
+            )
+        return groups
+
+    def _summarize_horizons(
+        self, events: list[EvaluatedValidationEvent]
+    ) -> list[ValidationHorizonSummary]:
+        return [
+            self._summarize_horizon(events, horizon_sessions=horizon_sessions)
+            for horizon_sessions in HORIZONS
+        ]
 
     def _summarize_horizon(
         self,
