@@ -193,6 +193,21 @@ describe('SocialSignalsTab', () => {
     )).toBeInTheDocument();
   });
 
+  it('labels the queue when price features are one session old', async () => {
+    socialApi.getSocialQueue.mockResolvedValue(queue({ items: [
+      { ...item, explanation: { ...item.explanation, feature_sessions_behind: 1 } },
+    ] }));
+    const first = renderTab();
+    expect(await screen.findByText('Price features 1 session old')).toBeInTheDocument();
+    first.unmount();
+    socialApi.getSocialQueue.mockResolvedValue(queue({ items: [
+      { ...item, explanation: { ...item.explanation, feature_sessions_behind: 0 } },
+    ] }));
+    renderTab();
+    expect(await screen.findByText('0700')).toBeInTheDocument();
+    expect(screen.queryByText(/session old/)).not.toBeInTheDocument();
+  });
+
   it('offers Watch and Risk-off as views', async () => {
     renderTab();
     await screen.findByText('0700');

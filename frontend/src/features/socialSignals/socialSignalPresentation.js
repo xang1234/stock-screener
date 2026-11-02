@@ -55,6 +55,11 @@ export const socialFreshness = ({ stale = false, published_at: publishedAt } = {
 
 export const explanationMap = (item) => item?.explanation || {};
 
+export const featureLagLabel = (explanation = {}) => {
+  const behind = explanation.feature_sessions_behind;
+  return behind > 0 ? `Price features ${behind} session${behind > 1 ? 's' : ''} old` : null;
+};
+
 export const noActionableReason = (rows = []) => {
   const explanations = rows.map(explanationMap);
   // Below 50 nothing can be Actionable, so exposure outranks any per-row reason.

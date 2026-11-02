@@ -15,7 +15,8 @@ import SocialEvidenceDrawer from './SocialEvidenceDrawer';
 import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import SocialSignalsTable from './SocialSignalsTable';
 import {
-  ATTEMPT_TITLES, noActionableReason, socialFreshness, socialStateLabel, visibleSocialRows,
+  ATTEMPT_TITLES, explanationMap, featureLagLabel, noActionableReason, socialFreshness,
+  socialStateLabel, visibleSocialRows,
 } from './socialSignalPresentation';
 
 const EMPTY = [];
@@ -80,6 +81,7 @@ export default function SocialSignalsTab() {
   );
   const attempt = queueQuery.data?.latest_attempt;
   const freshness = socialFreshness(queueQuery.data);
+  const featureLag = rows.map((row) => featureLagLabel(explanationMap(row))).find(Boolean);
   const filtered = Object.values(filters).some((value) => String(value || '').trim());
   const emptyCopy = filtered ? 'No signals match these filters.'
     : view === 'all' ? 'No signals in this window.'
@@ -146,6 +148,7 @@ export default function SocialSignalsTab() {
           <Stack direction="row" gap={1} alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="caption">{shown.total} published candidates</Typography>
             <Chip size="small" variant="outlined" color={freshness.color} label={freshness.label} />
+            {featureLag ? <Chip size="small" variant="outlined" color="warning" label={featureLag} /> : null}
             <Button size="small" disabled={!visibleSymbols.length} onClick={scanVisible}>Send visible to Scan</Button>
           </Stack>
           {fallback ? <Alert severity="info" sx={{ mb: 1 }}>

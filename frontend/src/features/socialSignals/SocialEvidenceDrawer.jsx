@@ -4,7 +4,7 @@ import {
 
 import AddToWatchlistMenu from '../../components/common/AddToWatchlistMenu';
 import {
-  explanationMap, formatSocialScore, socialStateLabel, stateReasonText,
+  explanationMap, featureLagLabel, formatSocialScore, socialStateLabel, stateReasonText,
 } from './socialSignalPresentation';
 
 const words = (value) => String(value || '').replaceAll('_', ' ');
@@ -19,6 +19,7 @@ export default function SocialEvidenceDrawer({
   const data = query?.data;
   const item = data?.item || selected;
   const explanation = explanationMap(item);
+  const featureLag = featureLagLabel(explanation);
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>
       <Box sx={{ width: { xs: '100vw', sm: 520 }, p: 2 }} role="dialog" aria-label="Social evidence">
@@ -47,6 +48,7 @@ export default function SocialEvidenceDrawer({
           {stateReasons(explanation.state_reasons).map((reason) => (
             <Chip key={reason} size="small" label={stateReasonText(reason)} />
           ))}
+          {featureLag ? <Chip size="small" color="warning" variant="outlined" label={featureLag} /> : null}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           Acceleration {formatSocialScore(explanation.acceleration)}

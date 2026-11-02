@@ -88,6 +88,18 @@ describe('SocialEvidenceDrawer', () => {
     ]);
   });
 
+  it('explains why it surfaced in plain words, including one-session-old features', () => {
+    renderDrawer({
+      available: true, posts: [], claims: [],
+      item: { canonical_symbol: 'CEG', explanation: {
+        state_reasons: ['setup_not_ready', 'missing_liquidity'], feature_sessions_behind: 1,
+      } },
+    });
+    expect(screen.getByText('Setup not ready')).toBeInTheDocument();
+    expect(screen.getByText('Trading volume unknown')).toBeInTheDocument();
+    expect(screen.getByText('Price features 1 session old')).toBeInTheDocument();
+  });
+
   it('says so when no claims were extracted', () => {
     renderDrawer({ available: true, item: { canonical_symbol: 'CEG' }, posts: [], claims: [] });
     expect(screen.getByText('No company claims extracted in this window.')).toBeInTheDocument();
