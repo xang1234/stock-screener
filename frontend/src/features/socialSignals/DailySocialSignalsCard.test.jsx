@@ -45,8 +45,21 @@ describe('DailySocialSignalsCard', () => {
     expect(screen.getByText(/3\/3 sources/)).toBeInTheDocument();
     expect(screen.queryByText(/Exposure/)).not.toBeInTheDocument();
     expect(screen.getByText('Stale')).toBeInTheDocument();
+    expect(screen.queryByText(/session old/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Social Signals' }));
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels top signals scored from one-session-old price features', async () => {
+    getSocialSummary.mockResolvedValue({
+      supported: true, available: true, stale: false, published_at: '2026-09-07T06:00:00Z',
+      top_signals: [0, 1].map((behind) => ({
+        candidate_key: `US:S${behind}`, canonical_symbol: `S${behind}`, queue_score: 80,
+        explanation: { feature_sessions_behind: behind },
+      })),
+    });
+    renderCard();
+    expect(await screen.findByText('Price features 1 session old')).toBeInTheDocument();
   });
 
   it('uses typed unavailable copy without inventing zeros', async () => {
