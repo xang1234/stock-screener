@@ -65,7 +65,7 @@ class SocialConfirmationReader:
         self.registry = benchmark_registry or BenchmarkRegistryService()
         self.grace = timedelta(minutes=grace_minutes)
 
-    def freshness(self, market, as_of, actual_session, *, mic=None):
+    def freshness(self, market, as_of, actual_session, *, mic=None, max_sessions_behind=0):
         validate_utc_timestamp(as_of, "as_of")
         try:
             day = self.calendar.market_now(market, as_of, mic=mic).date()
@@ -76,10 +76,13 @@ class SocialConfirmationReader:
                 return DailyFreshness(None, actual_session, False, "calendar_unavailable")
         except (ValueError, RuntimeError, KeyError):
             return DailyFreshness(None, actual_session, False, "calendar_unavailable")
-        reason = ("missing_session" if actual_session is None else
-                  "future_session" if actual_session > required else
-                  "stale_session" if actual_session < required else None)
-        return DailyFreshness(required, actual_session, reason is None, reason)
+        if actual_session is None:
+            return DailyFreshness(required, None, False, "missing_session")
+        if actual_session > required:
+            return DailyFreshness(required, actual_session, False, "future_session")
+        behind = sum(actual_session < session <= required for session in sessions)
+        fresh = behind <= max_sessions_behind
+        return DailyFreshness(required, actual_session, fresh, None if fresh else "stale_session", behind)
 
     def pin_feature_run(self, market: str) -> PinnedFeatureRun:
         """Resolve once and share across candidates and all Theme measurements."""
@@ -285,7 +288,8 @@ class SocialConfirmationReader:
     def _read(self, symbol, market, as_of, *, mic, pinned_run, context=None):
         run = self.db.get(FeatureRun, pinned_run.run_id) if pinned_run.run_id is not None else None
         feature = self.db.get(StockFeatureDaily, (run.id, symbol)) if run else None
-        ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic)
+        # Published feature runs routinely land a session late; older ones stay unscored.
+        ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic, max_sessions_behind=1)
         if mic is None:
             ff = replace(ff, fresh=False, reason="listing_mic_unknown")
         reasons = []

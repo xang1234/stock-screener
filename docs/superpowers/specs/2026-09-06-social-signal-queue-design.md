@@ -736,8 +736,14 @@ closes, allow a configurable two-hour update grace period; once it expires,
 require that newly completed session. Equivalently, the required session is the
 latest session whose close plus grace has passed. Show actual input session dates
 explicitly; this is daily snapshot freshness, not a claim of live quotes.
-Required technical inputs older than the required session, or with unverifiable
-freshness, preclude Actionable while social evidence stays visible. Calendar
+Listing-level technical inputs from the published feature run may trail the
+required session by one trading session on the listing's calendar, because
+feature runs routinely publish a session late. Those inputs still score and can
+still reach Actionable, and the queue labels the lag as
+`feature_sessions_behind` (0 or 1) in each candidate's explanation. Technical
+inputs two or more sessions behind, or with unverifiable freshness, preclude
+Actionable while social evidence stays visible. Market exposure must match the
+required session exactly. Calendar
 uncertainty must not silently assume a trading day. Apply the relevant Market
 calendar to Market-level inputs and the security's MIC calendar to listing-level
 inputs. Preserve coherent snapshot joins. Social snapshot staleness remains a
