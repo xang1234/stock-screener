@@ -958,17 +958,19 @@ def test_provider_wide_refusal_returns_every_claimed_post_and_stops_the_run(back
 
     result = asyncio.run(worker.execute(NOW, 45))
     returned = work_ids[20 * answers:]
+    refused, unsent = returned[:20], returned[20:]
 
     assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20 * answers, len(returned), 0, answers + 1)
-    assert refusal_outcome(backlog, returned) == (
+    assert refusal_outcome(backlog, refused) == (
         {("pending", "provider_rejected")}, ["reconciled"] * answers + ["released"], 0)
+    assert refusal_outcome(backlog, unsent)[0] == {("pending", "provider_unavailable")}
 
     llm.answers = 10 ** 6
     retried = asyncio.run(worker.execute(NOW, 45))
     assert (retried.succeeded, retried.deferred, retried.failed) == (len(returned), 0, 0)
 
 
-def test_refusal_after_an_answer_fails_only_its_batch_without_splitting_it(backlog):
+def test_refusals_after_an_answer_are_split_only_within_the_run_call_cap(backlog):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
     configure_budget(backlog, output_rate="244.140625")
@@ -978,9 +980,48 @@ def test_refusal_after_an_answer_fails_only_its_batch_without_splitting_it(backl
 
     result = asyncio.run(worker.execute(NOW, 45))
 
-    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 0, 25, 3)
+    assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20, 0, 25, 19)
     assert refusal_outcome(backlog, work_ids[20:]) == (
-        {("failed_terminal", "provider_rejected")}, ["reconciled", "released", "released"], 0)
+        {("failed_terminal", "provider_rejected")}, ["reconciled"] + ["released"] * 18, 0)
+
+
+class PoisonLLM(FakeLLM):
+    """Refuses with 400 any batch holding post 1, as a content filter would, and answers the rest."""
+    async def completion(self, **kwargs):
+        from app.services.llm.llm_service import LLMProviderRejectedError
+        if "1" in {p["post_id"] for p in json.loads(kwargs["messages"][1]["content"])["posts"]}:
+            self.calls += 1
+            raise LLMProviderRejectedError("metered_provider_rejected", 400)
+        return await super().completion(**kwargs)
+
+
+def test_a_refused_oldest_post_does_not_stall_later_runs(backlog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog, output_rate="244.140625")
+    worker = ProcessSocialBacklog(backlog, llm=PoisonLLM(), batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(1, age=5))]
+    work_ids += [enqueue(backlog, worker, post(number)) for number in range(2, 26)]
+
+    first = asyncio.run(worker.execute(NOW, 25))
+    second = asyncio.run(worker.execute(NOW, 25))
+
+    assert (first.succeeded, first.deferred, first.failed) == (0, 25, 0)
+    assert (second.succeeded, second.deferred, second.failed) == (24, 0, 1)
+    assert refusal_outcome(backlog, work_ids[:1])[0] == {("failed_terminal", "provider_rejected")}
+
+
+def test_a_dead_provider_keeps_returning_previously_refused_posts(backlog):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog, output_rate="244.140625")
+    worker = ProcessSocialBacklog(backlog, llm=RefusingLLM(400), batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 21)]
+
+    runs = [asyncio.run(worker.execute(NOW, 20)) for _ in range(2)]
+
+    assert [(run.succeeded, run.deferred, run.failed) for run in runs] == [(0, 20, 0), (0, 20, 0)]
+    assert refusal_outcome(backlog, work_ids) == ({("pending", "provider_rejected")}, ["released", "released"], 0)
 
 
 def test_refusal_arriving_after_claim_expiry_still_releases_its_charge(backlog):
