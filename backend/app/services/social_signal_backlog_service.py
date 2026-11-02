@@ -462,7 +462,7 @@ class ProcessSocialBacklog:
         return sum(self._finish(work_id, token, state, error) is not None for work_id, token in claims)
 
     def _settle(self, claims, error):
-        """Close work a deferral released, unless another claim has taken it since."""
+        """Close work this run returned to pending, unless another claim has taken it since."""
         settled = 0
         with social_analysis_transaction(self.session_factory) as db:
             for work_id, _ in claims:
@@ -522,7 +522,6 @@ class ProcessSocialBacklog:
             succeeded, deferred, failed, outside = (
                 total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
             )
-        # A refusal is the post's fault only if the provider answered another request this run.
         if ledger.answered:
             failed += self._settle(ledger.refused_leaves, "provider_rejected")
         else:
@@ -532,18 +531,12 @@ class ProcessSocialBacklog:
                          "deferred %d posts", ledger.refusal_status, ledger.answered, deferred)
         return BacklogResult(succeeded, deferred, failed, outside, self.budget.status(current_time()).next_reset_at)
 
-    async def _extract(self, items, config, current_time, ledger, unsent=None):
-        """Return (succeeded, deferred, failed, outside) or an unusable response's code.
-
-        Work the run can no longer send returns to pending with `unsent` as its code.
-        A request whose outcome is unknown, such as a provider timeout, may have
-        billed, so it is retried at most once and only with a call left in the run's cap.
-        """
+    async def _extract(self, items, config, current_time, ledger, unsent_error=None):
         model, prompt, schema = config
         claims = tuple(claim for claim, _ in items)
         work_ids = [work_id for work_id, _ in claims]
         if ledger.stopped or ledger.calls_left < 1:
-            code = "provider_rejected" if ledger.stopped else unsent
+            code = "provider_rejected" if ledger.stopped else unsent_error
             return (0, self._finish_many(claims, "pending", code), 0, 0)
         for retry in range(2):
             metered = _MeteredCompletion(self, claims, current_time, ledger, retry=retry)
@@ -555,8 +548,6 @@ class ProcessSocialBacklog:
                 break
             except _Deferred as exc:
                 if retry:
-                    # The retry never went out or was refused, and deferred work would be
-                    # claimed again later, so the first request's unknown outcome stands.
                     return (0, 0, self._settle(claims, "completion_unknown"), exc.outside)
                 return (0, exc.count, 0, exc.outside)
             except asyncio.CancelledError:
@@ -591,11 +582,7 @@ class ProcessSocialBacklog:
         return (states.count("succeeded"), 0, states.count("failed_terminal"), 0)
 
     async def _isolate(self, items, config, current_time, code, ledger):
-        """Narrow an unusable batch response to the posts that provoke it.
-
-        Each half spends a call from the run's cap. A post refused alone stays
-        pending until the end of the run decides whether the refusal was its own.
-        """
+        """Narrow an unusable batch response to the posts that provoke it."""
         claims = tuple(claim for claim, _ in items)
         if len(items) == 1 and code == "provider_rejected":
             if self._finish_many(claims, "pending", code):
