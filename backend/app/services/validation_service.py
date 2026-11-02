@@ -653,9 +653,10 @@ def _pct_above_50dma(history: pd.DataFrame, before_entry: pd.DatetimeIndex) -> f
     Sessions from the entry on are left out: they were unknown when the position opened. A
     session the cache lacks leaves the extension unknown rather than averaging across the gap.
     """
-    if len(before_entry) < 50 or not before_entry.isin(history.index).all():
+    positions = history.index.get_indexer(before_entry)
+    if len(positions) < 50 or (positions < 0).any():
         return None
-    closes = history.loc[before_entry, "Close"].to_numpy(dtype=float)
+    closes = history["Close"].to_numpy(dtype=float)[positions]
     if not (closes > 0).all():
         return None
     # Rounded so float noise cannot drop an exact band edge, such as 20%, into the band below.
