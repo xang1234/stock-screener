@@ -268,7 +268,11 @@ class StaticScanBundleExporter:
 
         return sorted(
             rows,
-            key=lambda row: (-score(row), row.get("symbol") or ""),
+            key=lambda row: (
+                row.get("minervini_score") is None and row.get("canslim_score") is None,
+                -score(row),
+                row.get("symbol") or "",
+            ),
         )
 
     @staticmethod

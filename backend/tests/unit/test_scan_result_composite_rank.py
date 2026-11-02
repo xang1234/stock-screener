@@ -95,7 +95,7 @@ def test_peer_cache_top_symbol_is_the_best_fully_scored_row(session, module_name
 
 def test_chart_prewarm_warms_the_top_fully_scored_rows(session, monkeypatch):
     import app.tasks.cache_tasks as module
-    import app.wiring.bootstrap as bootstrap
+    from app.wiring import bootstrap
 
     checked: list[str] = []
 

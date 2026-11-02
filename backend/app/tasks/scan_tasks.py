@@ -42,6 +42,7 @@ def compute_industry_peer_metrics(db: Session, scan_id: str):
         db: Database session
         scan_id: Scan ID
     """
+    from ..infra.query.sql_filter_compiler import composite_rank_order
     from ..models.industry import IBDGroupPeerCache
     from sqlalchemy import func
 
@@ -71,7 +72,7 @@ def compute_industry_peer_metrics(db: Session, scan_id: str):
                 ScanResult.scan_id == scan_id,
                 ScanResult.ibd_industry_group == group.ibd_industry_group
             ).order_by(
-                ScanResult.composite_score.desc().nullslast()
+                *composite_rank_order(ScanResult)
             ).first()
 
             cache = IBDGroupPeerCache(

@@ -44,6 +44,7 @@ from app.infra.query.feature_store_query import (
     apply_sort_all,
     apply_sort_and_paginate,
 )
+from app.infra.query.sql_filter_compiler import composite_rank_order
 from app.infra.serialization import (
     coerce_bool_or_false,
     convert_numpy_types,
@@ -682,7 +683,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(industry_col == ibd_industry_group)
-            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(StockFeatureDaily))
             .all()
         )
         return tuple(
@@ -709,7 +710,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(sector_col == gics_sector)
-            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(StockFeatureDaily))
             .all()
         )
         return tuple(

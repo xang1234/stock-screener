@@ -20,6 +20,7 @@ from app.infra.query.scan_result_query import (
     apply_sort_all,
     apply_sort_and_paginate,
 )
+from app.infra.query.sql_filter_compiler import composite_rank_order
 from app.infra.serialization import (
     coerce_bool_or_false,
     convert_numpy_types,
@@ -782,7 +783,7 @@ class SqlScanResultRepository(ScanResultRepository):
         rows = (
             _scan_results_query(self._session, scan_id)
             .filter(ScanResult.ibd_industry_group == ibd_industry_group)
-            .order_by(ScanResult.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(ScanResult))
             .all()
         )
         return tuple(
@@ -796,7 +797,7 @@ class SqlScanResultRepository(ScanResultRepository):
         rows = (
             _scan_results_query(self._session, scan_id)
             .filter(ScanResult.gics_sector == gics_sector)
-            .order_by(ScanResult.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(ScanResult))
             .all()
         )
         return tuple(

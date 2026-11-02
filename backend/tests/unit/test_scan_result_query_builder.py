@@ -278,15 +278,12 @@ class TestSortSpec:
         with Session() as session:
             query = apply_sql_sort(
                 session.query(ScanResult),
-                SortSpec(field="composite_score", order=SortOrder.DESC),
+                SortSpec(field="rs_rating", order=SortOrder.DESC),
                 _FILTER_FIELD_RESOLVER,
             )
 
         sql = " ".join(str(query.statement).split())
-        assert (
-            "ORDER BY scan_results.composite_score DESC NULLS LAST, "
-            "scan_results.symbol ASC"
-        ) in sql
+        assert "ORDER BY scan_results.rs_rating DESC, scan_results.symbol ASC" in sql
 
     def test_symbol_sort_does_not_add_conflicting_tie_breaker(self):
         with Session() as session:

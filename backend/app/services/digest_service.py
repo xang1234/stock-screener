@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import FeatureRow
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.infra.query.sql_filter_compiler import composite_rank_order
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMetrics
@@ -315,8 +316,7 @@ class DigestService:
             db.query(StockFeatureDaily)
             .filter(StockFeatureDaily.run_id == latest_run.id)
             .order_by(
-                case((StockFeatureDaily.composite_score.is_(None), 1), else_=0),
-                StockFeatureDaily.composite_score.desc(),
+                *composite_rank_order(StockFeatureDaily),
                 StockFeatureDaily.symbol.asc(),
             )
             .limit(max(profile_detail.digest.leader_limit * 4, DIGEST_LEADERS_LIMIT))
@@ -362,7 +362,8 @@ class DigestService:
                 return (-(eps_growth + sales_growth), -score, row.symbol)
             if leader_sort == "rs_then_score":
                 return (-rs_rating, -score, row.symbol)
-            return (-score, -rs_rating, row.symbol)
+            unscored = row.minervini_score is None and row.canslim_score is None
+            return (unscored, -score, -rs_rating, row.symbol)
 
         leaders: list[DigestLeaderItem] = []
         for row in sorted(candidate_rows, key=_leader_sort_key)[: profile_detail.digest.leader_limit]:
@@ -634,8 +635,7 @@ class DigestService:
                 db.query(StockFeatureDaily.symbol)
                 .filter(StockFeatureDaily.run_id == latest_run.id)
                 .order_by(
-                    case((StockFeatureDaily.composite_score.is_(None), 1), else_=0),
-                    StockFeatureDaily.composite_score.desc(),
+                    *composite_rank_order(StockFeatureDaily),
                     StockFeatureDaily.symbol.asc(),
                 )
                 .limit(WATCHLIST_LEADER_DEPTH)

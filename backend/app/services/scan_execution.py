@@ -149,6 +149,7 @@ def compute_industry_peer_metrics(db: Session, scan_id: str) -> None:
     """Compute aggregate metrics for each industry group in a scan."""
     from sqlalchemy import func
 
+    from app.infra.query.sql_filter_compiler import composite_rank_order
     from app.models.industry import IBDGroupPeerCache
 
     try:
@@ -172,7 +173,7 @@ def compute_industry_peer_metrics(db: Session, scan_id: str) -> None:
                 ScanResult.scan_id == scan_id,
                 ScanResult.ibd_industry_group == group.ibd_industry_group,
             ).order_by(
-                ScanResult.composite_score.desc().nullslast()
+                *composite_rank_order(ScanResult)
             ).first()
 
             cache = IBDGroupPeerCache(
