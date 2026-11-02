@@ -239,7 +239,7 @@ class _MeteredCompletion:
                 if not budget.release_unbilled(attempt):
                     raise _CompletionUnknown() from exc
                 self.ledger.refusal_status = exc.status_code
-                if self.ledger.stopped:
+                if self.ledger.stopped or self.retry:
                     self.owner._finish_many(self.claims, "pending", "provider_rejected")
                     raise _Deferred(len(self.claims)) from None
                 raise SocialExtractionError("provider_rejected") from None
@@ -559,8 +559,8 @@ class ProcessSocialBacklog:
                 break
             except _Deferred as exc:
                 if retry:
-                    # The retry never went out, and deferred work would be claimed again
-                    # later, so the first request's unknown outcome stands.
+                    # The retry never went out or was refused, and deferred work would be
+                    # claimed again later, so the first request's unknown outcome stands.
                     return (0, 0, self._settle(claims, "completion_unknown"), exc.outside)
                 return (0, exc.count, 0, exc.outside)
             except asyncio.CancelledError:
