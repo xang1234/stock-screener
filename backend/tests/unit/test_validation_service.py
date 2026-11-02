@@ -1017,6 +1017,57 @@ def test_each_stage_group_summarizes_its_own_picks_with_the_overlap_rule(session
     ]
 
 
+def test_a_repeat_in_another_group_stays_suppressed_and_every_dimension_adds_up(session):
+    for symbol in ("NVDA", "AMD"):
+        _add_universe(session, symbol)
+    first, second = _add_run(session, date(2026, 3, 2)), _add_run(session, date(2026, 3, 3))
+    _add_pick(session, first, "NVDA", 90.0, details={"action_state": "extended"})
+    _add_pick(session, second, "NVDA", 90.0, details={"stage": 3})
+    _add_pick(
+        session,
+        first,
+        "AMD",
+        80.0,
+        details={"stage": None, "setup_engine": {"pattern_primary": "cup_with_handle"}},
+    )
+    session.commit()
+    rows = [(10, 13, 9.5, 11)] * 6
+    service = _service(
+        {
+            "NVDA": _history_frame(date(2026, 3, 3), rows),
+            "AMD": _history_frame(date(2026, 3, 3), rows),
+        }
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=60,
+        as_of_date=FIXED_TODAY,
+    )
+
+    assert [
+        (g.value, [(h.sample_size, h.suppressed_overlapping) for h in g.horizons[:2]])
+        for g in payload.groups
+        if g.dimension == "stage"
+    ] == [("2", [(1, 0), (1, 0)]), ("3", [(1, 0), (0, 1)])]
+    assert [h.sample_size for h in payload.horizons[:2]] == [3, 2]
+    # Counted picks with no value, at 1 and 5 sessions. NVDA's repeat counts only at 1.
+    valueless = {
+        "rating": [0, 0],
+        "stage": [1, 1],
+        "action_state": [2, 1],
+        "setup_pattern": [2, 1],
+        "extension_band": [3, 2],
+    }
+    for dimension, missing in valueless.items():
+        grouped = [
+            sum(g.horizons[index].sample_size for g in payload.groups if g.dimension == dimension)
+            for index in (0, 1)
+        ]
+        assert [count + extra for count, extra in zip(grouped, missing)] == [3, 2], dimension
+
+
 def test_normalize_price_history_keeps_the_exchange_date_of_tz_aware_bars():
     index = pd.DatetimeIndex(["2026-03-09", "2026-03-10"]).tz_localize("Asia/Tokyo")
     frame = pd.DataFrame(
