@@ -167,7 +167,7 @@ def test_publication_closes_every_older_unpublished_live_generation(store):
     with pytest.raises(ValueError, match="run_not_collecting"):
         w.select_current_inputs("old-running")
     with pytest.raises(ValueError, match="run_not_collecting"):
-        w.fail_analysis("old-running", "analysis_failed")
+        w.fail_run("old-running", "analysis_failed")
     with pytest.raises(ValueError, match="publication_generation_superseded"):
         w.publish("old-staged", version)
     # Its frozen links remain its manifest for reads and deliberate replays.
@@ -602,7 +602,7 @@ def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(sto
     )
     w.select_current_inputs("failed")
 
-    w.fail_analysis("failed", "analysis_failed")
+    w.fail_run("failed", "analysis_failed")
 
     with store() as db:
         run = db.get(SocialSignalRun, "failed")

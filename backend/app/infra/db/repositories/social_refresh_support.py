@@ -20,6 +20,10 @@ from app.services.social_company_identity_service import SocialCompanyIdentitySe
 from app.services.social_source_admin_service import SocialRuntimeState
 from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 
+# Scoring reads posts published this long before as_of. A generation older than
+# that saved nothing newer than its own read, so the readers skip it.
+RETAINED_EVIDENCE = timedelta(days=15)
+
 
 def _utc(value):
     return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
@@ -131,6 +135,7 @@ class SocialScoringEvidenceReader:
             content_ids = {}
             runs = db.scalars(select(SocialSignalRun).where(
                 SocialSignalRun.provider == current.provider,
+                SocialSignalRun.created_at >= as_of - RETAINED_EVIDENCE,
                 SocialSignalRun.created_at <= as_of,
             ).order_by(SocialSignalRun.created_at, SocialSignalRun.id)).all()
             for generation in runs:
@@ -146,7 +151,7 @@ class SocialScoringEvidenceReader:
                         data["created_at"] = datetime.fromisoformat(data["created_at"])
                         data["observed_at"] = datetime.fromisoformat(data["observed_at"])
                         post = SocialPostRecord(**data)
-                        if (post.created_at < as_of - timedelta(days=15)
+                        if (post.created_at < as_of - RETAINED_EVIDENCE
                                 or post.created_at > as_of or post.observed_at > as_of):
                             continue
                         key = (post.provider_post_id, source_id)
@@ -191,6 +196,7 @@ class SocialScoringEvidenceReader:
             content_ids = {}
             runs = db.scalars(select(SocialSignalRun).where(
                 SocialSignalRun.provider == current.provider,
+                SocialSignalRun.created_at >= as_of - RETAINED_EVIDENCE,
                 SocialSignalRun.created_at <= as_of,
             ).order_by(SocialSignalRun.created_at, SocialSignalRun.id)).all()
             latest_source_completeness = {}
@@ -211,7 +217,7 @@ class SocialScoringEvidenceReader:
                         data["created_at"] = datetime.fromisoformat(data["created_at"])
                         data["observed_at"] = datetime.fromisoformat(data["observed_at"])
                         post = SocialPostRecord(**data)
-                        if (post.created_at < as_of - timedelta(days=15)
+                        if (post.created_at < as_of - RETAINED_EVIDENCE
                                 or post.created_at > as_of or post.observed_at > as_of):
                             continue
                         key = (post.provider_post_id, source_id)

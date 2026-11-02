@@ -158,8 +158,6 @@ class Writer:
         self.events.append("writer.fail_run")
         self.failures.append((run_id, reason_code))
 
-    fail_analysis = fail_run
-
     def prepare_run(self, run_id, rows, as_of, *, theme_evidence=(), context=None):
         self.events.append("writer.prepare")
         self.prepared = (rows, theme_evidence, context)

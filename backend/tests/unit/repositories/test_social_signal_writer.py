@@ -670,4 +670,6 @@ def test_publish_refuses_a_pinned_result_that_stopped_revalidating_with_a_stable
         w.publish("run", version)
 
     with store() as db:
-        assert db.get(SocialSignalRun, "run").status == "staged"
+        run = db.get(SocialSignalRun, "run")
+        assert (run.status, run.published_at, run.application_progress_json["failure"]) == (
+            "failed", None, {"reason_code": "publication_failed"})

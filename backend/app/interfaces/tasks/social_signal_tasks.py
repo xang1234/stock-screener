@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.celery_app import celery_app
 
@@ -50,10 +50,10 @@ def refresh_social_signals(self, origin="scheduled", scheduled_for=None):
     return _run_result(result)
 
 
-def _superseded(run, all_runs):
-    """A generation older than the latest publication would republish stale reads."""
-    published_at = max((value.created_at for value in all_runs if value.status == "published"), default=None)
-    return published_at is not None and run.created_at <= published_at
+def _latest_publication(db):
+    """A generation created before the latest publication would republish stale reads."""
+    from app.infra.db.models.social_signals import SocialSignalRun
+    return db.scalar(select(func.max(SocialSignalRun.created_at)).where(SocialSignalRun.status == "published"))
 
 
 def _resume_superseded(run_id):
@@ -68,29 +68,31 @@ def _resume_superseded(run_id):
         # A publication closes the older generations it can see; one created
         # later with an older timestamp is caught here. Admin retries of
         # published or analysis-failed generations are deliberate.
-        return run.status == "running" and _superseded(run, db.scalars(select(SocialSignalRun)).all())
+        published_at = _latest_publication(db)
+        return run.status == "running" and published_at is not None and run.created_at <= published_at
 
 
-def _latest_resumable_run():
+def _latest_resumable_run(now):
     from app.database import SessionLocal
     from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
+    from app.infra.db.repositories.social_refresh_support import RETAINED_EVIDENCE
     with SessionLocal() as db:
         registry = db.get(SocialSourceRegistry, 1)
         if registry is None or registry.mode == "off" or registry.provider == "disabled":
             return None
-        all_runs = db.scalars(select(SocialSignalRun).order_by(
+        recent = SocialSignalRun.created_at >= now - RETAINED_EVIDENCE
+        candidates = select(SocialSignalRun.id).where(SocialSignalRun.status == "running", recent)
+        published_at = _latest_publication(db)
+        if published_at is not None:
+            candidates = candidates.where(SocialSignalRun.created_at > published_at)
+        # A replay is created after the run it replays, so the same bound finds every replay of a candidate.
+        replayed_run_ids = set(db.scalars(select(
+            SocialSignalRun.application_progress_json[("replay", "saved_run_id")].as_string()
+        ).where(recent)))
+        candidate_ids = db.scalars(candidates.order_by(
             SocialSignalRun.created_at.desc(), SocialSignalRun.id.desc()
         )).all()
-        replayed_run_ids = {
-            run.application_progress_json.get("replay", {}).get("saved_run_id")
-            for run in all_runs
-            if run.application_progress_json.get("replay")
-        }
-        runs = (
-            run for run in all_runs
-            if run.status == "running" and run.id not in replayed_run_ids
-            and not _superseded(run, all_runs)
-        )
+        runs = (db.get(SocialSignalRun, run_id) for run_id in candidate_ids if run_id not in replayed_run_ids)
         return next((run.id for run in runs if (
             set(run.application_progress_json.get("observations", {}))
             == set(run.application_progress_json.get("sources", {}))
@@ -114,10 +116,10 @@ def resume_social_analysis(self, saved_run_id=None, scheduled_for=None):
     from app.wiring.use_case_factories import get_refresh_social_signals_use_case
     if saved_run_id is not None and _resume_superseded(saved_run_id):
         return {"status": "skipped", "reason_codes": ["generation_superseded"]}
-    saved_run_id = saved_run_id or _latest_resumable_run()
+    now = _now(scheduled_for)
+    saved_run_id = saved_run_id or _latest_resumable_run(now)
     if saved_run_id is None:
         return {"status": "skipped", "reason_codes": ["no_resumable_generation"]}
-    now = _now(scheduled_for)
     result = asyncio.run(get_refresh_social_signals_use_case().execute(
         f"budget-resume:{saved_run_id}", now, saved_run_id=saved_run_id
     ))

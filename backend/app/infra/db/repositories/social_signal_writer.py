@@ -30,6 +30,11 @@ from app.services.twitter_content_identity import twitter_external_id
 from app.services.theme_evidence_eligibility_service import grant_eligibility
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
+# Why a collecting generation can end without publishing.
+_RUN_FAILURES = frozenset({
+    "analysis_failed", "provider_lease_unavailable", "provider_lease_lost",
+    "social_runtime_changed", "source_participation_failed",
+})
 
 
 def utc(value):
@@ -213,9 +218,9 @@ class SocialSignalWriter:
                 raise ValueError("unsupported_existing_run_state")
         return self.publish(run_id, expected_mode_version)
 
-    def fail_analysis(self, run_id, reason_code):
-        """Close a generation on terminal extraction failure without publishing it."""
-        if reason_code != "analysis_failed":
+    def fail_run(self, run_id, reason_code):
+        """Close a collecting generation nothing will resume, without publishing it."""
+        if reason_code not in _RUN_FAILURES:
             raise ValueError("unsupported_social_run_failure")
         completed_at = self.clock()
         validate_utc_timestamp(completed_at, "completed_at")
@@ -244,9 +249,8 @@ class SocialSignalWriter:
             run.status, run.completed_at = "failed", completed_at
 
     @staticmethod
-    def _close_superseded(db, published, now):
-        """Older generations still open would only republish stale reads."""
-        failure = json.dumps({"reason_code": "generation_superseded"})
+    def _close_runs(db, reason_code, *where, **values):
+        failure = json.dumps({"reason_code": reason_code})
         runs = SocialSignalRun.__table__
         # PostgreSQL stores this column as json, which only concatenates as jsonb.
         if db.get_bind().dialect.name == "sqlite":
@@ -256,10 +260,19 @@ class SocialSignalWriter:
                 cast(literal('{"failure": %s}' % failure), JSONB)), JSON)
         # A Core statement loads no row. The ORM guards it bypasses protect
         # publications; neither admits a staged generation moving to failed.
-        db.execute(update(runs).where(
+        db.execute(update(runs).where(*where).values(
+            status="failed", application_progress_json=progress, **values))
+
+    @classmethod
+    def _close_superseded(cls, db, published, now):
+        """Older generations still open would only republish stale reads."""
+        runs = SocialSignalRun.__table__
+        cls._close_runs(
+            db, "generation_superseded",
             runs.c.id != published.id, runs.c.mode == "live",
             runs.c.status.in_(("running", "staged")), runs.c.created_at <= published.created_at,
-        ).values(status="failed", completed_at=now, application_progress_json=progress))
+            completed_at=now,
+        )
 
     @staticmethod
     def _post(value):
@@ -835,6 +848,17 @@ class SocialSignalWriter:
         return result
 
     def publish(self, run_id, expected_mode_version):
+        try:
+            return self._publish(run_id, expected_mode_version)
+        except ValueError:
+            # Nothing retries a staged generation, so one that fails to publish is closed.
+            runs = SocialSignalRun.__table__
+            with self.session_factory.begin() as db:
+                _lock_registry(db)
+                self._close_runs(db, "publication_failed", runs.c.id == run_id, runs.c.status == "staged")
+            raise
+
+    def _publish(self, run_id, expected_mode_version):
         with self.session_factory() as db:
             run = db.get(SocialSignalRun, run_id)
             if run is not None and run.application_progress_json.get("failure", {}).get("reason_code") == "generation_superseded":
