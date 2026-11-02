@@ -437,3 +437,33 @@ def test_metered_transport_performs_one_http_attempt_and_redacts_errors(monkeypa
     assert len(requests) == 1
     assert "synthetic-private-response" not in message
     assert "synthetic-private-response" not in caplog.text
+
+
+@pytest.mark.parametrize("status,refused", [
+    (400, True), (401, True), (404, True), (408, False), (429, False), (500, False),
+])
+def test_metered_transport_separates_refused_requests_from_unknown_outcomes(
+    monkeypatch, caplog, status, refused,
+):
+    import asyncio
+    import httpx
+    from app.services.llm.llm_service import LLMError, LLMProviderRejectedError, LLMService
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+    async def respond(request):
+        return httpx.Response(status, json={"error": {"message": "synthetic-private-response"}})
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            monkeypatch.setattr(OpenAIChatCompletion, "_get_async_http_client", staticmethod(lambda **kw: client))
+            def overrides(self, params):
+                params.update(api_key="synthetic-only", api_base="https://synthetic.invalid/v1")
+                return None, None, None
+            monkeypatch.setattr(LLMService, "_apply_provider_overrides", overrides)
+            with pytest.raises(LLMError) as error:
+                await LLMService(use_case="extraction").completion(model="openai/gpt-4o-mini",
+                    messages=[{"role": "user", "content": "fixture"}], max_tokens=20,
+                    allow_fallbacks=False, num_retries=0, metered=True)
+            return error.value
+    error = asyncio.run(run())
+    assert isinstance(error, LLMProviderRejectedError) is refused
+    assert f"status={status}" in caplog.text
+    assert "synthetic-private-response" not in caplog.text
