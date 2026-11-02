@@ -1474,7 +1474,7 @@ async def test_association_decision_requires_live_mode_reason_and_current_versio
     )
 
 
-def test_admin_analysis_names_no_signal_skips_instead_of_provider_error(db_session):
+def test_admin_analysis_names_no_signal_skips_and_refusals_instead_of_provider_error(db_session):
     from datetime import datetime, timezone
 
     from app.api.v1.social_signals import admin_analysis
@@ -1486,11 +1486,12 @@ def test_admin_analysis_names_no_signal_skips_instead_of_provider_error(db_sessi
     item = ContentItem(source_type="twitter", external_id="gated", content="coffee?")
     db_session.add(item)
     db_session.flush()
-    db_session.add(SocialExtractionWork(content_item_id=item.id, input_hash="h", prompt_version="v",
-        schema_version="v", selected_model="m", input_snapshot_json={}, state="succeeded",
-        error_code=SKIPPED_NO_SIGNAL, created_at=now, updated_at=now))
-    db_session.flush()
+    for code in (SKIPPED_NO_SIGNAL, "provider_rejected", "malformed_json"):
+        db_session.add(SocialExtractionWork(content_item_id=item.id, input_hash=code, prompt_version="v",
+            schema_version="v", selected_model="m", input_snapshot_json={}, state="failed_terminal",
+            error_code=code, created_at=now, updated_at=now))
+        db_session.flush()
 
     assert [row["error_code"] for row in admin_analysis(state=None, limit=10, db=db_session)] == [
-        SKIPPED_NO_SIGNAL
+        SKIPPED_NO_SIGNAL, "provider_rejected", "provider_error"
     ]

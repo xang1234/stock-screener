@@ -948,7 +948,7 @@ def refusal_outcome(backlog, work_ids):
 
 
 @pytest.mark.parametrize("status,answers", [(400, 0), (401, 1), (402, 1), (403, 1), (404, 1)])
-def test_provider_wide_refusal_returns_every_claimed_post_and_stops_the_run(backlog, status, answers):
+def test_provider_wide_refusal_returns_every_claimed_post_and_stops_the_run(backlog, caplog, status, answers):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
     configure_budget(backlog, output_rate="244.140625")
@@ -960,6 +960,10 @@ def test_provider_wide_refusal_returns_every_claimed_post_and_stops_the_run(back
     returned = work_ids[20 * answers:]
     refused, unsent = returned[:20], returned[20:]
 
+    assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == [
+        f"Social LLM provider refused a request with status {status} after {answers} answered this run; "
+        f"stopping the run work_ids={refused}"
+    ]
     assert (result.succeeded, result.deferred, result.failed, llm.calls) == (20 * answers, len(returned), 0, answers + 1)
     assert refusal_outcome(backlog, refused) == (
         {("pending", "provider_rejected")}, ["reconciled"] * answers + ["released"], 0)
