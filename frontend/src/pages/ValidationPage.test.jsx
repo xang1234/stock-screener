@@ -272,6 +272,9 @@ describe('ValidationPage', () => {
     ]);
     expect(within(table).getByText('3').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 events');
     expect(within(table).getByText('2').closest('tr')).not.toHaveAttribute('title');
+    expect(getComputedStyle(within(table).getByText('3')).color).not.toBe(
+      getComputedStyle(within(table).getByText('2')).color,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: '5S' }));
 

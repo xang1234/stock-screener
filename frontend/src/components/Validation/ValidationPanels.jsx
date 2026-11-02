@@ -19,14 +19,14 @@ import {
   Typography,
 } from '@mui/material';
 
-import { actionStateMeta } from '../../features/opportunityState/actionState';
+import { ACTION_STATE_META } from '../../features/opportunityState/actionState';
 import { formatPatternName } from '../../utils/formatUtils';
 
 const GROUP_HORIZONS = [1, 5, 20, 60];
 const SMALL_SAMPLE_SIZE = 20;
 // Dimensions whose values have a display name; the others show their value as it is.
 const GROUP_VALUE_LABELS = {
-  action_state: (value) => actionStateMeta(value).label,
+  action_state: (value) => ACTION_STATE_META[value]?.label ?? value,
   setup_pattern: formatPatternName,
 };
 
