@@ -17,7 +17,7 @@ test.describe('Social Signals', () => {
     await expect(page.getByRole('table', { name: 'Ranked Social Signals' }).locator('tbody tr').first()).toContainText('NVDA');
     await page.getByRole('button', { name: 'All Signals' }).click();
     await expect(page.getByRole('table', { name: 'Context' })).toContainText('SPY');
-    await expect(page.getByRole('table', { name: 'Needs resolution' })).toContainText('$MYSTERY');
+    await expect(page.getByRole('table', { name: 'Needs resolution' })).toHaveCount(0);
 
     await page.getByRole('table', { name: 'Ranked Social Signals' }).locator('tbody tr').first().click();
     const evidence = page.getByRole('dialog', { name: 'Social evidence' });
@@ -52,6 +52,7 @@ test.describe('Social Signals', () => {
     await page.getByLabel('Social admin key').fill('fixture-admin');
     await page.getByRole('button', { name: 'Load Social administration' }).click();
     await expect(page.getByText('Social Sources')).toBeVisible();
+    await expect(page.getByRole('table', { name: 'Tickers that need resolution' })).toContainText('$MYSTERY');
 
     await page.getByLabel('List name').fill('Japan Momentum');
     await page.getByLabel('List ID or URL').fill('3000000000000000000');
