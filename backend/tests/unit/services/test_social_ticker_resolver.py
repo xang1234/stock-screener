@@ -155,6 +155,21 @@ def test_recorded_identity_policy_names_single_listing_derivation(db_session):
 def test_cashtags_reject_money_amounts():
     from app.services.social_ticker_resolver import cashtags
     text = "$NVDA $MU. $BRK.B up; $10K $1M $50m $1.5B $2T $300. $0 $750 $10,000 and $3M? x$AAA"
-    assert cashtags(text) == ["$BRK.B", "$MU.", "$NVDA"]
+    assert cashtags(text) == ["$BRK.B", "$MU", "$NVDA"]
     assert cashtags("$6758.T 和 $2330.TW, 关注$0700.HK") == ["$0700.HK", "$2330.TW", "$6758.T"]
     assert cashtags("$1.5bn, $10K-$20K, $3mm, $2tn") == []
+
+
+def test_cashtags_end_a_sentence_without_losing_listing_suffixes():
+    from app.services.social_ticker_resolver import cashtags
+    text = "Long $CRDO. Then $6758.T, $005930.KS and $BRK.B- or $BRK-B..."
+    assert cashtags(text) == ["$005930.KS", "$6758.T", "$BRK-B", "$BRK.B", "$CRDO"]
+
+
+def test_bare_acronym_that_is_also_a_ticker_names_the_word(resolver, db_session):
+    db_session.add(StockUniverse(symbol="AI", market="US", is_active=True))
+    db_session.flush()
+    assert resolver.resolve("AI").status == "unresolved"
+    assert [resolver.resolve(token, market).symbol for token, market in (
+        ("$AI", None), ("AI", "US"), ("HSBC", None),
+    )] == ["AI", "AI", "HSBC"]
