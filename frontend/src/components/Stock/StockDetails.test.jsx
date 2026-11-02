@@ -225,6 +225,7 @@ describe('StockDetails', () => {
     expect(screen.getByText('Data Center')).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Avg with 7% stop')).toHaveLength(4);
+    expect(screen.queryByText('Failure Clusters')).not.toBeInTheDocument();
     expect(screen.queryByText('By Group')).not.toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();

@@ -291,6 +291,13 @@ describe('ValidationPage', () => {
     ]);
     expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 events');
     expect(within(table).getByText('30%+').closest('tr')).not.toHaveAttribute('title');
+
+    fireEvent.click(screen.getByRole('button', { name: '60S' }));
+
+    const setupReady = within(table).getByText('Setup Ready').closest('tr');
+    expect(within(table).getByText('2').closest('tr').cells[1]).toHaveTextContent('0');
+    expect(setupReady.cells[1]).toHaveTextContent('0');
+    expect(setupReady).toHaveAttribute('title', 'Small sample: fewer than 20 events');
   });
 
   it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
