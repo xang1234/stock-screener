@@ -1,9 +1,13 @@
-"""Return social extraction work stranded as completion_unknown to the backlog.
+"""Return social extraction work stranded as completion_unknown, or refused as
+provider_rejected, to the backlog.
 
 Work qualifies when no extraction attempt for it was billed (reconciled) or is
 still in flight, and its post is inside the analysis window the backlog claims
-from. A dry run prints the counts; --apply writes them in one transaction.
-Running it again finds nothing new to requeue.
+from. Work whose attempt is uncertain is requeued deliberately, and a few of
+those requests may have been billed. --since and --until keep only work with an
+attempt created in that window, read as UTC. A dry run prints the counts;
+--apply writes them in one transaction. Running it again finds nothing new to
+requeue.
 """
 
 from __future__ import annotations
@@ -16,23 +20,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+ERROR_CODES = ("completion_unknown", "provider_rejected")
 
-def _classify(db, now):
+
+def _utc(value):
+    return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+def _classify(db, now, error_code, since, until):
     from sqlalchemy import select
 
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
 
-    attempt_states = {}
+    attempt_states, in_window = {}, set()
     for attempt in db.scalars(select(SocialLLMAttempt).where(
         SocialLLMAttempt.operation_kind == "social_extraction"
     )):
+        created = _utc(attempt.created_at)
         for work_id in attempt.work_ids:
             attempt_states.setdefault(work_id, set()).add(attempt.state)
+            if (since is None or since <= created) and (until is None or created < until):
+                in_window.add(work_id)
     rows = db.scalars(select(SocialExtractionWork).where(
         SocialExtractionWork.state == "failed_terminal",
-        SocialExtractionWork.error_code == "completion_unknown",
+        SocialExtractionWork.error_code == error_code,
     ).order_by(SocialExtractionWork.id)).all()
     for row in rows:
+        if (since, until) != (None, None) and row.id not in in_window:
+            continue
         states = attempt_states.get(row.id, set())
         published = datetime.fromisoformat(row.input_snapshot_json["created_at"])
         if "reconciled" in states:
@@ -45,15 +60,16 @@ def _classify(db, now):
             yield "requeue", row
 
 
-def requeue(session_factory, now, *, apply=False):
+def requeue(session_factory, now, *, apply=False, error_code="completion_unknown", since=None, until=None):
     from app.services.social_llm_budget_service import social_analysis_transaction
 
+    since, until = _utc(since), _utc(until)
     if not apply:
         with session_factory() as db:
-            return Counter(kind for kind, _ in _classify(db, now))
+            return Counter(kind for kind, _ in _classify(db, now, error_code, since, until))
     counts = Counter()
     with social_analysis_transaction(session_factory) as db:
-        for kind, row in _classify(db, now):
+        for kind, row in _classify(db, now, error_code, since, until):
             counts[kind] += 1
             if kind == "requeue":
                 row.state, row.error_code = "pending", None
@@ -65,12 +81,16 @@ def requeue(session_factory, now, *, apply=False):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="write the requeue instead of only counting")
+    parser.add_argument("--error-code", choices=ERROR_CODES, default="completion_unknown")
+    parser.add_argument("--since", type=datetime.fromisoformat, help="earliest attempt created_at, inclusive")
+    parser.add_argument("--until", type=datetime.fromisoformat, help="latest attempt created_at, exclusive")
     args = parser.parse_args(argv)
     from app.database import SessionLocal
 
-    counts = requeue(SessionLocal, datetime.now(timezone.utc), apply=args.apply)
+    counts = requeue(SessionLocal, datetime.now(timezone.utc), apply=args.apply,
+                     error_code=args.error_code, since=args.since, until=args.until)
     verb = "requeued" if args.apply else "would requeue"
-    print(f"{verb} {counts['requeue']} completion_unknown work rows")
+    print(f"{verb} {counts['requeue']} {args.error_code} work rows")
     for kind in ("billed", "in_flight", "outside_window"):
         print(f"left {kind}: {counts[kind]}")
     return 0
