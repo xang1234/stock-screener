@@ -658,7 +658,8 @@ def _pct_above_50dma(history: pd.DataFrame, before_entry: pd.DatetimeIndex) -> f
     closes = history.loc[before_entry, "Close"].to_numpy(dtype=float)
     if not (closes > 0).all():
         return None
-    return (closes[-1] / closes.mean() - 1.0) * 100.0
+    # Rounded so float noise cannot drop an exact band edge, such as 20%, into the band below.
+    return round((closes[-1] / closes.mean() - 1.0) * 100.0, 6)
 
 
 def _entry_session_index(event_at: date | datetime, calendar: pd.DatetimeIndex) -> int:

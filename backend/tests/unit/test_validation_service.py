@@ -900,6 +900,8 @@ def test_extension_is_unknown_when_a_session_before_entry_lacks_a_cached_bar():
     ("closes", "band"),
     [
         ([100.0] * 50, "0-10%"),
+        # 120 over a mean of 100 computes as 19.999999999999996%.
+        ([80.0] * 25 + [120.0] * 25, "20-30%"),
     ],
 )
 def test_a_pick_on_the_lookback_start_is_banded_by_the_50_sessions_before_its_entry(
