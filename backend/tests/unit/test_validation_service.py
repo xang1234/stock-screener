@@ -810,27 +810,37 @@ def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extensio
     ]
 
 
-def test_groups_follow_the_dimension_order_then_numeric_or_alphabetical_values():
+def test_groups_follow_the_dimension_order_then_each_dimensions_value_order():
     events = [
         _grouped(ValidationSourceKind.SCAN_PICK, attributes)
         for attributes in (
-            {"rating": "Watch", "stage": 10, "setup_pattern": ""},
-            {"rating": "Buy", "stage": 2, "action_state": "setup_ready"},
-            {"rating": "Buy", "stage": 3, "action_state": "extended", "setup_pattern": "cup_with_handle"},
+            {"rating": "Watch", "stage": 10, "setup_pattern": "", "action_state": "setup_ready"},
+            {"rating": "Buy", "stage": 2, "action_state": "data_limited"},
+            {"rating": "Buy", "stage": 2},
+            {"rating": "Strong Buy", "stage": 3, "action_state": "extended", "setup_pattern": "cup_with_handle"},
+            {"rating": "Hold", "action_state": "not_computed", "setup_pattern": "vcp"},
+            {"rating": "Error", "action_state": "breakout"},
         )
     ]
 
     groups = _service()._build_groups(events, ValidationSourceKind.SCAN_PICK)
 
     assert [(g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
+        ("Rating", "Strong Buy", 1),
         ("Rating", "Buy", 2),
         ("Rating", "Watch", 1),
-        ("Stage", "2", 1),
+        ("Rating", "Error", 1),
+        ("Rating", "Hold", 1),
+        ("Stage", "2", 2),
         ("Stage", "3", 1),
         ("Stage", "10", 1),
         ("Action State", "extended", 1),
+        ("Action State", "data_limited", 1),
         ("Action State", "setup_ready", 1),
+        ("Action State", "breakout", 1),
+        ("Action State", "not_computed", 1),
         ("Setup Pattern", "cup_with_handle", 1),
+        ("Setup Pattern", "vcp", 1),
     ]
 
 

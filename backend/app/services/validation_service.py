@@ -7,6 +7,7 @@ from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from functools import partial
 from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
 from typing import Any
@@ -16,7 +17,8 @@ import pandas as pd
 from sqlalchemy import and_, case, exists, func
 from sqlalchemy.orm import Session
 
-from app.domain.feature_store.models import INT_TO_RATING
+from app.domain.feature_store.models import INT_TO_RATING, RATING_TO_INT
+from app.domain.scanning.opportunity_state.model import ACTION_STATES
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
@@ -85,6 +87,12 @@ GROUP_LABELS = {"rs_band": "RS Band", "extension_band": "Extension vs 50DMA"}
 EXTENSION_BANDS = ("below 50DMA", "0-10%", "10-20%", "20-30%", "30%+")
 # Where each band after the first starts, in percent above the 50-day average.
 EXTENSION_BAND_EDGES = (0.0, 10.0, 20.0, 30.0)
+# The value order of each dimension that has one, such as ratings best first.
+GROUP_VALUE_ORDER = {
+    "rating": tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
+    "action_state": tuple(state.value for state in ACTION_STATES),
+    "extension_band": EXTENSION_BANDS,
+}
 
 
 # Runs before 2026-04-26 carry only universe.market; a run with neither counts as US.
@@ -708,20 +716,24 @@ def _horizon_outcomes(
     return outcomes
 
 
-def _group_value(event: EvaluatedValidationEvent, dimension: str) -> str | None:
-    if dimension == "extension_band":
-        pct = event.pct_above_50dma
-        return None if pct is None else EXTENSION_BANDS[bisect_right(EXTENSION_BAND_EDGES, pct)]
-    value = event.raw.attributes.get(dimension)
-    return None if value is None or value == "" else str(value)
+def _group_values(event: EvaluatedValidationEvent) -> dict[str, Any]:
+    """The event's value for every dimension: its attributes, and the band of its extension."""
+    pct = event.pct_above_50dma
+    band = None if pct is None else EXTENSION_BANDS[bisect_right(EXTENSION_BAND_EDGES, pct)]
+    return {**event.raw.attributes, "extension_band": band}
 
 
-def _natural_order(value: str) -> tuple[int, float, str]:
-    """Numbers numerically, so Stage 2 comes before Stage 10, and words alphabetically."""
+def _group_order(dimension: str, value: str) -> tuple[int, float, str]:
+    """A value's place in its dimension's ``GROUP_VALUE_ORDER``. Values that lists lack, and
+    those of other dimensions, sort numbers numerically, so Stage 2 comes before Stage 10,
+    then words alphabetically."""
+    order = GROUP_VALUE_ORDER.get(dimension, ())
+    if value in order:
+        return (0, order.index(value), value)
     try:
-        return (0, float(value), value)
+        return (1, float(value), value)
     except ValueError:
-        return (1, 0.0, value)
+        return (2, 0.0, value)
 
 
 class ValidationService:
@@ -914,13 +926,13 @@ class ValidationService:
         self, events: list[EvaluatedValidationEvent], source_kind: ValidationSourceKind
     ) -> list[ValidationGroup]:
         groups: list[ValidationGroup] = []
+        values = [_group_values(event) for event in events]
         for dimension in GROUP_DIMENSIONS[source_kind]:
             members: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
-            for event in events:
-                value = _group_value(event, dimension)
-                if value is not None:
-                    members[value].append(event)
-            order = EXTENSION_BANDS.index if dimension == "extension_band" else _natural_order
+            for event, event_values in zip(events, values):
+                value = event_values.get(dimension)
+                if value is not None and value != "":
+                    members[str(value)].append(event)
             groups.extend(
                 ValidationGroup(
                     dimension=dimension,
@@ -928,7 +940,7 @@ class ValidationService:
                     value=value,
                     horizons=self._summarize_horizons(members[value]),
                 )
-                for value in sorted(members, key=order)
+                for value in sorted(members, key=partial(_group_order, dimension))
             )
         return groups
 
