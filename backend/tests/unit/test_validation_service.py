@@ -860,6 +860,30 @@ def test_extension_above_the_50dma_reads_only_bars_through_the_signal_date():
     assert [event.pct_above_50dma for event in evaluated] == [pytest.approx(20.0), None, None]
 
 
+def test_extension_of_a_pre_open_alert_leaves_out_its_entry_session():
+    start = date(2026, 1, 1)
+    history = _history_frame(start, [(100.0,) * 4] * 50 + [(200.0,) * 4] * 5)
+    entry_day = start + timedelta(days=50)
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+
+    evaluated, _ = calculator.evaluate_many(
+        [
+            RawValidationEvent(
+                symbol="NVDA",
+                source_kind=ValidationSourceKind.THEME_ALERT,
+                source_ref="alert:1",
+                # 08:00 ET, before the open, so it enters at this session's open.
+                event_at=datetime(entry_day.year, entry_day.month, entry_day.day, 13, 0, tzinfo=UTC),
+                attributes={"symbol": "NVDA"},
+            )
+        ],
+        sessions=_sessions_of(history),
+    )
+
+    assert evaluated[0].entry_at == entry_day
+    assert evaluated[0].pct_above_50dma == pytest.approx(0.0)
+
+
 def test_scan_picks_carry_the_action_state_and_setup_pattern_of_their_row(session):
     run = _add_run(session, FIXED_TODAY)
     for symbol in ("NVDA", "AMD"):

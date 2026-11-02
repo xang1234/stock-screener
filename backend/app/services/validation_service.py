@@ -609,7 +609,8 @@ class PriceOutcomeCalculator:
             return EvaluatedValidationEvent(
                 raw=event, entry_at=None, entry_price=None, exits=exits, history_missing=True
             )
-        extension = _pct_above_50dma(history, _event_date(event.event_at))
+        signal_end = pd.Timestamp(_event_date(event.event_at)) + pd.Timedelta(days=1)
+        extension = _pct_above_50dma(history, signal_end if sessions.empty else sessions[0])
         if sessions.empty:
             return EvaluatedValidationEvent(
                 raw=event, entry_at=None, entry_price=None, pct_above_50dma=extension
@@ -639,12 +640,12 @@ class PriceOutcomeCalculator:
         )
 
 
-def _pct_above_50dma(history: pd.DataFrame, signal_date: date) -> float | None:
-    """The last close through ``signal_date`` against the mean of the 50 closes ending there.
+def _pct_above_50dma(history: pd.DataFrame, entry: pd.Timestamp) -> float | None:
+    """The last close before the ``entry`` session against the mean of the 50 closes ending there.
 
-    Later bars are left out: they were unknown when the signal fired.
+    Bars from the entry session on are left out: they were unknown when the position opened.
     """
-    closes = history.loc[: pd.Timestamp(signal_date), "Close"].to_numpy(dtype=float)[-50:]
+    closes = history.loc[history.index < entry, "Close"].to_numpy(dtype=float)[-50:]
     if len(closes) < 50 or not (closes > 0).all():
         return None
     return (closes[-1] / closes.mean() - 1.0) * 100.0
