@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, Box, Button, Chip, Collapse, Divider, FormControlLabel, MenuItem,
+  Alert, AlertTitle, Box, Button, Chip, Collapse, Divider, FormControlLabel, MenuItem,
   Paper, Select, Stack, Switch, Table, TableBody, TableCell, TableHead,
   TableRow, TextField, Typography,
 } from '@mui/material';
@@ -10,10 +10,13 @@ import {
   createSocialSource, decideEconomicSocialAssociation, decideSocialAssociation, getSocialAdminHealth,
   getSocialAdminRuntime, getSocialAdminSources, getSocialAnalysis,
   getSocialAssociations, getSocialCompanyIdentities, getSocialRuns,
-  getSocialValidation, refreshSocialSignals, renameSocialSource,
+  getSocialUnresolved, getSocialValidation, refreshSocialSignals, renameSocialSource,
   retrySocialAnalysis, testSocialSource, transitionSocialSource,
   updateSocialAdminRuntime, updateSocialCompanyIdentities,
 } from '../../api/socialSignals';
+import { useMarket } from '../../contexts/MarketContext';
+import { isSocialSignalMarket } from './socialSignalMarkets';
+import { ATTEMPT_TITLES } from './socialSignalPresentation';
 
 const money = (value) => `US$${value ?? '—'}`;
 const errorCode = (error) => error?.response?.data?.detail?.code
@@ -21,6 +24,8 @@ const errorCode = (error) => error?.response?.data?.detail?.code
 
 export default function SocialSignalHealthPanel() {
   const queryClient = useQueryClient();
+  const { selectedMarket } = useMarket();
+  const market = isSocialSignalMarket(selectedMarket) ? selectedMarket : 'US';
   const [keyDraft, setKeyDraft] = useState('');
   const [adminKey, setAdminKey] = useState('');
   const [keyGeneration, setKeyGeneration] = useState(0);
@@ -67,6 +72,10 @@ export default function SocialSignalHealthPanel() {
   const runs = useQuery({
     queryKey: ['socialAdmin', 'runs', keyGeneration],
     queryFn: () => getSocialRuns(adminKey), enabled,
+  });
+  const unresolved = useQuery({
+    queryKey: ['socialAdmin', 'unresolved', keyGeneration, market],
+    queryFn: () => getSocialUnresolved({ market, window: '7d', page: 1, pageSize: 50 }), enabled,
   });
   const mutation = useMutation({
     mutationFn: async (work) => work(),
@@ -161,6 +170,7 @@ export default function SocialSignalHealthPanel() {
       ) : null}
       <Collapse in={enabled}>
         {health.data ? <HealthSummary health={health.data} /> : null}
+        {health.data?.latest_attempt ? <LatestAttempt attempt={health.data.latest_attempt} /> : null}
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle1" fontWeight={700}>Runtime</Typography>
         <Alert severity="warning" sx={{ my: 1 }}>
@@ -213,6 +223,12 @@ export default function SocialSignalHealthPanel() {
               onClick={() => mutation.mutate(() => retrySocialAnalysis(adminKey, work.work_id))}>Retry</Button>
           ) : null}
         </Stack>)}
+        <Divider sx={{ my: 2 }} />
+        <Typography variant="subtitle1" fontWeight={700}>Tickers that need resolution</Typography>
+        <Typography variant="body2" color="text.secondary">
+          Mentioned in the last 7 days but not matched to a listing, so they are never ranked.
+        </Typography>
+        <UnresolvedTable rows={unresolved.data?.items || []} total={unresolved.data?.total || 0} />
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle1" fontWeight={700}>Theme association review</Typography>
         <Alert severity="info" sx={{ my: 1 }}>
@@ -274,6 +290,7 @@ function HealthSummary({ health }) {
       <Chip label={health.social_fresh ? 'Fresh' : 'Stale or degraded'} color={health.social_fresh ? 'success' : 'warning'} />
       <Chip label={`${health.collection_status || 'unknown'} collection`} />
       <Chip label={`${health.processing_status || 'unknown'} processing`} />
+      <Chip label={`Formula ${health.formula_version || '—'}`} />
     </Stack>
     <Typography variant="body2" sx={{ mt: 1 }}>
       Budget: {money(budget.limit_usd || '2')} per day · {money(budget.remaining_usd)} remaining · {money(budget.spent_usd)} spent · {money(budget.reserved_usd)} reserved
@@ -292,6 +309,75 @@ function HealthSummary({ health }) {
       {health.unknown_company_identity_count} company links need administrator verification before they can count toward automatic Theme thresholds.
     </Alert> : null}
   </Box>;
+}
+
+const attemptReasonCopy = {
+  daily_limit_exhausted: 'Daily X read budget used up',
+  incremental_gap_suspected: 'More posts than one read covers; some older posts were not read',
+  provider_error: 'Provider error',
+  provider_network_error: 'Network error after one retry',
+  provider_timeout: 'Provider timed out after one retry',
+  provider_unavailable: 'Provider unavailable',
+  rate_limited: 'Rate limited',
+  reauthentication_required: 'X authentication needs attention',
+};
+
+function LatestAttempt({ attempt }) {
+  const failed = ['collection_failed', 'failed'].includes(attempt.status);
+  return (
+    <Alert severity={failed ? 'error' : 'info'} sx={{ mt: 2 }}>
+      <AlertTitle>{ATTEMPT_TITLES[attempt.status] || attempt.status}</AlertTitle>
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        Started {new Date(attempt.started_at).toLocaleString()}
+      </Typography>
+      <Stack gap={0.75}>
+        {(attempt.sources || []).map((source) => {
+          const collected = source.read_status === 'success';
+          const status = collected ? 'Collected' : source.read_status === 'failed' ? 'Failed' : 'Waiting';
+          const count = source.received_count == null ? '—' : source.received_count;
+          const limited = source.history_status === 'warming_up'
+            || (source.reason_codes || []).includes('bounded_provider_read');
+          const reasons = (source.reason_codes || [])
+            .filter((reason) => reason !== 'bounded_provider_read')
+            .map((reason) => attemptReasonCopy[reason] || reason.replaceAll('_', ' '));
+          return (
+            <Box key={source.name} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
+              <Typography variant="subtitle2">{source.name}</Typography>
+              <Typography variant="body2">{status} · {count} posts</Typography>
+              {limited ? <Typography variant="caption" color="warning.main">Limited history</Typography> : null}
+              {reasons.map((reason) => <Typography key={reason} variant="caption" display="block"
+                color={source.read_status === 'failed' ? 'error.main' : 'text.secondary'}>{reason}</Typography>)}
+            </Box>
+          );
+        })}
+      </Stack>
+      {attempt.status === 'collection_failed' ? <Typography variant="body2" sx={{ mt: 1 }}>
+        Analysis did not start because no enabled list collected successfully.
+      </Typography> : null}
+      {attempt.status === 'failed' ? <Typography variant="body2" sx={{ mt: 1 }}>
+        Collected posts were not published because analysis failed. Retry failed work under Saved analysis.
+      </Typography> : null}
+    </Alert>
+  );
+}
+
+function UnresolvedTable({ rows, total }) {
+  if (!rows.length) {
+    return <Typography variant="body2" sx={{ mt: 1 }}>No unresolved tickers in the latest run.</Typography>;
+  }
+  return <>
+    <Table size="small" aria-label="Tickers that need resolution"><TableHead><TableRow>
+      {['Ticker', 'Mentions', 'Lists', 'Latest mention'].map((value) => <TableCell key={value}>{value}</TableCell>)}
+    </TableRow></TableHead><TableBody>{rows.map((row) => (
+      <TableRow key={row.candidate_key}>
+        <TableCell>{row.canonical_symbol || row.candidate_key.replace(/^unresolved:/, '')}</TableCell>
+        <TableCell>{row.mention_count}</TableCell>
+        <TableCell>{row.observed_list_count ?? 0}/{row.enabled_list_count ?? 0}</TableCell>
+        <TableCell>{row.latest_mention ? new Date(row.latest_mention).toLocaleString() : '—'}</TableCell>
+      </TableRow>
+    ))}</TableBody></Table>
+    {total > rows.length ? <Typography variant="caption">Showing {rows.length} of {total}</Typography> : null}
+  </>;
 }
 
 function SourceTable({ rows, renameDrafts, setRenameDrafts, run, adminKey }) {

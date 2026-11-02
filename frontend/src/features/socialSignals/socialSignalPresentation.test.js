@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatSocialScore, socialCoverage, socialFreshnessLabel, socialStateLabel,
+  formatSocialScore, socialFreshness, socialStateLabel, stateReasonText,
   visibleSocialRows,
 } from './socialSignalPresentation';
 
@@ -12,14 +12,25 @@ describe('Social Signal presentation', () => {
     expect(formatSocialScore(88.6)).toBe('89');
   });
 
-  it('uses deterministic state, freshness, and warming-up labels', () => {
+  it('uses deterministic state and freshness labels', () => {
+    const now = Date.parse('2026-09-07T15:00:00Z');
     expect(socialStateLabel('risk_off')).toBe('Risk-off');
-    expect(socialFreshnessLabel({ stale: false })).toBe('Fresh');
-    expect(socialFreshnessLabel({ stale: true })).toBe('Stale');
-    expect(socialCoverage({ observed_list_count: 1, enabled_list_count: 3,
-      coverage: ['limited_history'] }, '14d')).toEqual({
-      label: '1/3 lists · 14D', tone: 'warning', detail: 'Warming up · limited history',
-    });
+    expect(socialFreshness({ stale: false, published_at: '2026-09-07T12:00:00Z' }, now))
+      .toEqual({ label: 'Updated 3h ago', color: 'success' });
+    expect(socialFreshness({ stale: false, published_at: '2026-09-07T14:35:00Z' }, now).label)
+      .toBe('Updated 25m ago');
+    expect(socialFreshness({ stale: true, published_at: '2026-09-07T12:00:00Z' }, now))
+      .toEqual({
+        label: `Delayed, last update ${new Date('2026-09-07T12:00:00Z').toLocaleString()}`,
+        color: 'warning',
+      });
+    expect(socialFreshness({ stale: false }, now).label).toBe('Update time unknown');
+  });
+
+  it('turns state reason codes into plain text', () => {
+    expect(stateReasonText('stale_features')).toBe('Price features out of date');
+    expect(stateReasonText('market_exposure_below_50')).toBe('Market exposure below 50');
+    expect(stateReasonText('some_new_reason')).toBe('Some new reason');
   });
 
   it('filters sources using the published source-name projection', () => {

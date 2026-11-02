@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createTheme, ThemeProvider } from '@mui/material';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SocialSignalsTab from './SocialSignalsTab';
 import * as socialApi from '../../api/socialSignals';
@@ -13,8 +13,7 @@ vi.mock('../../api/socialSignals', async () => {
   const actual = await vi.importActual('../../api/socialSignals');
   return {
     ...actual,
-    getSocialQueue: vi.fn(), getSocialContext: vi.fn(),
-    getSocialUnresolved: vi.fn(), getSocialEvidence: vi.fn(),
+    getSocialQueue: vi.fn(), getSocialContext: vi.fn(), getSocialEvidence: vi.fn(),
   };
 });
 vi.mock('../../contexts/MarketContext', () => ({
@@ -36,7 +35,7 @@ const item = {
   normalization_scope: 'market', explanation: {
     setup_score: 76, readiness: 'ready', rs_rating_3m: 91,
     group_rank: 3, theme: 'AI infrastructure',
-    state_reasons: ['setup_ready', 'market_confirmed'], security_kind: 'stock',
+    state_reasons: ['setup_not_ready'], security_kind: 'stock',
     acceleration: null,
     social_components: { authors: { value: 82, available_weight: 15, total_weight: 15 } },
     confirmation_components: { setup: { value: 76, available_weight: 20, total_weight: 20 } },
@@ -73,7 +72,6 @@ describe('SocialSignalsTab', () => {
     marketState.selectedMarket = 'HK';
     socialApi.getSocialQueue.mockResolvedValue(queue());
     socialApi.getSocialContext.mockResolvedValue(queue({ total: 0, items: [] }));
-    socialApi.getSocialUnresolved.mockResolvedValue(queue({ total: 0, items: [] }));
     socialApi.getSocialEvidence.mockResolvedValue({
       supported: true, available: true, candidate_key: 'HK:0700', window: '7d',
       item, related_listings: [{ market: 'HK', canonical_symbol: '0700' }],
@@ -83,6 +81,7 @@ describe('SocialSignalsTab', () => {
         engagement: { likes: 10 } }],
     });
   });
+  afterEach(() => vi.useRealTimers());
 
   it('shows an unsupported-market state without calling Social APIs', async () => {
     marketState.selectedMarket = 'KR';
@@ -92,35 +91,33 @@ describe('SocialSignalsTab', () => {
     expect(await screen.findByText(/available for US, HK, CN, JP, and TW markets/)).toBeInTheDocument();
     expect(socialApi.getSocialQueue).not.toHaveBeenCalled();
     expect(socialApi.getSocialContext).not.toHaveBeenCalled();
-    expect(socialApi.getSocialUnresolved).not.toHaveBeenCalled();
     expect(socialApi.getSocialEvidence).not.toHaveBeenCalled();
   });
 
-  it('renders a dense truthful queue with warming-up and stale states', async () => {
+  it('renders a dense queue with one plain freshness chip and no operator detail', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-07T15:00:00Z'));
     renderTab();
     expect(await screen.findByText('0700')).toBeInTheDocument();
     expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
       'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Setup',
-      'RS', 'Group', 'Theme', 'State', 'Freshness',
+      'RS', 'Group', 'Theme', 'State',
     ]);
     expect(screen.getByText('82')).toBeInTheDocument();
     expect(screen.getByText('89')).toBeInTheDocument();
-    expect(screen.getByText('1/2 lists · 7D')).toBeInTheDocument();
-    expect(screen.getByText(/Warming up/)).toBeInTheDocument();
+    expect(screen.getByText('Updated 3h ago')).toBeInTheDocument();
+    expect(screen.queryByText(/Formula/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/lists ·/)).not.toBeInTheDocument();
 
     socialApi.getSocialQueue.mockResolvedValue(queue({ stale: true }));
     fireEvent.click(screen.getByRole('button', { name: '14D' }));
-    expect(await screen.findByText('Stale')).toBeInTheDocument();
+    expect(await screen.findByText(/^Delayed, last update /)).toBeInTheDocument();
   });
 
-  it('changes ordering controls without hiding confirmation and separates all sections', async () => {
+  it('changes ordering controls without hiding confirmation and shows context under All Signals', async () => {
     socialApi.getSocialContext.mockResolvedValue(queue({ items: [{ ...item,
       candidate_key: 'HK:HSI', canonical_symbol: 'HSI', state: 'context',
       social_score: null, confirmation_score: null, queue_score: null }], total: 1 }));
-    socialApi.getSocialUnresolved.mockResolvedValue(queue({ items: [{ ...item,
-      candidate_key: 'unresolved:x', canonical_symbol: '$XYZ', market: null,
-      state: 'unresolved', social_score: null, confirmation_score: null,
-      queue_score: null }], total: 1 }));
     renderTab();
     await screen.findByText('0700');
     fireEvent.click(screen.getByRole('button', { name: 'Pure Social' }));
@@ -130,9 +127,8 @@ describe('SocialSignalsTab', () => {
     expect(await screen.findByText('73')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'All Signals' }));
     expect(await screen.findByRole('heading', { name: 'Context' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Needs resolution' })).toBeInTheDocument();
     expect(screen.getByText('HSI')).toBeInTheDocument();
-    expect(screen.getByText('$XYZ')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Needs resolution' })).not.toBeInTheDocument();
   });
 
   it('opens evidence before the chart and keeps posts plain linked text', async () => {
@@ -143,7 +139,7 @@ describe('SocialSignalsTab', () => {
     expect(screen.getByRole('link', { name: 'Open on X' })).toHaveAttribute(
       'href', 'https://x.com/analyst/status/1',
     );
-    expect(screen.getByText('setup ready')).toBeInTheDocument();
+    expect(screen.getByText('Setup not ready')).toBeInTheDocument();
     expect(screen.getByText('Acceleration —')).toBeInTheDocument();
     expect(screen.getByText('Social components')).toBeInTheDocument();
     expect(screen.getByText('82 · 15/15 weight')).toBeInTheDocument();
@@ -164,7 +160,7 @@ describe('SocialSignalsTab', () => {
     expect(await screen.findByText('No signals match these controls.')).toBeInTheDocument();
   });
 
-  it('explains source outcomes when every list fails to collect', async () => {
+  it('says in one line that collection failed and leaves per-list detail to Operations', async () => {
     socialApi.getSocialQueue.mockResolvedValueOnce(queue({
       available: false, reason_code: 'no_published_run', total: 0, items: [],
       latest_attempt: {
@@ -181,18 +177,14 @@ describe('SocialSignalsTab', () => {
 
     renderTab();
 
-    expect(await screen.findByText('Latest collection did not publish')).toBeInTheDocument();
-    expect(screen.getByText('Minervini')).toBeInTheDocument();
-    expect(screen.getAllByText('Failed · 0 posts')).toHaveLength(2);
-    expect(screen.getByText('Provider unavailable')).toBeInTheDocument();
-    expect(screen.getByText('AI Investing')).toBeInTheDocument();
-    expect(screen.getByText('Provider timed out after one retry')).toBeInTheDocument();
-    expect(screen.getByText(/Analysis did not start because no enabled list collected/)).toBeInTheDocument();
+    expect(await screen.findByText('Latest collection did not publish.')).toBeInTheDocument();
+    expect(screen.queryByText('Minervini')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provider unavailable')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Operations' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/operations#sources');
   });
 
-  it('explains terminal analysis failure and directs the admin to retry', async () => {
+  it('says analysis failed and points to Operations', async () => {
     socialApi.getSocialQueue.mockResolvedValueOnce(queue({
       available: false, reason_code: 'no_published_run', total: 0, items: [],
       latest_attempt: {
@@ -209,8 +201,7 @@ describe('SocialSignalsTab', () => {
 
     renderTab();
 
-    expect(await screen.findByText('Latest analysis failed')).toBeInTheDocument();
-    expect(screen.getByText(/Review and retry failed work in Operations/)).toBeInTheDocument();
+    expect(await screen.findByText('Latest analysis failed.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Operations' })).toBeInTheDocument();
   });
 });

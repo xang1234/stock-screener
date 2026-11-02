@@ -3,7 +3,9 @@ import {
 } from '@mui/material';
 
 import AddToWatchlistMenu from '../../components/common/AddToWatchlistMenu';
-import { explanationMap, formatSocialScore, socialStateLabel } from './socialSignalPresentation';
+import {
+  explanationMap, formatSocialScore, socialStateLabel, stateReasonText,
+} from './socialSignalPresentation';
 
 const words = (value) => String(value || '').replaceAll('_', ' ');
 const capitalize = (value) => value.charAt(0).toUpperCase() + value.slice(1);
@@ -43,7 +45,7 @@ export default function SocialEvidenceDrawer({
         <Typography variant="subtitle2">Why it surfaced</Typography>
         <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: 1 }}>
           {stateReasons(explanation.state_reasons).map((reason) => (
-            <Chip key={reason} size="small" label={words(reason)} />
+            <Chip key={reason} size="small" label={stateReasonText(reason)} />
           ))}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>

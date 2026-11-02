@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createTheme, ThemeProvider } from '@mui/material';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '../../api/socialSignals';
@@ -15,7 +15,7 @@ vi.mock('../../api/socialSignals', () => ({
   getSocialAssociations: vi.fn(), decideSocialAssociation: vi.fn(),
   decideEconomicSocialAssociation: vi.fn(),
   getSocialCompanyIdentities: vi.fn(), updateSocialCompanyIdentities: vi.fn(),
-  getSocialRuns: vi.fn(), getSocialValidation: vi.fn(),
+  getSocialRuns: vi.fn(), getSocialUnresolved: vi.fn(), getSocialValidation: vi.fn(),
 }));
 
 const sources = [{
@@ -36,6 +36,24 @@ function seedMocks() {
       remaining_usd: '1', timezone: 'Asia/Singapore', next_reset_at: '2026-09-07T16:00:00Z',
       pricing_status: 'configured', pricing_version: '2026-09' },
     backlog: { waiting: 4, failed: 1, outside_window: 2, no_signal: 9 },
+    formula_version: 'social-signal-v1',
+    latest_attempt: {
+      run_id: 'failed-collection-1', status: 'collection_failed',
+      started_at: '2026-09-08T05:49:14Z', completed_at: null,
+      sources: [
+        { name: 'Minervini', read_status: 'failed', received_count: 0,
+          history_status: 'limited', reason_codes: ['provider_unavailable'] },
+        { name: 'AI Investing', read_status: 'failed', received_count: 0,
+          history_status: 'warming_up', reason_codes: ['provider_timeout'] },
+      ],
+    },
+  });
+  api.getSocialUnresolved.mockResolvedValue({
+    available: true, total: 1, items: [{
+      candidate_key: 'unresolved:$xyz', canonical_symbol: null, market: null,
+      state: 'unresolved', mention_count: 4, observed_list_count: 1, enabled_list_count: 2,
+      latest_mention: null,
+    }],
   });
   api.getSocialAdminSources.mockResolvedValue(sources);
   api.getSocialAnalysis.mockResolvedValue([{ work_id: 4, state: 'outside_window' },
@@ -79,6 +97,26 @@ describe('SocialSignalHealthPanel', () => {
     expect(screen.getByText(/Reauthenticate the private worker/)).toBeInTheDocument();
     expect(screen.getByText(/1 company links need administrator verification/)).toBeInTheDocument();
     expect(screen.getByText(/at most five posts/)).toBeInTheDocument();
+  });
+
+  it('shows the operator detail the Social Signals tab leaves out', async () => {
+    renderPanel();
+    await unlock();
+    expect(screen.getByText('Formula social-signal-v1')).toBeInTheDocument();
+    expect(screen.getByText('Latest collection did not publish')).toBeInTheDocument();
+    expect(screen.getByText('Minervini')).toBeInTheDocument();
+    expect(screen.getAllByText('Failed · 0 posts')).toHaveLength(2);
+    expect(screen.getByText('Provider unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Provider timed out after one retry')).toBeInTheDocument();
+    expect(screen.getByText('Limited history')).toBeInTheDocument();
+    expect(screen.getByText(/Analysis did not start because no enabled list collected/)).toBeInTheDocument();
+    const unresolved = await screen.findByRole('table', { name: 'Tickers that need resolution' });
+    expect(within(unresolved).getAllByRole('row').map((row) => row.textContent)).toEqual([
+      'TickerMentionsListsLatest mention', '$xyz41/2—',
+    ]);
+    expect(api.getSocialUnresolved).toHaveBeenCalledWith(
+      { market: 'US', window: '7d', page: 1, pageSize: 50 },
+    );
   });
 
   it('creates pending named lists and tests before enablement', async () => {
