@@ -81,7 +81,7 @@ class _CompletionUnknown(Exception):
 
 class _RunLedger:
     def __init__(self, calls):
-        self.calls_left, self.answered, self.refusal_status = calls, 0, None
+        self.calls_left, self.answered, self.parsed, self.refusal_status = calls, 0, 0, None
 
     @property
     def stopped(self):
@@ -518,37 +518,44 @@ class ProcessSocialBacklog:
                 snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
                 snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
                 items.append(((work_id, token), SocialPostRecord(**snapshot)))
-            queue.append((tuple(items), batch[0][2:5], None, None))
-        leaves = []
+            queue.append((tuple(items), batch[0][2:5], None, {}))
+        leaves, output_error = [], None
         while queue:
-            items, config, code, refused_at = queue.popleft()
+            items, config, code, since = queue.popleft()
             claims = tuple(claim for claim, _ in items)
             if ledger.stopped or ledger.calls_left < 1:
                 deferred += self._finish_many(claims, "pending", "provider_rejected" if ledger.stopped else code)
                 continue
             outcome = await self._extract(items, config, current_time, ledger)
-            if outcome == "provider_rejected" and refused_at is None:
-                refused_at = ledger.answered
             if not isinstance(outcome, str):
                 succeeded, deferred, failed, outside = (
                     total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
                 )
-            elif len(items) > 1 and outcome not in _UNSPLITTABLE_ERRORS:
-                middle = len(items) // 2
-                queue += ((items[:middle], config, outcome, refused_at), (items[middle:], config, outcome, refused_at))
-            elif outcome == "provider_rejected":
-                if self._finish_many(claims, "pending", outcome):
-                    leaves.append((claims, refused_at))
-            else:
+                continue
+            if outcome in _UNSPLITTABLE_ERRORS:
                 failed += self._finish_many(claims, "failed_terminal", outcome)
-        for claims, refused_at in leaves:
-            if ledger.answered > refused_at:
-                failed += self._settle(claims, "provider_rejected")
+                continue
+            evidence = "answered" if outcome == "provider_rejected" else "parsed"
+            if evidence not in since:
+                since = {**since, evidence: getattr(ledger, evidence)}
+            if evidence == "parsed":
+                output_error = outcome
+            if len(items) > 1:
+                middle = len(items) // 2
+                queue += ((items[:middle], config, outcome, since), (items[middle:], config, outcome, since))
+            elif self._finish_many(claims, "pending", outcome):
+                leaves.append((claims, outcome, evidence, since[evidence]))
+        for claims, code, evidence, mark in leaves:
+            if getattr(ledger, evidence) > mark:
+                failed += self._settle(claims, code)
             else:
                 deferred += len(claims)
         if ledger.refusal_status and (ledger.stopped or not ledger.answered):
             logger.error("Social LLM provider refused requests with status %s after answering %d this run; "
                          "deferred %d posts", ledger.refusal_status, ledger.answered, deferred)
+        if output_error and not ledger.parsed:
+            logger.error("Social LLM returned unusable output with error %s and parsed none this run; "
+                         "deferred %d posts", output_error, deferred)
         return BacklogResult(succeeded, deferred, failed, outside, self.budget.status(current_time()).next_reset_at)
 
     async def _extract(self, items, config, current_time, ledger):
@@ -590,6 +597,7 @@ class ProcessSocialBacklog:
                     # Nothing was sent; claim expiry releases the reservation and returns the posts.
                     return (0, len(claims), 0, 0)
                 return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0)
+        ledger.parsed += 1
         try:
             states = [self._finish(work_id, token, "succeeded", result=self._single_result(post, result))
                       for (work_id, token), post in items]
