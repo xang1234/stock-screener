@@ -189,6 +189,7 @@ def _row(
     *,
     local_code: str,
     listing_tier: str | None = None,
+    industry: str = "Banking",
     source_row_number: int = 1,
     lifecycle: UniverseLifecycleMetadata | None = None,
 ) -> CanonicalUniverseRow:
@@ -202,7 +203,7 @@ def _row(
         timezone="Asia/Singapore",
         listing_tier=listing_tier,
         sector="Banks",
-        industry="Banking",
+        industry=industry,
         market_cap=100.0,
         provenance=UniverseSourceProvenance(
             source_name="sgx_official",
@@ -456,4 +457,86 @@ def test_pipeline_preserves_existing_listing_tier_when_source_omits_tier() -> No
     assert row.listing_tier == "mainboard"
     events = db.query(StockUniverseStatusEvent).all()
     assert events == []
+    db.close()
+
+
+def _ingest_sg(db, *rows: CanonicalUniverseRow) -> None:
+    pipeline = UniverseIngestionPipeline(
+        canonicalizers={
+            "SG": _FakeCanonicalizer(CanonicalUniverseIngestionResult(canonical_rows=rows))
+        },
+        persistence=UniversePersistence.for_stock_universe_service(
+            StockUniverseService()
+        ),
+    )
+    pipeline.ingest_snapshot_rows(
+        db,
+        market="SG",
+        rows=[{"symbol": row.local_code} for row in rows],
+        source_name="sgx_official",
+        snapshot_id="sgx-2026-05-29",
+        strict=True,
+    )
+
+
+def _common_stock_flags(db) -> dict[str, bool]:
+    return {
+        row.symbol: row.is_common_stock
+        for row in db.query(StockUniverse).order_by(StockUniverse.symbol)
+    }
+
+
+def test_pipeline_marks_new_fund_rows_not_common_stock() -> None:
+    db = _make_session()()
+
+    _ingest_sg(
+        db,
+        _row("ES3.SI", local_code="ES3", industry="Exchange Traded Fund"),
+        _row("CEF.SI", local_code="CEF", industry="Closed-End Fund - Debt", source_row_number=2),
+        _row("D05.SI", local_code="D05", source_row_number=3),
+        _row("A17U.SI", local_code="A17U", industry="REIT - Industrial", source_row_number=4),
+    )
+
+    assert _common_stock_flags(db) == {
+        "A17U.SI": True,
+        "CEF.SI": False,
+        "D05.SI": True,
+        "ES3.SI": False,
+    }
+    db.close()
+
+
+def test_pipeline_refresh_marks_funds_and_keeps_operator_classification() -> None:
+    db = _make_session()()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="ES3.SI",
+                market="SG",
+                industry="Exchange Traded Fund",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                is_common_stock=True,
+                source="sg_ingest",
+            ),
+            StockUniverse(
+                symbol="D05.SI",
+                market="SG",
+                industry="Banking",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                is_common_stock=False,
+                source="sg_ingest",
+            ),
+        ]
+    )
+    db.commit()
+
+    _ingest_sg(
+        db,
+        _row("ES3.SI", local_code="ES3", industry="Exchange Traded Fund"),
+        _row("D05.SI", local_code="D05", source_row_number=2),
+    )
+
+    assert _common_stock_flags(db) == {"D05.SI": False, "ES3.SI": False}
     db.close()

@@ -178,7 +178,7 @@ def test_each_session_scores_its_own_runs_non_fund_symbols_on_frames_cut_at_that
     db.add_all(
         [
             StockUniverse(symbol="AAA", market="US", industry="Semiconductors", is_common_stock=True),
-            StockUniverse(symbol="ETFX", market="US", industry="Exchange Traded Fund", is_common_stock=True),
+            StockUniverse(symbol="ETFX", market="US", industry="Exchange Traded Fund", is_common_stock=False),
             StockUniverse(symbol="PREF", market="US", industry="Banks", is_common_stock=False),
         ]
     )
