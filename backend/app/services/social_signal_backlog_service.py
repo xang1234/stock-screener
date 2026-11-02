@@ -26,8 +26,10 @@ from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 logger = logging.getLogger(__name__)
 
 NO_SIGNAL_GATE = "no_signal_gate"
-# Configuration failures repeat for any subset of posts, so splitting the batch cannot help.
-_UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured"})
+# Configuration failures repeat for any subset of posts, and a refused request is not re-sent.
+_UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured", "provider_rejected"})
+# Authentication, payment, permission, and missing-model refusals apply to every request.
+_PROVIDER_WIDE_REFUSALS = frozenset({401, 402, 403, 404})
 _WORD = re.compile(r"\w+")
 _SYMBOL = re.compile(r"[A-Za-z0-9]+(?:[.\-][A-Za-z]{1,3}\b)?")  # MU, BRK.B, 0700.HK, 3008.TWO
 _CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
@@ -75,6 +77,17 @@ class _CompletionUnknown(Exception):
     """The dispatched model request itself failed, so whether it billed is unknown."""
 
 
+class _ProviderBreaker:
+    """One execute() call's view of the provider. A refusal before any answer means the
+    provider refuses everything, not this post."""
+    def __init__(self):
+        self.answered = self.open = False
+
+    def trips(self, status):
+        self.open = status in _PROVIDER_WIDE_REFUSALS or not self.answered
+        return self.open
+
+
 class _NoopRequestGate:
     def acquire(self, owner, ttl):
         return True
@@ -91,8 +104,8 @@ class _NoopRequestGate:
 
 class _MeteredCompletion:
     """Intercept usage BEFORE parsing, including malformed successful responses."""
-    def __init__(self, owner, claims, now, *, retry=0):
-        self.owner, self.claims, self.now, self.retry = owner, claims, now, retry
+    def __init__(self, owner, claims, now, breaker, *, retry=0):
+        self.owner, self.claims, self.now, self.breaker, self.retry = owner, claims, now, breaker, retry
         self.dispatched = self.refunded = False
 
     async def completion(self, **kwargs):
@@ -217,11 +230,16 @@ class _MeteredCompletion:
             try:
                 llm = self.owner.llm if self.owner.llm is not None else LLMService(use_case="extraction")
                 response = await llm.completion(**kwargs, metered=True)
-            except LLMPreDispatchError:
-                budget.release_pre_dispatch(attempt)
+            except LLMPreDispatchError as exc:
+                if not budget.release_unbilled(attempt):
+                    raise _CompletionUnknown() from exc
                 raise SocialExtractionError("llm_configuration_error") from None
-            except LLMProviderRejectedError:
-                budget.release_pre_dispatch(attempt)
+            except LLMProviderRejectedError as exc:
+                if not budget.release_unbilled(attempt):
+                    raise _CompletionUnknown() from exc
+                if self.breaker.trips(exc.status_code):
+                    self.owner._finish_many(self.claims, "pending", "provider_rejected")
+                    raise _Deferred(len(self.claims)) from None
                 raise SocialExtractionError("provider_rejected") from None
             except Exception as exc:
                 budget.reconcile(attempt, None, None)
@@ -229,6 +247,7 @@ class _MeteredCompletion:
             except BaseException:
                 budget.reconcile(attempt, None, None)
                 raise
+            self.breaker.answered = True
             usage = getattr(response, "usage", None)
             actual_inputs = getattr(usage, "prompt_tokens", None)
             actual_outputs = getattr(usage, "completion_tokens", None)
@@ -488,33 +507,37 @@ class ProcessSocialBacklog:
         succeeded = deferred = 0
         batches = list(self._groups(claimed, self.batch_size))
         spare_calls = self.max_calls_per_run - len(batches)
+        breaker = _ProviderBreaker()
         for batch in batches:
             items = []
             for work_id, token, _, _, _, snapshot in batch:
                 snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
                 snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
                 items.append(((work_id, token), SocialPostRecord(**snapshot)))
-            outcome, spare_calls = await self._extract(tuple(items), batch[0][2:5], current_time, spare_calls)
+            outcome, spare_calls = await self._extract(tuple(items), batch[0][2:5], current_time, spare_calls, breaker)
             if isinstance(outcome, str):
                 outcome, spare_calls = await self._isolate(
-                    tuple(items), batch[0][2:5], current_time, outcome, spare_calls
+                    tuple(items), batch[0][2:5], current_time, outcome, spare_calls, breaker
                 )
             succeeded, deferred, failed, outside = (
                 total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
             )
         return BacklogResult(succeeded, deferred, failed, outside, self.budget.status(current_time()).next_reset_at)
 
-    async def _extract(self, items, config, current_time, spare_calls):
+    async def _extract(self, items, config, current_time, spare_calls, breaker):
         """Return (succeeded, deferred, failed, outside) or an unusable response's code, and the calls still spare.
 
         A request whose outcome is unknown, such as a provider timeout, may have
         billed, so it is retried at most once and only with a call the run's cap left unused.
+        After a provider-wide refusal nothing more is sent this run.
         """
         model, prompt, schema = config
         claims = tuple(claim for claim, _ in items)
         work_ids = [work_id for work_id, _ in claims]
+        if breaker.open:
+            return (0, self._finish_many(claims, "pending", "provider_rejected"), 0, 0), spare_calls
         for retry in range(2):
-            metered = _MeteredCompletion(self, claims, current_time, retry=retry)
+            metered = _MeteredCompletion(self, claims, current_time, breaker, retry=retry)
             try:
                 with self.session_factory() as db:
                     extraction = SocialExtractionService(db, model=model, prompt_version=prompt,
@@ -559,7 +582,7 @@ class ProcessSocialBacklog:
             return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
         return (states.count("succeeded"), 0, states.count("failed_terminal"), 0), spare_calls
 
-    async def _isolate(self, items, config, current_time, code, spare_calls):
+    async def _isolate(self, items, config, current_time, code, spare_calls, breaker):
         """Narrow an unusable batch response to the posts that provoke it.
 
         Splitting spends only calls the run's cap left unused, so a model that
@@ -573,8 +596,8 @@ class ProcessSocialBacklog:
         middle = len(items) // 2
         totals = (0, 0, 0, 0)
         for half in (items[:middle], items[middle:]):
-            outcome, spare_calls = await self._extract(half, config, current_time, spare_calls)
+            outcome, spare_calls = await self._extract(half, config, current_time, spare_calls, breaker)
             if isinstance(outcome, str):
-                outcome, spare_calls = await self._isolate(half, config, current_time, outcome, spare_calls)
+                outcome, spare_calls = await self._isolate(half, config, current_time, outcome, spare_calls, breaker)
             totals = tuple(total + part for total, part in zip(totals, outcome))
         return totals, spare_calls

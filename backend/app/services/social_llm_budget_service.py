@@ -282,11 +282,16 @@ class SocialLLMBudgetService:
             attempt.completed_at = datetime.now(timezone.utc)
             return True
 
-    def release_pre_dispatch(self, attempt_id):
-        """Refund an attempt only when the caller proves it was not billed: never sent, or refused."""
+    def release_unbilled(self, attempt_id):
+        """Refund an attempt only when the caller proves it was not billed: never sent, or refused.
+
+        Claim expiry may already have marked it uncertain. Returns whether it ends released.
+        """
         with social_analysis_transaction(self.session_factory) as db:
             attempt = db.get(SocialLLMAttempt, attempt_id)
-            if attempt.state != "dispatched":
+            if attempt.state == "released":
+                return True
+            if attempt.state not in {"dispatched", "uncertain"}:
                 return False
             day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
             day.reserved_usd -= attempt.estimated_usd
@@ -346,7 +351,7 @@ class SocialBudgetReservation:
         released = (
             self.budget.release(self.attempt_id)
             if state == "reserved"
-            else self.budget.release_pre_dispatch(self.attempt_id)
+            else self.budget.release_unbilled(self.attempt_id)
         )
         if not released:
             raise ValueError("social_attempt_not_releasable")

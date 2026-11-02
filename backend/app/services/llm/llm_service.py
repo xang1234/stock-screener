@@ -91,6 +91,9 @@ class LLMPreDispatchError(LLMError):
 
 class LLMProviderRejectedError(LLMError):
     """The provider refused the request with a 4xx status, so it was not billed."""
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class LLMRateLimitError(LLMError):
@@ -319,7 +322,7 @@ class LLMService:
                 logger.warning("Metered LLM dispatch failed: %s status=%s", type(exc).__name__, status)
                 # A timeout (408) or rate limit (429) may still have been billed.
                 if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
-                    raise LLMProviderRejectedError("metered_provider_rejected") from None
+                    raise LLMProviderRejectedError("metered_provider_rejected", status) from None
                 raise LLMError("metered_provider_error") from None
 
         # Build fallback list
