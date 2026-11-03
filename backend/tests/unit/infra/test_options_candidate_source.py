@@ -197,6 +197,54 @@ def test_candidate_source_preserves_both_ranks_for_overlap() -> None:
     engine.dispose()
 
 
+def test_candidate_source_selects_a_fully_scored_row_over_higher_ipo_only_rows() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[FeatureRun.__table__, StockFeatureDaily.__table__, StockPrice.__table__],
+    )
+    session = sessionmaker(bind=engine)()
+    session.add(
+        FeatureRun(
+            id=9,
+            as_of_date=date(2026, 9, 4),
+            run_type="daily_snapshot",
+            status="published",
+            config_json={"universe": {"market": "US"}},
+        )
+    )
+    liquid = {"current_price": 100, "avg_dollar_volume": 200_000_000}
+    session.add_all(
+        StockFeatureDaily(
+            run_id=9,
+            symbol=f"IPO{index:02}",
+            as_of_date=date(2026, 9, 4),
+            composite_score=72,
+            details_json={**liquid, "ipo_score": 65, "scan_mode": "ipo_weighted"},
+        )
+        for index in range(40)
+    )
+    session.add(
+        StockFeatureDaily(
+            run_id=9,
+            symbol="CORE",
+            as_of_date=date(2026, 9, 4),
+            composite_score=65,
+            details_json={**liquid, "minervini_score": 65},
+        )
+    )
+    session.commit()
+
+    result = SqlOptionsCandidateSource(session).read(9)
+
+    assert {row.symbol for row in result.top_candidate_inputs} == {
+        "CORE",
+        *(f"IPO{index:02}" for index in range(39)),
+    }
+    session.close()
+    engine.dispose()
+
+
 def test_current_liquidity_uses_feature_run_snapshot_not_mutable_fundamentals() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(

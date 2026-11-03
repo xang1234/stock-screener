@@ -18,6 +18,7 @@ from app.domain.scanning.leadership_policy import (
     LEADERS_MAX_GROUP_RANK,
     LEADERS_MIN_RS_RATING,
 )
+from app.domain.scanning.scoring import is_core_scored
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.stock import StockPrice
 
@@ -73,6 +74,7 @@ class SqlOptionsCandidateSource:
                 dividend_source=(
                     "pinned_feature_run" if dividend_yield is not None else None
                 ),
+                core_scored=is_core_scored(feature.minervini_score, feature.canslim_score),
             )
             candidates.append(item)
             rs_rating = _number(details.get("rs_rating"))

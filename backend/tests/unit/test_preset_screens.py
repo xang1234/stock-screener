@@ -169,6 +169,17 @@ def test_chart_symbols_prefer_grouped_expression_over_legacy_filters():
     assert get_preset_chart_symbols(rows, presets=[preset]) == {"EPS", "SALES"}
 
 
+def test_composite_chart_symbols_rank_fully_scored_rows_first():
+    preset = {"filters": {}, "sort_by": "composite_score", "sort_order": "desc"}
+    rows = [
+        {"symbol": "IPO", "composite_score": 72},
+        {"symbol": "IPO2", "composite_score": 71},
+        {"symbol": "CORE", "composite_score": 65, "minervini_score": 65},
+    ]
+
+    assert get_preset_chart_symbols(rows, presets=[preset], top_n=2) == {"CORE", "IPO"}
+
+
 def test_legacy_ipo_preset_matches_browser_month_rollover():
     expression = legacy_filters_to_expression(
         {"ipoAfter": "6m"},

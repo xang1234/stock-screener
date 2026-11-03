@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import delete
 
 from app.interfaces.mcp.market_copilot import MarketCopilotService
-from app.infra.db.models.feature_store import FeatureRun
+from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.theme import ThemeMetrics
 from app.models.user_watchlist import WatchlistItem
-from tests.helpers.mcp_fixture import create_mcp_test_session_factory, seed_market_copilot_data
+from tests.helpers.mcp_fixture import (
+    _details,
+    create_mcp_test_session_factory,
+    seed_market_copilot_data,
+)
 from tests.helpers.taxonomy_authority import set_economic_authority
 
 
@@ -160,6 +165,46 @@ def test_watchlist_snapshot_does_not_treat_like_wildcards_as_fuzzy_matches(read_
 
     assert "was not found" in payload["summary"]
     assert payload["watchlist"] is None
+
+
+def _add_ipo_above_a_fully_scored_leader(session_factory) -> None:
+    """NVDA gains a Minervini score; IPO, on Leaders, outscores it on its uplift alone."""
+    with session_factory() as db:
+        nvda = db.query(StockFeatureDaily).filter_by(run_id=2, symbol="NVDA").one()
+        nvda.details_json = {**nvda.details_json, "minervini_score": 92.0}
+        details = _details(
+            "IPO", 99.0, "Strong Buy", 2, 95, "Software", 40.0, 9_000_000,
+            5_000_000_000, 40.0, 50.0,
+        )
+        db.add(
+            StockFeatureDaily(
+                run_id=2,
+                symbol="IPO",
+                as_of_date=date(2026, 3, 29),
+                composite_score=99.0,
+                overall_rating=5,
+                passes_count=1,
+                details_json={**details, "scan_mode": "ipo_weighted", "ipo_score": 70.0},
+            )
+        )
+        db.add(WatchlistItem(watchlist_id=1, symbol="IPO", display_name="Young IPO", position=2))
+        db.commit()
+
+
+def test_watchlist_snapshot_strongest_puts_fully_scored_rows_first(session_factory, read_only_service):
+    _add_ipo_above_a_fully_scored_leader(session_factory)
+
+    payload = _tool_payload(read_only_service.call_tool("watchlist_snapshot", {"watchlist": "Leaders"}))
+
+    assert [row["symbol"] for row in payload["strongest"]] == ["NVDA", "IPO"]
+
+
+def test_watchlist_scoped_candidates_put_fully_scored_rows_first(session_factory, read_only_service):
+    _add_ipo_above_a_fully_scored_leader(session_factory)
+
+    payload = _tool_payload(read_only_service.call_tool("find_candidates", {"universe": "Leaders"}))
+
+    assert [row["symbol"] for row in payload["symbols"]] == ["NVDA", "IPO"]
 
 
 def test_theme_state_does_not_treat_like_wildcards_as_fuzzy_matches(read_only_service):

@@ -17,6 +17,7 @@ from app.domain.scanning.filter_expression_serialization import (
     canonical_expression_payload,
 )
 from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
+from app.domain.scanning.scoring import is_core_scored
 
 # ---------------------------------------------------------------------------
 # Preset screen definitions
@@ -485,9 +486,10 @@ def get_preset_chart_symbols(
         # O(m log top_n) instead of sorting the full match list.
         def sort_key(row, f=sort_field, d=descending):
             value = row.get(f)
-            if value is None:
-                return (0, 0)
-            return (1, value if d else -value)
+            ranked = (0, 0) if value is None else (1, value if d else -value)
+            if f == "composite_score" and d:
+                return (is_core_scored(row.get("minervini_score"), row.get("canslim_score")), *ranked)
+            return ranked
 
         top_rows = heapq.nlargest(top_n, matching, key=sort_key)
         for row in top_rows:

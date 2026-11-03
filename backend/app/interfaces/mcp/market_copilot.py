@@ -16,6 +16,7 @@ from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.feature_store.models import FeatureRunDomain
 from app.domain.scanning.filter_expression_model import QuerySpec
+from app.domain.scanning.scoring import is_core_scored
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.market_breadth import MarketBreadth
@@ -674,7 +675,7 @@ class MarketCopilotService:
             )
 
         with self._uow_scope() as uow:
-            present_items = []
+            present = []
             missing_symbols = []
             for item in watchlist_items:
                 candidate = uow.feature_store.get_by_symbol_for_run(
@@ -686,13 +687,17 @@ class MarketCopilotService:
                 if candidate is None:
                     missing_symbols.append(item.symbol)
                 else:
-                    present_items.append(self._candidate_record(candidate))
+                    present.append(candidate)
 
-        strongest = sorted(
-            present_items,
-            key=lambda row: row.get("composite_score") or -1,
-            reverse=True,
-        )[:3]
+        present_items = [self._candidate_record(candidate) for candidate in present]
+        strongest = [
+            self._candidate_record(candidate)
+            for candidate in sorted(
+                present,
+                key=lambda row: (self._is_core_scored(row), row.composite_score or -1),
+                reverse=True,
+            )[:3]
+        ]
         next_actions: list[str] = []
         if missing_symbols:
             next_actions.append("Review symbols missing from the latest published feature run.")
@@ -1433,8 +1438,12 @@ class MarketCopilotService:
                 if item is not None and self._matches_candidate_filters(item, args.filters):
                     items.append(item)
 
+        tiered = sort_spec.field == "composite_score" and sort_spec.order == SortOrder.DESC
         items.sort(
-            key=lambda row: self._candidate_sort_value(self._candidate_record(row), sort_spec.field),
+            key=lambda row: (
+                tiered and self._is_core_scored(row),
+                self._candidate_sort_value(self._candidate_record(row), sort_spec.field),
+            ),
             reverse=sort_spec.order == SortOrder.DESC,
         )
         return [self._candidate_record(item) for item in items[: args.limit]]
@@ -1490,6 +1499,11 @@ class MarketCopilotService:
                 or filters.text_query.lower() in (record.get("company_name") or "").lower(),
             )
         )
+
+    @staticmethod
+    def _is_core_scored(item: Any) -> bool:
+        fields = item.extended_fields
+        return is_core_scored(fields.get("minervini_score"), fields.get("canslim_score"))
 
     def _candidate_sort_value(self, record: dict[str, Any], sort_field: str) -> Any:
         field_map = {
