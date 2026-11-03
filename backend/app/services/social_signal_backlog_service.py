@@ -117,6 +117,15 @@ class _MeteredCompletion:
         if price is None:
             self.owner._finish_many(self.claims, "waiting_budget", "pricing_not_configured")
             raise _Deferred(len(self.claims))
+        try:
+            if self.owner.llm is not None:
+                llm = self.owner.llm
+            elif kwargs["model"].startswith("anthropic/"):
+                llm = AnthropicMeteredLLM()
+            else:
+                llm = LLMService(use_case="extraction")
+        except LLMPreDispatchError:
+            raise SocialExtractionError("llm_configuration_error") from None
         # UTF-8 bytes upper-bound text tokens; fixed margin covers chat envelope.
         inputs = len(json.dumps(kwargs["messages"], ensure_ascii=False).encode("utf-8")) + 1024
         outputs = kwargs["max_tokens"]
@@ -236,12 +245,6 @@ class _MeteredCompletion:
             self.dispatched = True
             self.ledger.calls_left -= 1
             try:
-                if self.owner.llm is not None:
-                    llm = self.owner.llm
-                elif kwargs["model"].startswith("anthropic/"):
-                    llm = AnthropicMeteredLLM()
-                else:
-                    llm = LLMService(use_case="extraction")
                 response = await llm.completion(**kwargs, metered=True)
             except LLMPreDispatchError as exc:
                 if not budget.release_unbilled(attempt):
