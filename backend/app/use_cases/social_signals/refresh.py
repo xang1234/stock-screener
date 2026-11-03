@@ -228,10 +228,9 @@ class RefreshSocialSignals:
             return self._result(run_id, runtime.mode, "deferred", "analysis_incomplete", sources=enabled)
 
         evidence = self.evidence_reader.read(run_id, now)
-        window_start = now - timedelta(days=max(_WINDOWS))
         # Failed posts are coverage gaps; only a generation left with nothing to score is withheld.
         if manifest.unavailable_inputs and not any(
-            post.created_at >= window_start for item in evidence for post in item.posts
+            result.mention_count for result in score_social_candidates(evidence, max(_WINDOWS), now)
         ):
             self.writer.fail_run(run_id, "analysis_failed")
             return self._result(run_id, runtime.mode, "failed", "analysis_failed", sources=enabled)
