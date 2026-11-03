@@ -48,6 +48,9 @@ export default function SocialSignalHealthPanel() {
   const health = useQuery({
     queryKey: ['socialAdmin', 'health', keyGeneration],
     queryFn: () => getSocialAdminHealth(adminKey), enabled,
+    refetchInterval: (query) => (
+      ['collecting', 'processing'].includes(query.state.data?.latest_live_attempt?.status) ? 5_000 : false
+    ),
   });
   const sources = useQuery({
     queryKey: ['socialAdmin', 'sources', keyGeneration, showArchived],
@@ -165,6 +168,8 @@ export default function SocialSignalHealthPanel() {
           onChange={(event) => setKeyDraft(event.target.value)} />
         <Button variant="contained" disabled={!keyDraft.trim()}
           onClick={() => {
+            // A new key must not see another administrator's cached responses.
+            queryClient.removeQueries({ queryKey: ['socialAdmin'] });
             setIdentityDraft(''); setAdminKey(keyDraft.trim());
             setKeyGeneration((value) => value + 1); setMessage(null);
           }}>
@@ -330,6 +335,15 @@ const attemptReasonCopy = {
   reauthentication_required: 'X authentication needs attention',
 };
 
+const failureCopy = {
+  analysis_failed: 'Collected posts were not published because analysis failed. Retry failed work under Saved analysis.',
+  publication_failed: 'Analysis finished, but publishing failed. The next scheduled run collects again.',
+  generation_superseded: 'A newer run published first, so this one was closed.',
+  social_runtime_changed: 'The Social runtime changed during collection, so this run was closed.',
+  source_participation_failed: 'An enabled list could not take part, so this run was closed.',
+  not_published: 'Analysis finished, but the run was not published.',
+};
+
 function LatestAttempt({ attempt }) {
   const failed = ['collection_failed', 'failed'].includes(attempt.status);
   return (
@@ -363,7 +377,7 @@ function LatestAttempt({ attempt }) {
         Analysis did not start because no enabled list collected successfully.
       </Typography> : null}
       {attempt.status === 'failed' ? <Typography variant="body2" sx={{ mt: 1 }}>
-        Collected posts were not published because analysis failed. Retry failed work under Saved analysis.
+        {failureCopy[attempt.failure_reason] || failureCopy.not_published}
       </Typography> : null}
     </Alert>
   );

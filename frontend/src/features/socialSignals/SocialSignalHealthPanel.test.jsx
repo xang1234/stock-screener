@@ -121,6 +121,52 @@ describe('SocialSignalHealthPanel', () => {
     );
   });
 
+  const withAttempt = async (attempt) => {
+    const health = await api.getSocialAdminHealth();
+    api.getSocialAdminHealth.mockResolvedValue({
+      ...health, latest_live_attempt: { ...health.latest_live_attempt, sources: [], ...attempt },
+    });
+  };
+
+  it.each([
+    ['analysis_failed', /because analysis failed\. Retry failed work under Saved analysis/],
+    ['publication_failed', /Analysis finished, but publishing failed/],
+    ['not_published', /Analysis finished, but the run was not published/],
+  ])('says why a collected run did not publish (%s)', async (reason, copy) => {
+    await withAttempt({ status: 'failed', failure_reason: reason });
+    renderPanel();
+    await unlock();
+    expect(screen.getByText(copy)).toBeInTheDocument();
+  });
+
+  it('refreshes health while the latest run is still in progress', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withAttempt({ status: 'processing' });
+      renderPanel();
+      await unlock();
+      const calls = api.getSocialAdminHealth.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(api.getSocialAdminHealth.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not show an earlier administrator\'s health after a new key is loaded', async () => {
+    const { client, unmount } = renderPanel();
+    await unlock();
+    expect(screen.getByText('Formula social-signal-v1')).toBeInTheDocument();
+    unmount();
+    api.getSocialAdminHealth.mockRejectedValue(new Error('forbidden'));
+    render(<QueryClientProvider client={client}><ThemeProvider theme={createTheme()}>
+      <SocialSignalHealthPanel />
+    </ThemeProvider></QueryClientProvider>);
+    await unlock();
+    expect(screen.queryByText('Formula social-signal-v1')).not.toBeInTheDocument();
+    expect(screen.queryByText('Minervini')).not.toBeInTheDocument();
+  });
+
   it.each([
     ['loading', () => new Promise(() => {}), 'Loading unresolved tickers…'],
     ['failed', () => Promise.reject(new Error('down')), 'Unresolved tickers could not be loaded.'],
