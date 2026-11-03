@@ -378,10 +378,25 @@ async def test_published_queue_keeps_rank_modes_and_unranked_sections_separate(
     )
     unresolved = await _request(
         db_session, "GET",
-        "/api/v1/social-signals/unresolved?scope=unknown&market=US&window=7d&page=1&page_size=50",
+        "/api/v1/social-signals/unresolved?window=7d&page=1&page_size=50",
     )
     assert [item["canonical_symbol"] for item in context.json()["items"]] == ["SPY"]
+    assert unresolved.status_code == 200
     assert [item["canonical_symbol"] for item in unresolved.json()["items"]] == ["$ZZZ"]
+    assert unresolved.json()["market"] is None
+
+
+def test_reader_takes_a_null_market_only_for_unresolved_rows(db_session):
+    from contextlib import nullcontext
+    from app.infra.db.repositories.published_social_signal_reader import (
+        PublishedSocialSignalReader,
+    )
+
+    reader = PublishedSocialSignalReader(lambda: nullcontext(db_session))
+
+    with pytest.raises(ValueError, match="invalid_market_or_window"):
+        reader.queue(None, 7, "context", "blended", 1, 50, run_id="published-1")
+    assert reader.queue(None, 7, "unresolved", "blended", 1, 50, run_id="published-1").total == 0
 
 
 def test_published_queue_freshness_uses_oldest_successful_collection(

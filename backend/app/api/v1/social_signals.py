@@ -97,15 +97,12 @@ def context(
 
 @router.get("/unresolved", response_model=SocialSectionResponse)
 def unresolved(
-    scope: str = Query("market", pattern="^(market|unknown)$"),
-    market: MarketCode = Query(...), window: WindowCode = Query("7d"),
+    window: WindowCode = Query("7d"),
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    # Unknown identities are deliberately global; market remains the caller's UI context.
-    del scope
     return SocialSignalQueries(db).section(
-        market=market, window=window, section="unresolved",
+        market=None, window=window, section="unresolved",
         page=page, page_size=page_size,
     )
 

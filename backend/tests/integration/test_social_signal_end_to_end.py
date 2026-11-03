@@ -176,7 +176,7 @@ async def test_fixture_providers_source_lifecycle_atomic_publish_and_rank_modes(
     )
     unresolved = await request(
         db_session, "GET",
-        "/api/v1/social-signals/unresolved?scope=unknown&market=US&window=7d&page=1&page_size=50",
+        "/api/v1/social-signals/unresolved?window=7d&page=1&page_size=50",
     )
     assert [row["canonical_symbol"] for row in blended.json()["items"]] == [
         "AMD", "NVDA",

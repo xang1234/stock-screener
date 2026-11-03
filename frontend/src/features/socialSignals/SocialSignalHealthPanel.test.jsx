@@ -117,7 +117,7 @@ describe('SocialSignalHealthPanel', () => {
       'TickerMentionsListsLatest mention', '$xyz41/2—',
     ]);
     expect(api.getSocialUnresolved).toHaveBeenCalledWith(
-      { market: 'US', window: '7d', page: 1, pageSize: 50 },
+      { window: '7d', page: 1, pageSize: 50 },
     );
   });
 
@@ -240,7 +240,7 @@ describe('SocialSignalHealthPanel', () => {
     expect(screen.getByRole('table', { name: 'Tickers that need resolution' })).toBeInTheDocument();
     expect(screen.queryByText('Loading unresolved tickers…')).not.toBeInTheDocument();
     await waitFor(() => expect(api.getSocialUnresolved).toHaveBeenLastCalledWith(
-      { market: 'US', window: '7d', page: 2, pageSize: 50 },
+      { window: '7d', page: 2, pageSize: 50 },
     ));
     expect(await screen.findByText('51–100 of 120')).toBeInTheDocument();
   });
@@ -264,7 +264,7 @@ describe('SocialSignalHealthPanel', () => {
       'TickerMentionsListsLatest mention', '$xyz41/2—',
     ]);
     expect(api.getSocialUnresolved).toHaveBeenLastCalledWith(
-      { market: 'US', window: '7d', page: 1, pageSize: 50 },
+      { window: '7d', page: 1, pageSize: 50 },
     );
   });
 

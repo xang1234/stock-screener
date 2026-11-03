@@ -82,6 +82,7 @@ class SocialQueueResponse(SocialAvailabilityResponse):
 
 
 class SocialSectionResponse(SocialAvailabilityResponse):
+    market: MarketCode | None
     window: WindowCode
     section: Literal["context", "unresolved"]
     page: int

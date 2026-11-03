@@ -37,9 +37,9 @@ export const getSocialContext = async ({ market, window = '7d', page = 1, pageSi
   return response.data;
 };
 
-export const getSocialUnresolved = async ({ market, window = '7d', page = 1, pageSize = 50 }) => {
+export const getSocialUnresolved = async ({ window = '7d', page = 1, pageSize = 50 }) => {
   const response = await apiClient.get('/v1/social-signals/unresolved', {
-    params: { scope: 'unknown', market, window, page, page_size: pageSize },
+    params: { window, page, page_size: pageSize },
   });
   return response.data;
 };
