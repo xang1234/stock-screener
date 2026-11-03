@@ -31,6 +31,20 @@ const claim = (overrides) => ({
 });
 
 describe('SocialEvidenceDrawer', () => {
+  it('says when the latest run no longer holds the candidate', () => {
+    renderDrawer({ available: false, reason_code: 'candidate_not_found', item: null, posts: [] });
+
+    expect(screen.getByText('This signal is not in the latest published run.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'CEG' })).toBeInTheDocument();
+  });
+
+  it('keeps the not-in-run message for a missing candidate only', () => {
+    renderDrawer({ available: false, reason_code: 'no_published_run', item: null, posts: [] });
+
+    expect(screen.queryByText('This signal is not in the latest published run.')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'CEG' })).toBeInTheDocument();
+  });
+
   it('shows each extracted claim with its theme, relationship, support and source', () => {
     renderDrawer({
       available: true, item: { canonical_symbol: 'CEG' }, posts: [],

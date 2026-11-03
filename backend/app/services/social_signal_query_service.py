@@ -67,9 +67,13 @@ class SocialSignalQueries:
         registry = self.db.get(SocialSourceRegistry, 1)
         return bool(registry and registry.mode == "live" and registry.provider != "disabled")
 
-    def _publication(self):
+    def _published_run_id(self):
         pointer = self.db.get(SocialSignalRunPointer, "latest_published")
-        return self.db.get(SocialSignalRun, pointer.run_id) if pointer else None
+        return pointer.run_id if pointer else None
+
+    def _publication(self):
+        run_id = self._published_run_id()
+        return self.db.get(SocialSignalRun, run_id) if run_id else None
 
     @staticmethod
     def _oldest_successful_observation_at(run):
@@ -375,6 +379,29 @@ class SocialSignalQueries:
             "items": result["items"],
             "run_id": result.get("run_id"),
         }
+
+    def symbols(self, *, window, symbols):
+        base = {
+            "supported": self._supported(), "available": False,
+            "reason_code": "social_signals_disabled", "window": window, "items": [],
+        }
+        if not base["supported"]:
+            return base
+        run_id = self._published_run_id()
+        if run_id is None:
+            return {**base, "reason_code": "no_published_run"}
+        rows = self.db.execute(select(
+            SocialSignalSnapshot.candidate_key, SocialSignalSnapshot.canonical_symbol,
+            SocialSignalSnapshot.market, SocialSignalSnapshot.state,
+            SocialSignalSnapshot.queue_score, SocialSignalSnapshot.social_score,
+            SocialSignalSnapshot.confirmation_score, SocialSignalSnapshot.mention_count,
+        ).where(
+            SocialSignalSnapshot.run_id == run_id,
+            SocialSignalSnapshot.window_days == WINDOW_DAYS[window],
+            SocialSignalSnapshot.market.is_not(None),
+            SocialSignalSnapshot.canonical_symbol.in_(symbols),
+        ).order_by(SocialSignalSnapshot.candidate_key)).mappings()
+        return {**base, "available": True, "reason_code": None, "items": [dict(row) for row in rows]}
 
     @staticmethod
     def _canonical_post_url(post):

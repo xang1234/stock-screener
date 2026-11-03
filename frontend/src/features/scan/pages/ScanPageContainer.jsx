@@ -890,6 +890,7 @@ function ScanPage() {
 
       {viewScanFinished && (
         <ScanResultsSection
+          showSocialSignals={features?.social_signals === true}
           resultsLoading={resultsLoading || opportunityStateCleanupPending}
           resultsData={displayedResultsData}
           expression={displayedQuery.expression}

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import apiClient from './client';
 import {
   createSocialSource, getSocialAdminHealth, getSocialAdminSources,
-  getSocialContext, getSocialEvidence, getSocialQueue, getSocialUnresolved,
+  getSocialContext, getSocialEvidence, getSocialQueue, getSocialSymbols, getSocialUnresolved,
   testSocialSource,
   socialQueueKey,
 } from './socialSignals';
@@ -51,6 +51,14 @@ describe('Social Signal read client', () => {
       ['/v1/social-signals/candidates/JP%3A6758%2Fprimary/evidence', {
         params: { window: '1d' },
       }],
+    ]);
+  });
+
+  it('looks up a page of symbols as one comma list', async () => {
+    apiClient.get.mockResolvedValue({ data: { items: [] } });
+    await getSocialSymbols(['0700.HK', 'NVDA'], '7d');
+    expect(apiClient.get.mock.calls).toEqual([
+      ['/v1/social-signals/symbols', { params: { window: '7d', symbols: '0700.HK,NVDA' } }],
     ]);
   });
 

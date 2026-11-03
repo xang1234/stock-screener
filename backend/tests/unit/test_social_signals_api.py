@@ -1798,3 +1798,96 @@ def test_admin_analysis_names_no_signal_skips_and_refusals_instead_of_provider_e
     assert [row["error_code"] for row in admin_analysis(state=None, limit=10, db=db_session)] == [
         SKIPPED_NO_SIGNAL, "provider_rejected", "provider_error"
     ]
+
+
+@pytest.mark.asyncio
+async def test_symbol_lookup_returns_listed_rows_of_the_published_window(
+    db_session, social_runtime, monkeypatch
+):
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from app.domain.social_signals.records import SocialSnapshotRecord
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+
+    def row(key, state, queue, symbol, market="US"):
+        score = Decimal(str(queue)) if queue is not None else None
+        return SocialSnapshotRecord(
+            "published-1", key, symbol or None, market, state, score, score, score,
+            (("state_reasons", state),), (), now, symbol, key, 7, 2, 2, 2,
+        )
+
+    _publish_rows(db_session, (
+        row("US:AAA", "actionable", 60, "AAA"),
+        replace(row("US:AAA", "watch", 10, "AAA"), window_days=1),
+        row("HK:0700.HK", "risk_off", 40, "0700.HK", "HK"),
+        row("US:SPY", "context", None, "SPY"),
+        row("unresolved:$zzz", "unresolved", None, "$ZZZ", None),
+    ))
+
+    response = await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/symbols?window=7d&symbols=SPY,AAA,0700.HK,BBB,$ZZZ",
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "supported": True, "available": True, "reason_code": None, "window": "7d",
+        "items": [
+            {"candidate_key": "HK:0700.HK", "canonical_symbol": "0700.HK", "market": "HK",
+             "state": "risk_off", "queue_score": 40.0, "social_score": 40.0,
+             "confirmation_score": 40.0, "mention_count": 2},
+            {"candidate_key": "US:AAA", "canonical_symbol": "AAA", "market": "US",
+             "state": "actionable", "queue_score": 60.0, "social_score": 60.0,
+             "confirmation_score": 60.0, "mention_count": 2},
+            {"candidate_key": "US:SPY", "canonical_symbol": "SPY", "market": "US",
+             "state": "context", "queue_score": None, "social_score": None,
+             "confirmation_score": None, "mention_count": 2},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("mode", "provider", "reason_code"), [
+    ("off", "disabled", "social_signals_disabled"),
+    ("live", "official", "no_published_run"),
+])
+async def test_symbol_lookup_is_typed_unavailable_without_a_live_publication(
+    db_session, social_runtime, monkeypatch, mode, provider, reason_code,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    if mode != runtime.mode:
+        social_runtime.apply_runtime(mode, provider, runtime.version, "admin")
+
+    response = await _request(
+        db_session, "GET", "/api/v1/social-signals/symbols?symbols=AAA",
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "supported": mode == "live", "available": False, "reason_code": reason_code,
+        "window": "7d", "items": [],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("symbols", [
+    ",".join(f"S{index}" for index in range(101)), " , ",
+])
+async def test_symbol_lookup_takes_one_page_of_symbols(db_session, monkeypatch, symbols):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    response = await _request(
+        db_session, "GET", "/api/v1/social-signals/symbols", params={"symbols": symbols},
+    )
+
+    assert response.status_code == 422

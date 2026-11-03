@@ -17,7 +17,7 @@ from app.schemas.social_signals import (
     SocialCompanyIdentityUpdate, SocialEvidenceResponse, SocialQueueResponse,
     SocialRuntimeUpdate, SocialSectionResponse, SocialSourceCreateRequest,
     SocialSourceRenameRequest, SocialSourceTransitionRequest,
-    SocialSourceVersionRequest, SocialSummaryResponse, WindowCode,
+    SocialSourceVersionRequest, SocialSummaryResponse, SocialSymbolsResponse, WindowCode,
 )
 from app.services.economic_taxonomy_fence import TaxonomyWriteRejected
 from app.services.social_signal_query_service import SocialSignalQueries
@@ -26,6 +26,7 @@ from app.api.v1.config import require_admin
 
 router = APIRouter()
 ADMIN_ACTOR = "server-admin"
+MAX_SCAN_PAGE_SYMBOLS = 100
 _SAFE_REASON_CODES = {
     "analysis_failed", "analysis_incomplete", "bounded_provider_read", "daily_budget_exhausted",
     "daily_limit_exhausted", "incremental_gap_suspected",
@@ -116,6 +117,17 @@ def evidence(
     db: Session = Depends(get_db),
 ):
     return SocialSignalQueries(db).evidence(candidate_key=candidate_key, window=window)
+
+
+@router.get("/symbols", response_model=SocialSymbolsResponse)
+def symbol_signals(
+    symbols: str = Query(..., max_length=3000), window: WindowCode = Query("7d"),
+    db: Session = Depends(get_db),
+):
+    requested = sorted({value.strip() for value in symbols.split(",") if value.strip()})
+    if not 1 <= len(requested) <= MAX_SCAN_PAGE_SYMBOLS:
+        raise HTTPException(status_code=422, detail={"code": "invalid_symbols"})
+    return SocialSignalQueries(db).symbols(window=window, symbols=requested)
 
 
 @router.get("/theme-pulse")
