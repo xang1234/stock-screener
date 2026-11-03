@@ -145,3 +145,16 @@ class TestBeatScheduleFanout:
             assert f"daily-feature-snapshot-{m_lower}" not in schedule
             expected_presence = market in _deployment_enabled_markets()
             assert (f"daily-market-pipeline-{m_lower}" in schedule) is expected_presence
+
+    def test_each_daily_market_pipeline_has_an_hourly_catch_up_on_its_job_queue(self):
+        schedule = _build_cache_warmup_beat_schedule(["US", "HK"])
+
+        for market in ("US", "HK"):
+            entry = schedule[f"catch-up-daily-market-pipeline-{market.lower()}"]
+            slot = schedule[f"daily-market-pipeline-{market.lower()}"]["schedule"]
+            assert entry["task"] == "app.tasks.daily_market_pipeline_tasks.catch_up_daily_market_pipeline"
+            assert entry["kwargs"] == {"market": market}
+            assert entry["options"] == {"queue": market_jobs_queue_for_market(market)}
+            assert entry["schedule"].minute == slot.minute
+            assert entry["schedule"].hour == set(range(24))
+            assert entry["schedule"].day_of_week == set(range(7))

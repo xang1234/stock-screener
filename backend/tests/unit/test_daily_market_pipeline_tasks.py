@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1518,3 +1519,147 @@ def test_a_benchmark_rerun_cannot_double_run_a_pipeline_still_holding_the_claim(
     assert rerun["reason"] == "market_pipeline_already_active"
     assert rerun["active_chain_token"] == claims.holders["US"]["task_id"]
     assert len(published) == 1
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _catch_up_ready(
+    monkeypatch, module, *, now, published, session=date(2026, 10, 28),
+    market_open=False, enabled=True, holder=None,
+):
+    class _FakeCalendar:
+        def market_now(self, _market):
+            return now
+
+        def last_completed_trading_day(self, _market):
+            return session
+
+        def is_market_open(self, _market):
+            return market_open
+
+    claims = _ChainClaims()
+    if holder is not None:
+        claims.holders["US"] = holder
+    queued = []
+    monkeypatch.setattr(module.settings, "cache_warm_hour_us", 16)
+    monkeypatch.setattr(module.settings, "cache_warm_minute_us", 30)
+    monkeypatch.setattr(module, "MarketCalendarService", lambda: _FakeCalendar())
+    monkeypatch.setattr(module, "_published_session", lambda _market: published)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: enabled,
+    )
+    monkeypatch.setattr(module, "_pipeline_chain_claims", lambda: claims)
+    monkeypatch.setattr(
+        module.queue_daily_market_pipeline,
+        "apply_async",
+        lambda **options: queued.append(options) or SimpleNamespace(id="dispatch-1"),
+    )
+    return queued
+
+
+def test_a_catch_up_dispatches_a_session_whose_slot_the_stack_missed(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    queued = _catch_up_ready(
+        monkeypatch, module, now=datetime(2026, 10, 29, 2, 30, tzinfo=_ET), published=date(2026, 10, 27),
+    )
+
+    result = module.catch_up_daily_market_pipeline.run(market="US")
+
+    assert result == {
+        "status": "queued",
+        "market": "US",
+        "as_of_date": "2026-10-28",
+        "published_as_of_date": "2026-10-27",
+        "task_id": "dispatch-1",
+    }
+    assert queued == [{
+        "kwargs": {"market": "US", "rerun_as_of_date": "2026-10-28"},
+        "queue": "market_jobs_us",
+    }]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"published": date(2026, 10, 28)}, "current"),
+        ({"enabled": False}, "market_disabled"),
+        ({"now": datetime(2026, 10, 28, 17, 29, tzinfo=_ET)}, "slot_pending"),
+        ({"market_open": True}, "market_open"),
+        ({"holder": {"task_id": "chain-token"}}, "market_pipeline_already_active"),
+    ],
+)
+def test_a_catch_up_leaves_the_session_to_the_slot_or_the_running_chain(monkeypatch, overrides, reason):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    kwargs = {"now": datetime(2026, 10, 29, 2, 30, tzinfo=_ET), "published": date(2026, 10, 27), **overrides}
+    queued = _catch_up_ready(monkeypatch, module, **kwargs)
+
+    result = module.catch_up_daily_market_pipeline.run(market="US")
+
+    assert result == {
+        "status": "skipped",
+        "reason": reason,
+        "market": "US",
+        "as_of_date": "2026-10-28",
+        "published_as_of_date": kwargs["published"].isoformat(),
+    }
+    assert queued == []
+
+
+def test_a_named_session_dispatch_runs_on_a_day_without_a_session(monkeypatch):
+    """A catch-up on Saturday for Friday's session (10-30 was never dispatched)."""
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    claims, published = _ChainClaims(), []
+    _ready_to_dispatch(monkeypatch, module, claims, published)
+    built = []
+    monkeypatch.setattr(
+        module,
+        "_build_daily_market_pipeline_signatures",
+        lambda market, trading_day, *, rerun_attempt: built.append((market, trading_day, rerun_attempt)) or ["prices"],
+    )
+
+    class _SaturdayCalendar:
+        def market_now(self, _market):
+            return datetime(2026, 10, 31, 10, 30)
+
+        def is_trading_day(self, _market, _today):
+            return False
+
+        def last_completed_trading_day(self, _market):
+            return date(2026, 10, 30)
+
+        def is_market_open(self, _market):
+            return False
+
+    monkeypatch.setattr(module, "MarketCalendarService", lambda: _SaturdayCalendar())
+
+    result = module.queue_daily_market_pipeline.run("US", rerun_as_of_date="2026-10-30")
+
+    assert result["status"] == "queued"
+    assert result["as_of_date"] == "2026-10-30"
+    assert built == [("US", date(2026, 10, 30), 0)]
+    assert len(published) == 1
+
+
+def test_the_beat_slot_still_skips_a_day_without_a_session(monkeypatch):
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    claims, published = _ChainClaims(), []
+    _ready_to_dispatch(monkeypatch, module, claims, published)
+    monkeypatch.setattr(
+        module,
+        "MarketCalendarService",
+        lambda: SimpleNamespace(
+            market_now=lambda _market: datetime(2026, 10, 31, 16, 30),
+            is_trading_day=lambda _market, _today: False,
+        ),
+    )
+
+    result = module.queue_daily_market_pipeline.run("US")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "not_trading_day"
+    assert published == []
