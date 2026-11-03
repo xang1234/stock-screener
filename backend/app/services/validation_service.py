@@ -107,8 +107,10 @@ RUN_MARKET = func.coalesce(
 )
 
 
-# A symbol the universe no longer lists passes, so delisted symbols' past picks still count.
-NOT_A_FUND = StockUniverse.is_common_stock.is_not(False)
+# Marked common stock, or missing from the universe (used with an outer join). Ingestion
+# marks funds not common stock. A symbol the universe no longer lists passes, so delisted
+# symbols' past picks still count.
+COMMON_STOCK_OR_UNLISTED = StockUniverse.is_common_stock.is_not(False)
 
 
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
@@ -118,7 +120,7 @@ NOT_A_FUND = StockUniverse.is_common_stock.is_not(False)
 SCAN_PICK_ELIGIBILITY = and_(
     StockFeatureDaily.minervini_score.is_not(None),
     StockFeatureDaily.canslim_score.is_not(None),
-    NOT_A_FUND,
+    COMMON_STOCK_OR_UNLISTED,
 )
 
 
