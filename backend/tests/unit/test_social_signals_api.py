@@ -631,6 +631,7 @@ async def test_empty_actionable_falls_back_to_watch_with_a_reason(
     assert [item["canonical_symbol"] for item in summary.json()["top_signals"]] == [
         symbol for symbol, state, *_ in rows if state == "actionable"
     ]
+    assert summary.json()["fallback"] == fallback
 
 
 @pytest.mark.asyncio

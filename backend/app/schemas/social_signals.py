@@ -28,6 +28,16 @@ class SocialAvailabilityResponse(BaseModel):
     latest_attempt: SocialLatestAttempt | None = None
 
 
+class SocialQueueFallback(BaseModel):
+    """Why the Actionable view is empty, with the publication's Watch and Risk-off counts."""
+    from_view: Literal["actionable"] = Field(alias="from")
+    to_view: Literal["watch"] = Field(alias="to")
+    reason_code: str | None = None
+    reason_params: dict[str, Any] = Field(default_factory=dict)
+    watch_count: int
+    risk_off_count: int
+
+
 class SocialSummaryResponse(SocialAvailabilityResponse):
     generated_at: datetime | None = None
     published_at: datetime | None = None
@@ -36,6 +46,7 @@ class SocialSummaryResponse(SocialAvailabilityResponse):
     dominant_themes: list[dict[str, Any]] = Field(default_factory=list)
     enabled_source_count: int | None = None
     participating_source_count: int | None = None
+    fallback: SocialQueueFallback | None = None
 
 
 class SocialQueueItem(BaseModel):
@@ -54,16 +65,6 @@ class SocialQueueItem(BaseModel):
     formula_version: str
     coverage: list[str] = Field(default_factory=list)
     explanation: dict[str, Any] = Field(default_factory=dict)
-
-
-class SocialQueueFallback(BaseModel):
-    """Actionable was empty, so the same publication's Watch rows are shown instead."""
-    from_view: Literal["actionable"] = Field(alias="from")
-    to_view: Literal["watch"] = Field(alias="to")
-    reason_code: str | None = None
-    reason_params: dict[str, Any] = Field(default_factory=dict)
-    watch_count: int
-    risk_off_count: int
 
 
 class SocialQueueResponse(SocialAvailabilityResponse):
