@@ -5,7 +5,9 @@ Work qualifies when no extraction attempt for it was billed (reconciled) or is
 possibly still in flight, and its post is inside the analysis window the backlog claims
 from. Work whose attempt is uncertain is requeued deliberately, and a few of
 those requests may have been billed. --since and --until keep only work with an
-attempt created in that window, read as UTC. A dry run prints the counts;
+attempt created in that window, read as UTC. --model moves the requeued work, and
+work still waiting on another model, to that model; a row whose post already has
+work for it is left alone. A dry run prints the counts;
 --apply writes them in one transaction. Running it again finds nothing new to
 requeue.
 """
@@ -64,21 +66,56 @@ def _classify(db, now, error_code, since, until):
             yield "requeue", row
 
 
-def requeue(session_factory, now, *, apply=False, error_code="completion_unknown", since=None, until=None):
+def _taken(db, row, model):
+    from sqlalchemy import select
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+
+    return db.scalar(select(SocialExtractionWork.id).where(
+        SocialExtractionWork.content_item_id == row.content_item_id,
+        SocialExtractionWork.input_hash == row.input_hash,
+        SocialExtractionWork.prompt_version == row.prompt_version,
+        SocialExtractionWork.schema_version == row.schema_version,
+        SocialExtractionWork.selected_model == model,
+    )) is not None
+
+
+def _plan(db, now, error_code, since, until, model):
+    from sqlalchemy import select
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_signal_backlog_service import NO_SIGNAL_GATE
+
+    plan = []
+    for kind, row in _classify(db, now, error_code, since, until):
+        plan.append(("retarget_duplicate" if kind == "requeue" and model and _taken(db, row, model) else kind, row))
+    if model:
+        for row in db.scalars(select(SocialExtractionWork).where(
+            SocialExtractionWork.state.in_(("pending", "waiting_budget", "failed_retryable")),
+            SocialExtractionWork.selected_model.not_in((model, NO_SIGNAL_GATE)),
+        ).order_by(SocialExtractionWork.id)):
+            plan.append(("retarget_duplicate" if _taken(db, row, model) else "retarget", row))
+    return plan
+
+
+def requeue(session_factory, now, *, apply=False, error_code="completion_unknown", since=None, until=None,
+            model=None):
     from app.services.social_llm_budget_service import social_analysis_transaction
 
     since, until = _utc(since), _utc(until)
     if not apply:
         with session_factory() as db:
-            return Counter(kind for kind, _ in _classify(db, now, error_code, since, until))
+            return Counter(kind for kind, _ in _plan(db, now, error_code, since, until, model))
     counts = Counter()
     with social_analysis_transaction(session_factory) as db:
-        for kind, row in _classify(db, now, error_code, since, until):
+        for kind, row in _plan(db, now, error_code, since, until, model):
             counts[kind] += 1
             if kind == "requeue":
                 row.state, row.error_code = "pending", None
                 row.claim_token = row.claim_expires_at = None
                 row.updated_at = now
+            if kind in {"requeue", "retarget"} and model:
+                row.selected_model = model
     return counts
 
 
@@ -88,14 +125,17 @@ def main(argv=None) -> int:
     parser.add_argument("--error-code", choices=ERROR_CODES, default="completion_unknown")
     parser.add_argument("--since", type=datetime.fromisoformat, help="earliest attempt created_at, inclusive")
     parser.add_argument("--until", type=datetime.fromisoformat, help="latest attempt created_at, exclusive")
+    parser.add_argument("--model", help="move requeued and waiting work to this social extraction model")
     args = parser.parse_args(argv)
     from app.database import SessionLocal
 
     counts = requeue(SessionLocal, datetime.now(timezone.utc), apply=args.apply,
-                     error_code=args.error_code, since=args.since, until=args.until)
+                     error_code=args.error_code, since=args.since, until=args.until, model=args.model)
     verb = "requeued" if args.apply else "would requeue"
     print(f"{verb} {counts['requeue']} {args.error_code} work rows")
-    for kind in ("billed", "in_flight", "outside_window"):
+    if args.model:
+        print(f"moved {counts['retarget']} waiting work rows to {args.model}")
+    for kind in ("billed", "in_flight", "outside_window", "retarget_duplicate"):
         print(f"left {kind}: {counts[kind]}")
     return 0
 

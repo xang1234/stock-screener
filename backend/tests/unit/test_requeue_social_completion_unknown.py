@@ -118,3 +118,31 @@ def test_requeue_leaves_work_whose_request_may_still_be_running(backlog):
     assert requeue(backlog, NOW + timedelta(minutes=30), apply=True) == {"in_flight": 1}
     assert states(backlog, work_id) == stranded
     assert requeue(backlog, LATER, apply=True) == {"requeue": 1}
+
+
+def test_requeue_moves_requeued_and_waiting_work_to_another_model(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    worker = processor(backlog, FakeLLM())
+    unknown, waiting, taken = (enqueue(backlog, worker, post(number)) for number in range(1, 4))
+    strand(backlog, unknown, "uncertain")
+    with backlog.begin() as db:
+        db.get(SocialExtractionWork, waiting).state = "waiting_budget"
+        source = db.get(SocialExtractionWork, taken)
+        db.add(SocialExtractionWork(
+            content_item_id=source.content_item_id, input_hash=source.input_hash,
+            prompt_version=source.prompt_version, schema_version=source.schema_version,
+            selected_model="anthropic/claude-haiku-5-5", input_snapshot_json=source.input_snapshot_json,
+            state="pending", created_at=NOW, updated_at=NOW))
+    model = "anthropic/claude-haiku-5-5"
+
+    assert requeue(backlog, LATER, model=model) == {"requeue": 1, "retarget": 1, "retarget_duplicate": 1}
+    assert requeue(backlog, LATER, apply=True, model=model) == {"requeue": 1, "retarget": 1, "retarget_duplicate": 1}
+    with backlog() as db:
+        models = {work_id: (db.get(SocialExtractionWork, work_id).selected_model,
+                            db.get(SocialExtractionWork, work_id).state) for work_id in (unknown, waiting, taken)}
+    assert models == {unknown: (model, "pending"), waiting: (model, "waiting_budget"),
+                      taken: ("synthetic/requested", "pending")}
+    assert requeue(backlog, LATER, apply=True, model=model) == {"retarget_duplicate": 1}

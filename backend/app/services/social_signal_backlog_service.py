@@ -21,6 +21,7 @@ from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegi
 from app.models.stock_universe import StockUniverse
 from app.services.llm.llm_service import LLMPreDispatchError, LLMProviderRejectedError, LLMService
 from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService, VERSION
+from app.services.social_anthropic_llm import AnthropicMeteredLLM
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
 from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 
@@ -229,7 +230,12 @@ class _MeteredCompletion:
             self.dispatched = True
             self.ledger.calls_left -= 1
             try:
-                llm = self.owner.llm if self.owner.llm is not None else LLMService(use_case="extraction")
+                if self.owner.llm is not None:
+                    llm = self.owner.llm
+                elif kwargs["model"].startswith("anthropic/"):
+                    llm = AnthropicMeteredLLM()
+                else:
+                    llm = LLMService(use_case="extraction")
                 response = await llm.completion(**kwargs, metered=True)
             except LLMPreDispatchError as exc:
                 if not budget.release_unbilled(attempt):
