@@ -4,6 +4,7 @@ import {
 import {
   legacyFiltersToExpression,
 } from '../features/scan/legacyFilterExpression';
+import { compareCoreScoredFirst } from '../utils/compositeRank';
 
 const RATING_SORT_ORDER = {
   'Strong Buy': 5,
@@ -44,7 +45,12 @@ export const sortStaticScanRows = (
   sortOrder = 'desc',
 ) => {
   const direction = sortOrder === 'asc' ? 1 : -1;
+  const coreScoredFirst = sortBy === 'composite_score' && sortOrder === 'desc';
   return [...rows].sort((left, right) => {
+    const tier = coreScoredFirst ? compareCoreScoredFirst(left, right) : 0;
+    if (tier !== 0) {
+      return tier;
+    }
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
     if (SCORE_SORT_FIELDS.has(sortBy)) {

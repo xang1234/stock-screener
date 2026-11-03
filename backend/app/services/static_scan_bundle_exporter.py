@@ -12,6 +12,7 @@ from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.domain.scanning.materialization import (
     config_has_opportunity_state_materialization,
 )
+from app.domain.scanning.scoring import is_core_scored
 from app.infra.serialization import json_safe
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
 from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
@@ -268,7 +269,11 @@ class StaticScanBundleExporter:
 
         return sorted(
             rows,
-            key=lambda row: (-score(row), row.get("symbol") or ""),
+            key=lambda row: (
+                not is_core_scored(row.get("minervini_score"), row.get("canslim_score")),
+                -score(row),
+                row.get("symbol") or "",
+            ),
         )
 
     @staticmethod

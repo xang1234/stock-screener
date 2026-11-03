@@ -28,6 +28,7 @@ from app.domain.feature_store.ports import FeatureStoreRepository
 from app.domain.feature_store.quality import DQInputs
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
+from app.infra.db.composite_rank import composite_rank_order
 from app.infra.db.models.feature_store import (
     FeatureRun,
     FeatureRunPointer,
@@ -682,7 +683,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(industry_col == ibd_industry_group)
-            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(StockFeatureDaily))
             .all()
         )
         return tuple(
@@ -709,7 +710,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(sector_col == gics_sector)
-            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(StockFeatureDaily))
             .all()
         )
         return tuple(

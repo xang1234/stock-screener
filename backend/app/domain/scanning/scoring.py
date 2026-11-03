@@ -17,15 +17,18 @@ underlying fundamentals are incomplete (per T2's
 - **Downgrade**: completeness between ``QUALITY_EXCLUSION_THRESHOLD``
   and ``QUALITY_DOWNGRADE_THRESHOLD`` drops the rating one tier
   (STRONG_BUY → BUY, BUY → WATCH, WATCH → WATCH).
-- **Tie-break**: rows with equal ``composite_score`` should break by
-  higher ``field_completeness_score``. Consumers enforce this via an
-  ``ORDER BY composite_score DESC, field_completeness_score DESC``
-  secondary sort; this module documents the semantics but does not
-  mutate the score itself (keeps the displayed score honest).
 
 Unknown completeness (``None``) is a pass-through: legacy rows from
 before the T2 migration are treated as "unknown quality" rather than
 forced into PASS, so the rollout doesn't regress existing results.
+
+Composite ranking
+-----------------
+A young IPO's composite is its IPO score plus an uplift, so it can outscore
+names the core screeners rated. Best-first composite rankings therefore put
+``is_core_scored`` rows first, then ``composite_score DESC NULLS LAST``.
+``app.infra.db.composite_rank`` is the SQL form of that order and
+``frontend/src/utils/compositeRank.js`` the client form.
 """
 
 from __future__ import annotations
@@ -95,6 +98,11 @@ def calculate_composite_score(
     # equal-weight average (original behaviour)
     scores = [o.score for o in screener_outputs.values()]
     return sum(scores) / len(scores)
+
+
+def is_core_scored(minervini_score: float | None, canslim_score: float | None) -> bool:
+    """Whether Minervini or CANSLIM scored the row, not the IPO screener alone."""
+    return minervini_score is not None or canslim_score is not None
 
 
 # ---------------------------------------------------------------------------

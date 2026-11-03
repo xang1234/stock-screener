@@ -28,6 +28,7 @@ import { getStockPeers } from '../../api/stocks';
 import RSSparkline from './RSSparkline';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import { getStageColor, onPalette } from '../../utils/colorUtils';
+import { compareCoreScoredFirst } from '../../utils/compositeRank';
 
 /**
  * Fetch peer stocks — scan-based when scanId is provided, standalone otherwise.
@@ -65,6 +66,11 @@ function PeerComparisonModal({ open, onClose, scanId, symbol, onOpenChart }) {
   const sortedPeers = useMemo(() => {
     if (!peers) return [];
     return [...peers].sort((a, b) => {
+      if (sortBy === 'composite_score' && sortOrder === 'desc') {
+        const tier = compareCoreScoredFirst(a, b);
+        if (tier !== 0) return tier;
+      }
+
       let aVal = a[sortBy];
       let bVal = b[sortBy];
 

@@ -17,11 +17,11 @@ def _value(row: object, name: str) -> Any:
     return getattr(row, name, None)
 
 
-def leadership_order_key(row: object) -> tuple[float, str]:
-    """Order strongest scores first and resolve ties by canonical symbol."""
+def leadership_order_key(row: object) -> tuple[bool, float, str]:
+    """Order ``core_scored`` rows first, then strongest scores, then canonical symbol."""
     score = _value(row, LEADERS_PRIMARY_SORT_FIELD)
     numeric_score = float(score) if score is not None else float("-inf")
     if not math.isfinite(numeric_score):
         numeric_score = float("-inf")
     symbol = str(_value(row, "symbol") or "").strip().upper()
-    return (-numeric_score, symbol)
+    return (not _value(row, "core_scored"), -numeric_score, symbol)

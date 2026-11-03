@@ -15,6 +15,7 @@ from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository, ScanResultRsAudit
+from app.infra.db.composite_rank import composite_rank_order
 from app.infra.query.scan_result_query import (
     apply_filter_expression,
     apply_sort_all,
@@ -782,7 +783,7 @@ class SqlScanResultRepository(ScanResultRepository):
         rows = (
             _scan_results_query(self._session, scan_id)
             .filter(ScanResult.ibd_industry_group == ibd_industry_group)
-            .order_by(ScanResult.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(ScanResult))
             .all()
         )
         return tuple(
@@ -796,7 +797,7 @@ class SqlScanResultRepository(ScanResultRepository):
         rows = (
             _scan_results_query(self._session, scan_id)
             .filter(ScanResult.gics_sector == gics_sector)
-            .order_by(ScanResult.composite_score.desc().nullslast())
+            .order_by(*composite_rank_order(ScanResult))
             .all()
         )
         return tuple(

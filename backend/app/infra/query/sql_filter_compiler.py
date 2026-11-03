@@ -44,6 +44,8 @@ class SqlFieldBinding:
     numeric_sort: bool = False
     # Sort NULLs last as JSON-path bindings do; for columns promoted from JSON.
     nulls_last: bool = False
+    # ORDER BY term placed ahead of this field on a descending sort.
+    desc_leading: Any = None
 
     def __post_init__(self) -> None:
         if (self.column is None) == (self.json_path is None):
@@ -269,6 +271,8 @@ def apply_sql_sort(
         ordered = ordered.nullslast()
     if sort.field == "symbol":
         return query.order_by(ordered)
+    if binding.desc_leading is not None and sort.order == SortOrder.DESC:
+        return query.order_by(binding.desc_leading, ordered, asc(resolver.symbol_column))
     return query.order_by(ordered, asc(resolver.symbol_column))
 
 

@@ -63,6 +63,7 @@ class OptionCandidateInput:
     dividend_yield: float | None = None
     price_closes: tuple[float, ...] = ()
     dividend_source: DividendSource | None = None
+    core_scored: bool = False
 
     def __post_init__(self) -> None:
         symbol = self.symbol.strip().upper()
