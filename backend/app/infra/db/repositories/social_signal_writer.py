@@ -534,32 +534,32 @@ class SocialSignalWriter:
                     resolution_policy_version="social-resolution-v1", explanation_json=serialized(resolution)))
 
     def latest_collection_progress(self, source_id, provider):
+        source_id = str(source_id)
+        progress = SocialSignalRun.application_progress_json
+        outcome = SocialSignalRun.source_outcomes_json
+        observed_at = progress[("observations", source_id, "observed_at")].as_string()
         with self.session_factory() as db:
-            observations, read_times = [], []
-            for run in db.scalars(select(SocialSignalRun).where(SocialSignalRun.provider == provider)):
-                if "replay" in run.application_progress_json:
-                    continue
-                outcome = run.source_outcomes_json.get(str(source_id), {})
-                observation = run.application_progress_json.get("observations", {}).get(str(source_id))
-                if not observation or outcome.get("read_status") != "success":
-                    continue
-                read_times.append(utc(datetime.fromisoformat(observation["observed_at"])))
-                if observation.get("intent") == "initial":
-                    observations.append((
-                        observation["observed_at"], utc(run.created_at), run.id,
-                        observation.get("committed_progress"),
-                        outcome.get("history_status"),
-                    ))
-            if not observations:
-                return None
-            _, _, _, cursor, history_status = max(
-                observations, key=lambda value: value[:3]
-            )
-            return SocialCollectionProgress(
-                initial_complete=(history_status == "observed_window" or cursor is None),
-                cursor=cursor,
-                last_read_at=max(read_times),
-            )
+            reads = db.execute(select(
+                observed_at.label("observed_at"), SocialSignalRun.created_at, SocialSignalRun.id,
+                progress[("observations", source_id, "intent")].as_string().label("intent"),
+                # The observation holds the same cursor next to every post it read.
+                outcome[(source_id, "committed_progress")].as_string().label("cursor"),
+                outcome[(source_id, "history_status")].as_string().label("history_status"),
+            ).where(
+                SocialSignalRun.provider == provider,
+                outcome[(source_id, "read_status")].as_string() == "success",
+                progress[("replay",)].as_string().is_(None),
+            )).all()
+        reads = [read for read in reads if read.observed_at is not None]
+        initial = [read for read in reads if read.intent == "initial"]
+        if not initial:
+            return None
+        latest = max(initial, key=lambda read: (read.observed_at, utc(read.created_at), read.id))
+        return SocialCollectionProgress(
+            initial_complete=(latest.history_status == "observed_window" or latest.cursor is None),
+            cursor=latest.cursor,
+            last_read_at=max(utc(datetime.fromisoformat(read.observed_at)) for read in reads),
+        )
 
     def latest_committed_progress(self, source_id, provider):
         """Compatibility reader for diagnostics that only display the cursor."""

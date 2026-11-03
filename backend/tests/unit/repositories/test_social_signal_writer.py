@@ -304,6 +304,38 @@ def test_collection_progress_reports_the_latest_successful_read_of_any_intent(st
     assert w.latest_collection_progress("1", "official").last_read_at == later
 
 
+def test_collection_progress_reads_progress_fields_not_the_runs_posts(store):
+    from sqlalchemy import event
+    w = writer(store)
+    w.create_run("run", NOW)
+    w.persist_observations(batch(), run_id="run")
+    w.create_run("replay", NOW + timedelta(hours=1))
+    with store.begin() as db:
+        from app.infra.db.models.social_signals import SocialSignalRun
+        original = db.get(SocialSignalRun, "run")
+        observation = {**original.application_progress_json["observations"]["1"],
+                       "committed_progress": "replayed-cursor"}
+        replay = db.get(SocialSignalRun, "replay")
+        replay.application_progress_json = {
+            **original.application_progress_json, "observations": {"1": observation},
+            "replay": {"saved_run_id": "run"},
+        }
+        replay.source_outcomes_json = {"1": {**original.source_outcomes_json["1"],
+                                       "committed_progress": "replayed-cursor"}}
+    engine = store.kw["bind"]
+    fetched = []
+    def record(conn, cursor, statement, parameters, context, executemany):
+        fetched.extend(column[0] for column in cursor.description or ())
+    event.listen(engine, "after_cursor_execute", record)
+    try:
+        progress = w.latest_collection_progress("1", "official")
+    finally:
+        event.remove(engine, "after_cursor_execute", record)
+
+    assert (progress.cursor, progress.initial_complete, progress.last_read_at) == ("cursor", False, NOW)
+    assert {"application_progress_json", "source_outcomes_json"} & set(fetched) == set()
+
+
 def test_failed_and_diagnostic_reads_never_commit_progress(store):
     w = writer(store)
     saved = w.persist_observations(batch(success=False))
