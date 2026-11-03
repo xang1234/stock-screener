@@ -1325,6 +1325,53 @@ def test_failure_before_dispatch_is_left_for_claim_expiry_not_completion_unknown
             (1, 0), 1, 1, "succeeded", ["reconciled"])
 
 
+def test_a_client_that_fails_to_build_is_left_for_claim_expiry_not_completion_unknown(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as module
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+
+    llm = FakeLLM()
+    broken = [True]
+
+    def build(**_kwargs):
+        if broken:
+            raise RuntimeError("client construction failed")
+        return llm
+
+    monkeypatch.setattr(module, "LLMService", build)
+    work_id = enqueue(backlog, processor(backlog, None), post(1))
+
+    first = asyncio.run(processor(backlog, None).execute(NOW, 1))
+    broken.clear()
+    later = asyncio.run(processor(backlog, None).execute(NOW + timedelta(minutes=11), 1))
+
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        attempts = [attempt.state for attempt in db.scalars(select(SocialLLMAttempt))]
+        assert ((first.deferred, first.failed), later.succeeded, llm.calls, work.state, attempts) == (
+            (1, 0), 1, 1, "succeeded", ["reconciled"])
+
+
+def test_a_client_missing_its_key_fails_the_post_without_reserving(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as module
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+    from app.services.llm.llm_service import LLMPreDispatchError
+
+    def build(**_kwargs):
+        raise LLMPreDispatchError("metered_provider_configuration_error")
+
+    monkeypatch.setattr(module, "LLMService", build)
+    worker = processor(backlog, None)
+    work_id = enqueue(backlog, worker, post(1))
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        attempts = [attempt.state for attempt in db.scalars(select(SocialLLMAttempt))]
+        assert (result.failed, attempts, work.state, work.error_code) == (
+            1, [], "failed_terminal", "llm_configuration_error")
+
+
 @pytest.mark.parametrize("admin_requested", [False, True])
 def test_queued_post_aging_out_before_dispatch_releases_only_unused_reservation(backlog, monkeypatch, admin_requested):
     from app.services import social_signal_backlog_service as process_backlog
