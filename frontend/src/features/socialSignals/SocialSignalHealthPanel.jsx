@@ -345,7 +345,7 @@ const attemptReasonCopy = {
 };
 
 const failureCopy = {
-  analysis_failed: 'Collected posts were not published because analysis failed. Retry failed work under Saved analysis.',
+  analysis_failed: 'No collected post in the scoring window could be scored, so nothing was published. Later runs retry queued posts. Retry failed work under Saved analysis.',
   publication_failed: 'Analysis finished, but publishing failed. The next scheduled run collects again.',
   generation_superseded: 'A newer run published first, so this one was closed.',
   social_runtime_changed: 'The Social runtime changed during collection, so this run was closed.',
@@ -382,6 +382,10 @@ function LatestAttempt({ attempt }) {
           );
         })}
       </Stack>
+      {attempt.status === 'published' && attempt.unanalyzed_posts > 0 ? <Typography variant="body2" sx={{ mt: 1 }}>
+        {`${attempt.unanalyzed_posts} collected ${attempt.unanalyzed_posts === 1 ? 'post was' : 'posts were'} not analysed `
+          + "and left out of this run's scores. Later runs retry the ones still queued."}
+      </Typography> : null}
       {attempt.status === 'collection_failed' ? <Typography variant="body2" sx={{ mt: 1 }}>
         Analysis did not start because no enabled list collected successfully.
       </Typography> : null}

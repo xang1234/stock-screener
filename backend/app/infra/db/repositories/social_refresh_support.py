@@ -260,10 +260,12 @@ class SocialScoringEvidenceReader:
             work_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(
                 SocialRunWork.run_id == run_id
             ).order_by(SocialRunWork.work_id)))
+            analysed = set()
             for work_id in work_ids:
                 work = db.get(SocialExtractionWork, work_id)
                 if work is None or work.state != "succeeded" or not isinstance(work.result_json, dict):
                     continue
+                analysed.add(work.content_item_id)
                 post_id = by_content.get(work.content_item_id)
                 if post_id is None:
                     continue
@@ -275,9 +277,12 @@ class SocialScoringEvidenceReader:
                 claims.setdefault(post_id, []).extend(work.result_json.get("claims", ()))
                 revision_claims[(post_id, work.input_hash)] = work.result_json.get("claims", ())
 
+            # Another list can hold an older revision of a gap post; with no result for
+            # any revision, it stays out too.
+            unanalysed = {content_id for content_id, _ in unavailable} - analysed
             for (post_id, source_id), post in canonical.items():
                 revision = self._content_revision(post)
-                if (content_ids[post_id], revision) in unavailable:
+                if (content_ids[post_id], revision) in unavailable or content_ids[post_id] in unanalysed:
                     # Its earlier mentions are unknown, so acceleration has no full baseline.
                     history_complete = False
                     continue

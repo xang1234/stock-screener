@@ -329,14 +329,15 @@ retaining previously observed posts so engagement observations can be refreshed.
 
 **Approved warming-up publication:** Separate successful participation and
 processing from historical coverage. At least one enabled source must return a
-valid, successful bounded read, and collected posts included in the run must
-finish analysis before publication. Failed sources publish as coverage gaps
-(their error code joins each candidate's coverage reasons and their history
-counts as incomplete). A generation where every source failed, or unfinished
-analysis, still blocks replacement of the previous snapshot. Successfully processed bounded reads may
-publish with explicit per-source/window warming-up or limited-history metadata;
-they must not claim complete historical coverage. This applies both at startup
-and when an additional list joins.
+valid, successful bounded read before publication. Failed sources publish as
+coverage gaps (their error code joins each candidate's coverage reasons and
+their history counts as incomplete). Collected posts the run could not analyse
+are coverage gaps too, as the budget-deferral workflow describes. A generation
+where every source failed, or whose analysis gaps leave no post in the window
+that scoring accepts, still blocks replacement of the previous snapshot.
+Successfully processed bounded reads may publish with explicit per-source/window
+warming-up or limited-history metadata; they must not claim complete historical
+coverage. This applies both at startup and when an additional list joins.
 
 Record observed time bounds, known gaps, and limit/coverage reasons without
 inferring continuity from the oldest post or assuming a short response proves
@@ -460,8 +461,9 @@ Persist extraction results with actual model/provider and prompt/schema versions
 plus input identity, allowing reuse for unchanged content. Engagement-only updates
 must not trigger re-extraction. Missing configuration, quota exhaustion, invalid
 output, or provider failure leaves affected extraction pending/failed; it cannot
-silently mean no themes or successful qualification. Incomplete processing keeps
-the previous published Social snapshot under the existing publication policy.
+silently mean no themes or successful qualification. A run publishes with those
+posts as coverage gaps and keeps their text out of the scores, as the
+budget-deferral workflow describes.
 
 Setup and Operations must disclose the separate LLM configuration, that post text
 is sent to the configured provider (which may be external), possible usage charges,
@@ -481,14 +483,18 @@ hiding the excess or automatically increasing the allowance.
 
 **Approved budget-deferral workflow:** Keep collected
 posts and unfinished extraction in a durable database backlog, resume bounded
-batches after the daily reset, and reuse completed results. Six-hour X collection
-continues under its separate limits; deferred LLM processing does not re-read X.
-Keep the previous complete Social snapshot visible, marking it stale when due;
-a fresh installation shows processing pending until a complete run can publish.
-Operations shows budget usage, waiting-post count, oldest pending age, and next
-reset. Deferred batches do not imply a provider-specific Batch API or a discount.
-Sustained arrivals above daily processing capacity cause growing delay; expose
-that delay rather than silently dropping evidence or publishing incomplete results.
+batches in later runs and after the daily reset, and reuse completed results.
+Six-hour X collection continues under its separate limits; deferred LLM
+processing does not re-read X. A run publishes with the posts it could not
+analyse as coverage gaps (#711). Their text stays out of the scores, mention
+history is marked incomplete, and the backlog keeps the posts for later runs.
+If the gaps leave no post in the window that scoring accepts, the run does not
+publish, so the previous Social snapshot stays visible and is marked stale when
+due. Operations shows budget usage, waiting-post count, oldest pending age, next
+reset, and the latest run's unanalysed posts. Deferred batches do not imply a
+provider-specific Batch API or a discount. Sustained arrivals above daily
+processing capacity cause growing delay; expose that delay and the gaps rather
+than silently dropping evidence.
 
 **Approved backlog ordering and aging:** Process the oldest waiting posts still
 within the rolling fourteen-day signal window first, using post publication time
@@ -973,9 +979,10 @@ that all X posts were available.
 - Official API 429 responses respect the returned reset time and do not switch
   provider.
 - Invalid provider JSON fails that source with a stable schema reason.
-- Missing/failed source participation or unfinished processing cannot replace a
-  published snapshot; successful all-source processing with limited history can
-  publish with explicit warming-up/limited-history labels.
+- Missing/failed source participation, or analysis gaps that leave no post in
+  the window that scoring accepts, cannot replace a published snapshot;
+  successful all-source processing with limited history can publish with
+  explicit warming-up/limited-history labels.
 - A published snapshot older than seven hours is `stale`, while remaining
   readable as last-known-good data.
 - Logs record run IDs, provider names, source IDs, counts, durations, and stable

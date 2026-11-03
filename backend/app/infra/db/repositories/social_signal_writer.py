@@ -291,8 +291,12 @@ class SocialSignalWriter:
                     (current if post.created_at >= as_of - timedelta(days=14) else older).add(identity)
         return current, older, after
 
-    def select_current_inputs(self, run_id):
-        """Classify work on a running generation, preserving aged unfinished audit."""
+    def select_current_inputs(self, run_id, *, unfinished_as_gaps=False):
+        """Classify work on a running generation, preserving aged unfinished audit.
+
+        After the run's analysis pass, unfinished_as_gaps makes work it left
+        unfinished a coverage gap. The work stays queued for later runs.
+        """
         with self.session_factory.begin() as db:
             _lock_registry(db)
             run = db.get(SocialSignalRun, run_id)
@@ -319,18 +323,30 @@ class SocialSignalWriter:
                     raise ValueError("pinned_input_mismatch")
                 close_unless_revalidates(work)
                 linked.append((link, work, (work.content_item_id, work.input_hash)))
-            analyzable = {identity for _, work, identity in linked if work.state != "failed_terminal"}
+            window_start = utc(run.created_at) - timedelta(days=14)
+
+            def aged(work):
+                return datetime.fromisoformat(work.input_snapshot_json["created_at"]) < window_start
+
+            def gap(work):
+                if work.state == "failed_terminal":
+                    return True
+                # The backlog dates its window at dispatch, so a post inside this run's window can age out first.
+                return unfinished_as_gaps and work.state != "succeeded" and not (
+                    work.state == "outside_window" and aged(work))
+
+            analyzable = {identity for _, work, identity in linked if not gap(work)}
             unavailable -= analyzable
             for link, work, identity in linked:
-                if work.state == "failed_terminal" and identity not in older | after:
-                    # A post whose analysis cannot complete is a coverage gap, like a
+                if gap(work) and identity not in older | after:
+                    # A post this generation has no analysis for is a coverage gap, like a
                     # failed list read; it must not hold back the rest of the generation.
                     if identity not in analyzable:
                         unavailable.add(identity)
                     audit.add(work.id)
                     db.delete(link)
                     continue
-                if work.state == "outside_window" and identity not in current:
+                if work.state == "outside_window" and aged(work):
                     # Retained work past the analysis window is never claimed again, and
                     # its post is older than every scoring window.
                     audit.add(work.id)
