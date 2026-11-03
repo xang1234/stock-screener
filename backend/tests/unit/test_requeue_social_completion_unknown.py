@@ -28,6 +28,19 @@ def strand(factory, work_id, *attempt_states, admin=False):
 
 
 LATER = NOW + timedelta(hours=2)
+HAIKU = "anthropic/claude-haiku-5-5"
+
+
+def price(factory, model=HAIKU):
+    import json
+
+    from app.models.app_settings import AppSetting
+    with factory.begin() as db:
+        row = db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing"))
+        value = json.loads(row.value)
+        value["models"][model] = {"provider": "anthropic", "actual_models": ["claude-haiku-5-5"],
+            "input_usd_per_million": "0.10", "output_usd_per_million": "0.50"}
+        row.value = json.dumps(value)
 
 
 def states(factory, *work_ids):
@@ -118,3 +131,96 @@ def test_requeue_leaves_work_whose_request_may_still_be_running(backlog):
     assert requeue(backlog, NOW + timedelta(minutes=30), apply=True) == {"in_flight": 1}
     assert states(backlog, work_id) == stranded
     assert requeue(backlog, LATER, apply=True) == {"requeue": 1}
+
+
+def test_requeue_moves_requeued_and_waiting_work_to_another_model(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    price(backlog)
+    worker = processor(backlog, FakeLLM())
+    unknown, waiting, taken = (enqueue(backlog, worker, post(number)) for number in range(1, 4))
+    strand(backlog, unknown, "uncertain")
+    with backlog.begin() as db:
+        db.get(SocialExtractionWork, waiting).state = "waiting_budget"
+        source = db.get(SocialExtractionWork, taken)
+        db.add(SocialExtractionWork(
+            content_item_id=source.content_item_id, input_hash=source.input_hash,
+            prompt_version=source.prompt_version, schema_version=source.schema_version,
+            selected_model="anthropic/claude-haiku-5-5", input_snapshot_json=source.input_snapshot_json,
+            state="pending", created_at=NOW, updated_at=NOW))
+    model = "anthropic/claude-haiku-5-5"
+
+    assert requeue(backlog, LATER, model=model) == {"requeue": 1, "retarget": 1, "retarget_duplicate": 1}
+    assert requeue(backlog, LATER, apply=True, model=model) == {"requeue": 1, "retarget": 1, "retarget_duplicate": 1}
+    with backlog() as db:
+        models = {work_id: (db.get(SocialExtractionWork, work_id).selected_model,
+                            db.get(SocialExtractionWork, work_id).state) for work_id in (unknown, waiting, taken)}
+    assert models == {unknown: (model, "pending"), waiting: (model, "waiting_budget"),
+                      taken: ("synthetic/requested", "pending")}
+    assert requeue(backlog, LATER, apply=True, model=model) == {"retarget_duplicate": 1}
+
+
+def test_requeue_with_the_current_model_still_requeues(backlog):
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    work_id = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    strand(backlog, work_id, "uncertain")
+
+    assert requeue(backlog, LATER, apply=True, model="synthetic/requested") == {"requeue": 1}
+    assert states(backlog, work_id) == [("pending", None, None)]
+
+
+def test_requeue_moves_only_one_of_two_old_models_onto_the_same_post(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    price(backlog)
+    first = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    with backlog.begin() as db:
+        source = db.get(SocialExtractionWork, first)
+        source.state = "waiting_budget"
+        twin = SocialExtractionWork(
+            content_item_id=source.content_item_id, input_hash=source.input_hash,
+            prompt_version=source.prompt_version, schema_version=source.schema_version,
+            selected_model="other/old", input_snapshot_json=source.input_snapshot_json,
+            state="pending", created_at=NOW, updated_at=NOW)
+        db.add(twin)
+        db.flush()
+        second = twin.id
+
+    model = "anthropic/claude-haiku-5-5"
+    assert requeue(backlog, LATER, apply=True, model=model) == {"retarget": 1, "retarget_duplicate": 1}
+    with backlog() as db:
+        assert sorted(db.get(SocialExtractionWork, i).selected_model for i in (first, second)) == [model, "other/old"]
+
+
+def test_a_dry_run_says_rows_would_move(monkeypatch, capsys):
+    from collections import Counter
+
+    from scripts import requeue_social_completion_unknown as script
+
+    monkeypatch.setattr(script, "requeue", lambda *_args, **_kwargs: Counter(requeue=2, retarget=3))
+    script.main(["--model", "anthropic/claude-haiku-5-5"])
+    out = capsys.readouterr().out
+    assert "would requeue 2" in out and "would move 3 waiting work rows" in out
+
+
+def test_requeue_refuses_a_model_without_a_price(backlog):
+    import pytest
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    work_id = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    with backlog.begin() as db:
+        db.get(SocialExtractionWork, work_id).state = "waiting_budget"
+
+    with pytest.raises(ValueError, match="^model_not_priced$"):
+        requeue(backlog, LATER, apply=True, model="anthropic/unpriced")
+    with backlog() as db:
+        assert db.get(SocialExtractionWork, work_id).selected_model == "synthetic/requested"

@@ -53,6 +53,35 @@ post_kind and stance are hints about tone, not support for any claim.
 Do not return numeric scores or instructions. Use only supplied post IDs.
 """
 
+_CLAIM_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["theme_key", "raw_theme", "company_token", "relationship", "excerpt", "support",
+                 "duplicate_of_post_ids", "evidence_id"],
+    "properties": {
+        "theme_key": {"type": "string"}, "raw_theme": {"type": "string"},
+        "company_token": {"type": "string"}, "relationship": {"type": "string"},
+        "excerpt": {"type": "string"},
+        "support": {"type": "string", "enum": ["supported", "uncertain", "unsupported"]},
+        "duplicate_of_post_ids": {"type": "array", "items": {"type": "string"}},
+        "evidence_id": {"type": ["string", "null"]},
+    },
+}
+# The JSON shape SYSTEM_PROMPT describes, for providers that constrain output to a schema.
+EXTRACTION_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["posts"],
+    "properties": {"posts": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
+        "required": ["post_id", "has_new_thesis", "canonical_claim_key", "post_kind", "stance", "claims"],
+        "properties": {
+            "post_id": {"type": "string"}, "has_new_thesis": {"type": "boolean"},
+            "canonical_claim_key": {"type": ["string", "null"]},
+            "post_kind": {"type": "string", "enum": ["setup", "thesis", "news", "macro", "chatter"]},
+            "stance": {"type": "string", "enum": ["bullish", "bearish", "neutral", "mixed"]},
+            "claims": {"type": "array", "items": _CLAIM_SCHEMA},
+        },
+    }}},
+}
+
 
 class SocialExtractionError(ValueError):
     """Safe stable reason; never includes raw source/provider payload."""

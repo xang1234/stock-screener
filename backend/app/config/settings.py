@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     minimax_api_base: str = "https://api.minimax.io/v1"  # Minimax OpenAI-compatible base URL
     opencode_go_api_key: str = ""  # OpenCode Go OpenAI-compatible endpoint
     opencode_go_api_base: str = "https://opencode.ai/zen/go/v1"
+    anthropic_api_key: str = ""  # Anthropic Messages API, for anthropic/* social extraction models
     ollama_api_key: str = ""  # Ollama Cloud API key (empty for local Ollama)
     ollama_api_base: str = "https://ollama.com"  # Ollama host; local example: http://ollama:11434
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)

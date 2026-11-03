@@ -1514,3 +1514,40 @@ def test_a_result_that_fails_revalidation_is_saved_as_failed(backlog, monkeypatc
         states = [(db.get(SocialExtractionWork, work_id).state,
                    db.get(SocialExtractionWork, work_id).error_code) for work_id in work_ids]
     assert states == [("succeeded", None), ("failed_terminal", "invalid_saved_result"), ("succeeded", None)]
+
+
+def test_an_anthropic_model_is_sent_through_the_anthropic_client(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as module
+
+    class FakeAnthropic(FakeLLM):
+        made = []
+
+        def __init__(self):
+            super().__init__(model="claude-haiku-5-5")
+            FakeAnthropic.made.append(self)
+
+        async def completion(self, **kwargs):
+            response = await super().completion(**kwargs)
+            response._hidden_params = {"custom_llm_provider": "anthropic"}
+            return response
+
+    monkeypatch.setattr(module, "AnthropicMeteredLLM", FakeAnthropic)
+    with backlog.begin() as db:
+        row = db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing"))
+        value = json.loads(row.value)
+        value["models"]["anthropic/claude-haiku-5-5"] = {
+            "provider": "anthropic", "actual_models": ["claude-haiku-5-5"],
+            "input_usd_per_million": "0.10", "output_usd_per_million": "0.50"}
+        row.value = json.dumps(value)
+    worker = processor(backlog, None)
+    with backlog.begin() as db:
+        item = ContentItem(source_type="twitter", external_id="1", url="https://x.com/a/status/1",
+            content="$AAA supplies cooling equipment", published_at=NOW - timedelta(days=1))
+        db.add(item)
+        db.flush()
+        item_id = item.id
+    worker.enqueue(item_id, post(1), selected_model="anthropic/claude-haiku-5-5", now=NOW)
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    assert (result.succeeded, len(FakeAnthropic.made), FakeAnthropic.made[0].calls) == (1, 1, 1)
