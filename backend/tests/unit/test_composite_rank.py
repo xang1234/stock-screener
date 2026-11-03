@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import importlib
-
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Query, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.domain.common.query import SortOrder, SortSpec
 from app.domain.scanning.filter_expression_model import QuerySpec
+from app.infra.db.composite_rank import composite_rank_order
+from app.infra.db.models.feature_store import StockFeatureDaily
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
+from app.infra.query import feature_store_query, scan_result_query
+from app.infra.query.feature_store_query import DetailsLevel
+from app.infra.query.sql_filter_compiler import apply_sql_sort
 from app.models.industry import IBDGroupPeerCache
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock import StockFundamental
@@ -85,9 +89,10 @@ def test_peers_rank_fully_scored_rows_first(session):
     assert [peer.symbol for peer in sector] == RANKED
 
 
-@pytest.mark.parametrize("module_name", ["app.services.scan_execution", "app.tasks.scan_tasks"])
-def test_peer_cache_top_symbol_is_the_best_fully_scored_row(session, module_name):
-    importlib.import_module(module_name).compute_industry_peer_metrics(session, "scan-1")
+def test_peer_cache_top_symbol_is_the_best_fully_scored_row(session):
+    from app.services.scan_execution import compute_industry_peer_metrics
+
+    compute_industry_peer_metrics(session, "scan-1")
 
     cache = session.query(IBDGroupPeerCache).one()
     assert (cache.top_symbol, cache.top_score) == ("BEST", 65.0)
@@ -112,3 +117,48 @@ def test_chart_prewarm_warms_the_top_fully_scored_rows(session, monkeypatch):
 
     assert checked == ["BEST", "CANSLIM"]
     assert result["already_cached"] == 2
+
+
+def _tier(table: str) -> str:
+    return (
+        f"CASE WHEN ({table}.minervini_score IS NOT NULL OR {table}.canslim_score IS NOT NULL) "
+        "THEN 0 ELSE 1 END"
+    )
+
+
+def _postgres_order_by(query: Query) -> str:
+    """SQLite already sorts NULLs last on DESC; only PostgreSQL needs NULLS LAST."""
+    compiled = query.statement.compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+    )
+    return " ".join(str(compiled).split()).partition(" ORDER BY ")[2]
+
+
+@pytest.mark.parametrize(
+    ("model", "table"),
+    [(ScanResult, "scan_results"), (StockFeatureDaily, "stock_feature_daily")],
+)
+def test_composite_rank_order_puts_nulls_last_on_postgres(model, table):
+    query = Query(model).order_by(*composite_rank_order(model))
+
+    assert _postgres_order_by(query) == f"{_tier(table)}, {table}.composite_score DESC NULLS LAST"
+
+
+@pytest.mark.parametrize(
+    ("model", "resolver", "tier"),
+    [
+        (ScanResult, scan_result_query._FILTER_FIELD_RESOLVER, True),
+        (StockFeatureDaily, feature_store_query._resolver(DetailsLevel.TYPED), True),
+        # Older runs leave the typed score columns NULL, so their sort has no tier.
+        (StockFeatureDaily, feature_store_query._resolver(DetailsLevel.TABLE), False),
+        (StockFeatureDaily, feature_store_query._resolver(DetailsLevel.LEGACY), False),
+    ],
+)
+def test_descending_composite_sort_puts_nulls_last_on_postgres(model, resolver, tier):
+    table = model.__tablename__
+    query = apply_sql_sort(Query(model), SortSpec(field="composite_score"), resolver)
+
+    leading = f"{_tier(table)}, " if tier else ""
+    assert _postgres_order_by(query) == (
+        f"{leading}{table}.composite_score DESC NULLS LAST, {table}.symbol ASC"
+    )

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Mapping
 
-from sqlalchemy import and_, asc, case, desc, false, func, or_, true
+from sqlalchemy import and_, asc, desc, false, func, or_, true
 from sqlalchemy.orm import Query
 
 from app.domain.common.query import (
@@ -44,6 +44,8 @@ class SqlFieldBinding:
     numeric_sort: bool = False
     # Sort NULLs last as JSON-path bindings do; for columns promoted from JSON.
     nulls_last: bool = False
+    # ORDER BY term placed ahead of this field on a descending sort.
+    desc_leading: Any = None
 
     def __post_init__(self) -> None:
         if (self.column is None) == (self.json_path is None):
@@ -238,26 +240,6 @@ def listing_aware_volume_predicate(
     return or_(listing_match, regular_match)
 
 
-def core_scored_first(minervini_score, canslim_score):
-    """0 for rows Minervini or CANSLIM scored, 1 for IPO-only and unscored rows.
-
-    A young IPO's composite is its IPO score plus an uplift, so it can top
-    fully scored names; best-first composite rankings order on this first.
-    """
-    return case(
-        (or_(minervini_score.is_not(None), canslim_score.is_not(None)), 0),
-        else_=1,
-    )
-
-
-def composite_rank_order(model) -> tuple:
-    """Best-first composite ORDER BY clauses for scan-result or feature rows."""
-    return (
-        core_scored_first(model.minervini_score, model.canslim_score),
-        model.composite_score.desc().nullslast(),
-    )
-
-
 def apply_sql_sort(
     query: Query,
     sort: SortSpec,
@@ -289,13 +271,8 @@ def apply_sql_sort(
         ordered = ordered.nullslast()
     if sort.field == "symbol":
         return query.order_by(ordered)
-    if sort.field == "composite_score" and sort.order == SortOrder.DESC:
-        scores = [resolver.bindings.get(name) for name in ("minervini_score", "canslim_score")]
-        # Feature runs older than the typed score columns bind them to JSON,
-        # which PostgreSQL would parse per row; those rank by composite alone.
-        if all(score is not None and score.column is not None for score in scores):
-            tier = core_scored_first(*(score.column for score in scores))
-            return query.order_by(tier, ordered, asc(resolver.symbol_column))
+    if binding.desc_leading is not None and sort.order == SortOrder.DESC:
+        return query.order_by(binding.desc_leading, ordered, asc(resolver.symbol_column))
     return query.order_by(ordered, asc(resolver.symbol_column))
 
 

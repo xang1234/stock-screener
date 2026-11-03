@@ -13,8 +13,10 @@ from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     filter_spec_to_expression,
 )
+from app.infra.db.composite_rank import core_scored_first
 from app.infra.db.portability import lean_count
 from app.infra.query.sql_filter_compiler import (
+    SqlFieldBinding,
     SqlFilterFieldResolver,
     apply_sql_sort,
     column_bindings,
@@ -31,7 +33,6 @@ from app.models.stock_universe import StockUniverse
 # One adapter-owned registry maps each logical field to its physical source.
 _FIELD_BINDINGS = column_bindings({
     "symbol": ScanResult.symbol,
-    "composite_score": ScanResult.composite_score,
     "minervini_score": ScanResult.minervini_score,
     "canslim_score": ScanResult.canslim_score,
     "ipo_score": ScanResult.ipo_score,
@@ -137,7 +138,12 @@ _FIELD_BINDINGS = column_bindings({
     # Setup Engine (string)
     "se_pattern_primary": ("setup_engine", "pattern_primary"),
     "se_pivot_type": ("setup_engine", "pivot_type"),
-})
+}) | {
+    "composite_score": SqlFieldBinding(
+        column=ScanResult.composite_score,
+        desc_leading=core_scored_first(ScanResult),
+    ),
+}
 
 _FILTER_FIELD_RESOLVER = SqlFilterFieldResolver(
     source_name="scan-result",

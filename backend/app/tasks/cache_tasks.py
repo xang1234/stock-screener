@@ -1596,7 +1596,7 @@ def prewarm_chart_cache_for_scan(self, scan_id: str, top_n: int = 50):
     Returns:
         Dict with warming statistics
     """
-    from ..infra.query.sql_filter_compiler import composite_rank_order
+    from ..infra.db.composite_rank import composite_rank_order
     from ..models.scan_result import ScanResult
     from ..wiring.bootstrap import get_price_cache
 

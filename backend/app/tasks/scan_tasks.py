@@ -13,9 +13,10 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from ..celery_app import celery_app
-from ..database import SessionLocal, is_corruption_error, safe_rollback
+from ..database import SessionLocal
 from ..models.scan_result import SCAN_TRIGGER_SOURCE_AUTO, Scan, ScanResult
 from ..config import settings
+from ..services.scan_execution import compute_industry_peer_metrics
 from ..utils.parallelism import resolve_scan_compute_processes
 from .workload_coordination import serialized_market_workload
 
@@ -31,77 +32,6 @@ def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> No
     from ..services.scan_execution import cleanup_old_scans as _cleanup_old_scans
 
     _cleanup_old_scans(db, universe_key, keep_count=keep_count)
-
-
-def compute_industry_peer_metrics(db: Session, scan_id: str):
-    """
-    Compute aggregate metrics for each industry group in scan.
-    Called after scan completion.
-
-    Args:
-        db: Database session
-        scan_id: Scan ID
-    """
-    from ..infra.query.sql_filter_compiler import composite_rank_order
-    from ..models.industry import IBDGroupPeerCache
-    from sqlalchemy import func
-
-    try:
-        logger.info(f"Computing industry peer metrics for scan {scan_id}...")
-
-        # Query all industry groups in this scan
-        groups = db.query(
-            ScanResult.ibd_industry_group,
-            func.count(ScanResult.symbol).label('total_stocks'),
-            func.avg(ScanResult.rs_rating_1m).label('avg_rs_1m'),
-            func.avg(ScanResult.rs_rating_3m).label('avg_rs_3m'),
-            func.avg(ScanResult.rs_rating_12m).label('avg_rs_12m'),
-            func.avg(ScanResult.minervini_score).label('avg_minervini_score'),
-            func.avg(ScanResult.composite_score).label('avg_composite_score'),
-        ).filter(
-            ScanResult.scan_id == scan_id,
-            ScanResult.ibd_industry_group.isnot(None)
-        ).group_by(
-            ScanResult.ibd_industry_group
-        ).all()
-
-        # Save cache records
-        for group in groups:
-            # Find top performer in this group
-            top = db.query(ScanResult).filter(
-                ScanResult.scan_id == scan_id,
-                ScanResult.ibd_industry_group == group.ibd_industry_group
-            ).order_by(
-                *composite_rank_order(ScanResult)
-            ).first()
-
-            cache = IBDGroupPeerCache(
-                scan_id=scan_id,
-                industry_group=group.ibd_industry_group,
-                total_stocks=group.total_stocks,
-                avg_rs_1m=group.avg_rs_1m,
-                avg_rs_3m=group.avg_rs_3m,
-                avg_rs_12m=group.avg_rs_12m,
-                avg_minervini_score=group.avg_minervini_score,
-                avg_composite_score=group.avg_composite_score,
-                top_symbol=top.symbol if top else None,
-                top_score=top.composite_score if top else None
-            )
-            db.add(cache)
-
-        db.commit()
-        logger.info(f"Computed peer metrics for {len(groups)} industry groups in scan {scan_id}")
-
-    except Exception as e:
-        if is_corruption_error(e):
-            logger.critical(
-                "DATABASE CORRUPTION in compute_industry_peer_metrics: %s — inspect the "
-                "database and restore from backup or rerun migrations as appropriate",
-                e,
-            )
-        else:
-            logger.error("Error computing peer metrics: %s", e, exc_info=True)
-        safe_rollback(db)
 
 
 def _log_setup_engine_distribution(db: Session, scan_id: str) -> None:

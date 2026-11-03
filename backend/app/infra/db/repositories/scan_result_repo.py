@@ -15,12 +15,12 @@ from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository, ScanResultRsAudit
+from app.infra.db.composite_rank import composite_rank_order
 from app.infra.query.scan_result_query import (
     apply_filter_expression,
     apply_sort_all,
     apply_sort_and_paginate,
 )
-from app.infra.query.sql_filter_compiler import composite_rank_order
 from app.infra.serialization import (
     coerce_bool_or_false,
     convert_numpy_types,

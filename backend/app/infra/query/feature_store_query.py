@@ -16,6 +16,7 @@ from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     filter_spec_to_expression,
 )
+from app.infra.db.composite_rank import core_scored_first
 from app.infra.db.models.feature_store import (
     HOT_NUMERIC_FIELDS,
     HOT_TEXT_FIELDS,
@@ -205,6 +206,11 @@ _TYPED_RESOLVER = replace(
             and len(binding.json_path) == 1
             and binding.json_path[0] in (*HOT_NUMERIC_FIELDS, *HOT_TEXT_FIELDS)
         },
+        # The tier reads the typed score columns, which only TYPED runs fill.
+        "composite_score": replace(
+            _FIELD_BINDINGS["composite_score"],
+            desc_leading=core_scored_first(StockFeatureDaily),
+        ),
     },
 )
 _RESOLVERS = (_FILTER_FIELD_RESOLVER, _TABLE_DETAILS_RESOLVER, _TYPED_RESOLVER)

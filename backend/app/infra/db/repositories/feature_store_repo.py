@@ -28,6 +28,7 @@ from app.domain.feature_store.ports import FeatureStoreRepository
 from app.domain.feature_store.quality import DQInputs
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
+from app.infra.db.composite_rank import composite_rank_order
 from app.infra.db.models.feature_store import (
     FeatureRun,
     FeatureRunPointer,
@@ -44,7 +45,6 @@ from app.infra.query.feature_store_query import (
     apply_sort_all,
     apply_sort_and_paginate,
 )
-from app.infra.query.sql_filter_compiler import composite_rank_order
 from app.infra.serialization import (
     coerce_bool_or_false,
     convert_numpy_types,

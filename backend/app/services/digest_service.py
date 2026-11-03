@@ -12,8 +12,9 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import FeatureRow
+from app.domain.scanning.scoring import is_core_scored
+from app.infra.db.composite_rank import composite_rank_order
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
-from app.infra.query.sql_filter_compiler import composite_rank_order
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMetrics
@@ -362,8 +363,8 @@ class DigestService:
                 return (-(eps_growth + sales_growth), -score, row.symbol)
             if leader_sort == "rs_then_score":
                 return (-rs_rating, -score, row.symbol)
-            unscored = row.minervini_score is None and row.canslim_score is None
-            return (unscored, -score, -rs_rating, row.symbol)
+            core_scored = is_core_scored(details.get("minervini_score"), details.get("canslim_score"))
+            return (not core_scored, -score, -rs_rating, row.symbol)
 
         leaders: list[DigestLeaderItem] = []
         for row in sorted(candidate_rows, key=_leader_sort_key)[: profile_detail.digest.leader_limit]:
