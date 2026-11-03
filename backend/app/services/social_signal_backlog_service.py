@@ -444,7 +444,7 @@ class ProcessSocialBacklog:
                     row.schema_version, dict(row.input_snapshot_json)))
         return claimed, outside, terminal
 
-    def _finish(self, work_id, token, state, error=None, result=None):
+    def _finish(self, work_id, token, state, error=None, result=None, at=None):
         with social_analysis_transaction(self.session_factory) as db:
             row = db.get(SocialExtractionWork, work_id)
             late_completion = row.state == "failed_terminal" and row.error_code == "completion_unknown"
@@ -452,7 +452,7 @@ class ProcessSocialBacklog:
                 return None
             row.state, row.error_code = state, error
             row.claim_token = row.claim_expires_at = None
-            row.updated_at = datetime.now(timezone.utc)
+            row.updated_at = at or datetime.now(timezone.utc)
             if result is not None:
                 row.result_json = asdict(result)
                 row.actual_provider, row.actual_model = result.provider, result.model
@@ -461,16 +461,20 @@ class ProcessSocialBacklog:
                 close_unless_revalidates(row)
             return row.state
 
-    def _finish_many(self, claims, state, error=None):
-        return sum(self._finish(work_id, token, state, error) is not None for work_id, token in claims)
+    def _finish_many(self, claims, state, error=None, at=None):
+        return sum(self._finish(work_id, token, state, error, at=at) is not None for work_id, token in claims)
 
-    def _settle(self, claims, error):
-        """Close work this run returned to pending, unless another claim has taken it since."""
+    def _settle(self, claims, error, released_at=None):
+        """Close work this run returned to pending, unless another claim has taken it since.
+
+        released_at is when this run released it; a later claim or release moves updated_at off it.
+        """
         settled = 0
         with social_analysis_transaction(self.session_factory) as db:
             for work_id, _ in claims:
                 row = db.get(SocialExtractionWork, work_id)
-                if row.state in {"pending", "waiting_budget"} and row.claim_token is None:
+                if (row.state in {"pending", "waiting_budget"} and row.claim_token is None
+                        and (released_at is None or _utc(row.updated_at) == released_at)):
                     row.state, row.error_code = "failed_terminal", error
                     row.updated_at = datetime.now(timezone.utc)
                     settled += 1
@@ -545,11 +549,13 @@ class ProcessSocialBacklog:
             if len(items) > 1:
                 middle = len(items) // 2
                 queue += ((items[:middle], config, outcome, since), (items[middle:], config, outcome, since))
-            elif self._finish_many(claims, "pending", outcome):
-                leaves.append((claims, outcome, evidence, since[evidence]))
-        for claims, code, evidence, mark in leaves:
+            else:
+                released_at = datetime.now(timezone.utc)
+                if self._finish_many(claims, "pending", outcome, at=released_at):
+                    leaves.append((claims, outcome, evidence, since[evidence], released_at))
+        for claims, code, evidence, mark, released_at in leaves:
             if getattr(ledger, evidence) > mark:
-                failed += self._settle(claims, code)
+                failed += self._settle(claims, code, released_at)
             else:
                 deferred += len(claims)
         if ledger.refusal_status and (ledger.stopped or not ledger.answered):

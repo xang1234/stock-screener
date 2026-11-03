@@ -1037,6 +1037,27 @@ def test_a_refused_post_is_isolated_without_later_traffic(backlog):
     assert refusal_outcome(backlog, work_ids[1:])[0] == {("succeeded", None)}
 
 
+def test_settling_skips_a_post_another_run_claimed_and_released_since(backlog, monkeypatch):
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    worker = ProcessSocialBacklog(backlog, llm=PoisonLLM("1"), batch_size=20)
+    work_ids = [enqueue(backlog, worker, post(number)) for number in range(1, 4)]
+    settle = ProcessSocialBacklog._settle
+
+    def another_run_first(self, claims, *args):
+        other = ProcessSocialBacklog(backlog, llm=FakeLLM(), batch_size=20)
+        (claimed, *_), _, _ = other._claim(NOW, 1, (), (work_ids[0],))
+        other._finish(claimed[0], claimed[1], "pending", "claim_or_budget_period_expired")
+        return settle(self, claims, *args)
+
+    monkeypatch.setattr(ProcessSocialBacklog, "_settle", another_run_first)
+    result = asyncio.run(worker.execute(NOW, 3))
+
+    assert (result.succeeded, result.failed) == (2, 0)
+    assert refusal_outcome(backlog, work_ids[:1])[0] == {("pending", "claim_or_budget_period_expired")}
+
+
 def test_refused_posts_in_adjacent_batches_are_each_isolated_in_one_run(backlog):
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
 
