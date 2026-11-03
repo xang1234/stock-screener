@@ -146,7 +146,7 @@ def _social_result(processing_status, *reason_codes):
         # Every list read failed: a failure, not a skip.
         (_social_result("blocked", "source_participation_failed"),
          ("failed", None, "Social source collection failed (source_participation_failed)")),
-        # Analysis ended unsuccessfully (RefreshSocialSignals fail_analysis).
+        # Analysis ended unsuccessfully (RefreshSocialSignals fail_run).
         (_social_result("failed", "analysis_failed"),
          ("failed", None, "Social Signals analysis failed (analysis_failed)")),
         # Collected; analysis resumes later on its own.

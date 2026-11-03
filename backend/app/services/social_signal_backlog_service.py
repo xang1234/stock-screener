@@ -1,8 +1,10 @@
 """Resume saved posts under the shared budget; collection/publication live elsewhere."""
 import asyncio
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import hashlib
+from http import HTTPStatus
 import json
 import logging
 import re
@@ -17,7 +19,7 @@ from app.domain.social_signals.records import (
 from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt, SocialLLMBudgetDay, SocialRunWork
 from app.infra.db.models.social_signals import SocialSignalRun, SocialSourceRegistry
 from app.models.stock_universe import StockUniverse
-from app.services.llm.llm_service import LLMPreDispatchError, LLMService
+from app.services.llm.llm_service import LLMPreDispatchError, LLMProviderRejectedError, LLMService
 from app.services.social_extraction_service import SocialExtractionError, SocialExtractionService, VERSION
 from app.services.social_llm_budget_service import SocialLLMBudgetService, social_analysis_transaction
 from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
@@ -26,8 +28,10 @@ from app.services.social_ticker_resolver import SocialTickerResolver, cashtags
 logger = logging.getLogger(__name__)
 
 NO_SIGNAL_GATE = "no_signal_gate"
-# Configuration failures repeat for any subset of posts, so splitting the batch cannot help.
 _UNSPLITTABLE_ERRORS = frozenset({"llm_configuration_error", "extraction_model_not_configured"})
+_PROVIDER_WIDE_REFUSALS = frozenset({
+    HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND,
+})
 _WORD = re.compile(r"\w+")
 _SYMBOL = re.compile(r"[A-Za-z0-9]+(?:[.\-][A-Za-z]{1,3}\b)?")  # MU, BRK.B, 0700.HK, 3008.TWO
 _CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
@@ -75,6 +79,15 @@ class _CompletionUnknown(Exception):
     """The dispatched model request itself failed, so whether it billed is unknown."""
 
 
+class _RunLedger:
+    def __init__(self, calls):
+        self.calls_left, self.answered, self.parsed, self.refusal_status = calls, 0, 0, None
+
+    @property
+    def stopped(self):
+        return self.refusal_status in _PROVIDER_WIDE_REFUSALS
+
+
 class _NoopRequestGate:
     def acquire(self, owner, ttl):
         return True
@@ -91,8 +104,8 @@ class _NoopRequestGate:
 
 class _MeteredCompletion:
     """Intercept usage BEFORE parsing, including malformed successful responses."""
-    def __init__(self, owner, claims, now, *, retry=0):
-        self.owner, self.claims, self.now, self.retry = owner, claims, now, retry
+    def __init__(self, owner, claims, now, ledger, *, retry=0):
+        self.owner, self.claims, self.now, self.ledger, self.retry = owner, claims, now, ledger, retry
         self.dispatched = self.refunded = False
 
     async def completion(self, **kwargs):
@@ -183,7 +196,7 @@ class _MeteredCompletion:
                         SocialLLMBudgetDay.period_end_utc > day.period_start_utc,
                         SocialLLMAttempt.state.in_({
                             "dispatched", "reconciled", "uncertain",
-                        }),
+                        }) | ((SocialLLMAttempt.state == "released") & SocialLLMAttempt.actual_usd.is_not(None)),
                     )
                 ) or 0
                 call_available = calls_today < self.owner.max_calls_per_day
@@ -214,18 +227,30 @@ class _MeteredCompletion:
             if not valid:
                 raise _Deferred(len(self.claims) - len(outside_ids), len(outside_ids))
             self.dispatched = True
+            self.ledger.calls_left -= 1
             try:
                 llm = self.owner.llm if self.owner.llm is not None else LLMService(use_case="extraction")
                 response = await llm.completion(**kwargs, metered=True)
-            except LLMPreDispatchError:
-                budget.release_pre_dispatch(attempt)
+            except LLMPreDispatchError as exc:
+                if not budget.release_unbilled(attempt):
+                    raise _CompletionUnknown() from exc
                 raise SocialExtractionError("llm_configuration_error") from None
+            except LLMProviderRejectedError as exc:
+                if not self.retry or exc.status_code in _PROVIDER_WIDE_REFUSALS:
+                    self.ledger.refusal_status = exc.status_code
+                if not budget.release_unbilled(attempt, refused=True) or self.retry:
+                    raise _CompletionUnknown() from exc
+                if self.ledger.stopped:
+                    self.owner._finish_many(self.claims, "pending", "provider_rejected")
+                    raise _Deferred(len(self.claims)) from None
+                raise SocialExtractionError("provider_rejected") from None
             except Exception as exc:
                 budget.reconcile(attempt, None, None)
                 raise _CompletionUnknown() from exc
             except BaseException:
                 budget.reconcile(attempt, None, None)
                 raise
+            self.ledger.answered += 1
             usage = getattr(response, "usage", None)
             actual_inputs = getattr(usage, "prompt_tokens", None)
             actual_outputs = getattr(usage, "completion_tokens", None)
@@ -378,7 +403,11 @@ class ProcessSocialBacklog:
                     # A dispatched request may have billed, including after a crash.
                     # Never silently retry it. Reserved-only claims can be released.
                     attempts = [a for a in db.scalars(select(SocialLLMAttempt)).all() if row.id in a.work_ids]
-                    ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"} for a in attempts)
+                    # ponytail: matched by time, so a claim dated before an earlier claim's
+                    # attempts still counts them; key attempts by claim token if that occurs.
+                    # Nothing writes updated_at mid-run, so it stays the claim time; an onupdate would re-send posts.
+                    claim_attempts = [a for a in attempts if _utc(a.created_at) >= _utc(row.updated_at)]
+                    ambiguous = any(a.state in {"dispatched", "uncertain", "reconciled"} for a in claim_attempts)
                     for attempt in attempts:
                         if attempt.state == "reserved":
                             day = db.get(SocialLLMBudgetDay, attempt.budget_day_id)
@@ -415,7 +444,7 @@ class ProcessSocialBacklog:
                     row.schema_version, dict(row.input_snapshot_json)))
         return claimed, outside, terminal
 
-    def _finish(self, work_id, token, state, error=None, result=None):
+    def _finish(self, work_id, token, state, error=None, result=None, at=None):
         with social_analysis_transaction(self.session_factory) as db:
             row = db.get(SocialExtractionWork, work_id)
             late_completion = row.state == "failed_terminal" and row.error_code == "completion_unknown"
@@ -423,7 +452,7 @@ class ProcessSocialBacklog:
                 return None
             row.state, row.error_code = state, error
             row.claim_token = row.claim_expires_at = None
-            row.updated_at = datetime.now(timezone.utc)
+            row.updated_at = at or datetime.now(timezone.utc)
             if result is not None:
                 row.result_json = asdict(result)
                 row.actual_provider, row.actual_model = result.provider, result.model
@@ -432,17 +461,21 @@ class ProcessSocialBacklog:
                 close_unless_revalidates(row)
             return row.state
 
-    def _finish_many(self, claims, state, error=None):
-        return sum(self._finish(work_id, token, state, error) is not None for work_id, token in claims)
+    def _finish_many(self, claims, state, error=None, at=None):
+        return sum(self._finish(work_id, token, state, error, at=at) is not None for work_id, token in claims)
 
-    def _settle_unknown(self, claims):
-        """Close work a deferral released, unless another claim has taken it since."""
+    def _settle(self, claims, error, released_at=None):
+        """Close work this run returned to pending, unless another claim has taken it since.
+
+        released_at is when this run released it; a later claim or release moves updated_at off it.
+        """
         settled = 0
         with social_analysis_transaction(self.session_factory) as db:
             for work_id, _ in claims:
                 row = db.get(SocialExtractionWork, work_id)
-                if row.state in {"pending", "waiting_budget"} and row.claim_token is None:
-                    row.state, row.error_code = "failed_terminal", "completion_unknown"
+                if (row.state in {"pending", "waiting_budget"} and row.claim_token is None
+                        and (released_at is None or _utc(row.updated_at) == released_at)):
+                    row.state, row.error_code = "failed_terminal", error
                     row.updated_at = datetime.now(timezone.utc)
                     settled += 1
         return settled
@@ -483,35 +516,62 @@ class ProcessSocialBacklog:
             now, claim_limit, admin_work_ids, work_ids
         )
         succeeded = deferred = 0
-        batches = list(self._groups(claimed, self.batch_size))
-        spare_calls = self.max_calls_per_run - len(batches)
-        for batch in batches:
+        ledger = _RunLedger(self.max_calls_per_run)
+        queue = deque()
+        for batch in self._groups(claimed, self.batch_size):
             items = []
             for work_id, token, _, _, _, snapshot in batch:
                 snapshot["created_at"] = datetime.fromisoformat(snapshot["created_at"])
                 snapshot["observed_at"] = datetime.fromisoformat(snapshot["observed_at"])
                 items.append(((work_id, token), SocialPostRecord(**snapshot)))
-            outcome, spare_calls = await self._extract(tuple(items), batch[0][2:5], current_time, spare_calls)
-            if isinstance(outcome, str):
-                outcome, spare_calls = await self._isolate(
-                    tuple(items), batch[0][2:5], current_time, outcome, spare_calls
+            queue.append((tuple(items), batch[0][2:5], None, {}))
+        leaves, output_error = [], None
+        while queue:
+            items, config, code, since = queue.popleft()
+            claims = tuple(claim for claim, _ in items)
+            if ledger.stopped or ledger.calls_left < 1:
+                deferred += self._finish_many(claims, "pending", "provider_rejected" if ledger.stopped else code)
+                continue
+            outcome = await self._extract(items, config, current_time, ledger)
+            if not isinstance(outcome, str):
+                succeeded, deferred, failed, outside = (
+                    total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
                 )
-            succeeded, deferred, failed, outside = (
-                total + part for total, part in zip((succeeded, deferred, failed, outside), outcome)
-            )
+                continue
+            if outcome in _UNSPLITTABLE_ERRORS:
+                failed += self._finish_many(claims, "failed_terminal", outcome)
+                continue
+            evidence = "answered" if outcome == "provider_rejected" else "parsed"
+            if evidence not in since:
+                since = {**since, evidence: getattr(ledger, evidence)}
+            if evidence == "parsed":
+                output_error = outcome
+            if len(items) > 1:
+                middle = len(items) // 2
+                queue += ((items[:middle], config, outcome, since), (items[middle:], config, outcome, since))
+            else:
+                released_at = datetime.now(timezone.utc)
+                if self._finish_many(claims, "pending", outcome, at=released_at):
+                    leaves.append((claims, outcome, evidence, since[evidence], released_at))
+        for claims, code, evidence, mark, released_at in leaves:
+            if getattr(ledger, evidence) > mark:
+                failed += self._settle(claims, code, released_at)
+            else:
+                deferred += len(claims)
+        if ledger.refusal_status and (ledger.stopped or not ledger.answered):
+            logger.error("Social LLM provider refused requests with status %s after answering %d this run; "
+                         "deferred %d posts", ledger.refusal_status, ledger.answered, deferred)
+        if output_error and not ledger.parsed:
+            logger.error("Social LLM returned unusable output with error %s and parsed none this run; "
+                         "deferred %d posts", output_error, deferred)
         return BacklogResult(succeeded, deferred, failed, outside, self.budget.status(current_time()).next_reset_at)
 
-    async def _extract(self, items, config, current_time, spare_calls):
-        """Return (succeeded, deferred, failed, outside) or an unusable response's code, and the calls still spare.
-
-        A request whose outcome is unknown, such as a provider timeout, may have
-        billed, so it is retried at most once and only with a call the run's cap left unused.
-        """
+    async def _extract(self, items, config, current_time, ledger):
         model, prompt, schema = config
         claims = tuple(claim for claim, _ in items)
         work_ids = [work_id for work_id, _ in claims]
         for retry in range(2):
-            metered = _MeteredCompletion(self, claims, current_time, retry=retry)
+            metered = _MeteredCompletion(self, claims, current_time, ledger, retry=retry)
             try:
                 with self.session_factory() as db:
                     extraction = SocialExtractionService(db, model=model, prompt_version=prompt,
@@ -520,10 +580,8 @@ class ProcessSocialBacklog:
                 break
             except _Deferred as exc:
                 if retry:
-                    # The retry never went out, and deferred work would be claimed again
-                    # later, so the first request's unknown outcome stands.
-                    return (0, 0, self._settle_unknown(claims), exc.outside), spare_calls
-                return (0, exc.count, 0, exc.outside), spare_calls
+                    return (0, 0, self._settle(claims, "completion_unknown"), exc.outside)
+                return (0, exc.count, 0, exc.outside)
             except asyncio.CancelledError:
                 # A request that never went out leaves its posts pending or, if the refund
                 # failed, running for claim expiry to recover. A sent request, or a retry of
@@ -532,43 +590,26 @@ class ProcessSocialBacklog:
                 # seeing the first attempt uncertain, settles the posts as completion_unknown.
                 if metered.dispatched or (retry and metered.refunded):
                     self._finish_many(claims, "failed_terminal", "completion_unknown")
-                    self._settle_unknown(claims)
+                    self._settle(claims, "completion_unknown")
                 raise
             except SocialExtractionError as exc:
-                return str(exc), spare_calls
+                return str(exc)
             except _CompletionUnknown:
                 logger.warning("Social LLM request outcome unknown (attempt %d) work_ids=%s",
                                retry + 1, work_ids, exc_info=True)
-                if retry or spare_calls < 1:
-                    return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
-                spare_calls -= 1
+                if retry or ledger.calls_left < 1:
+                    return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0)
             except Exception:
                 logger.exception("Social LLM extraction failed work_ids=%s", work_ids)
-                return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
+                if not metered.dispatched:
+                    # Nothing was sent; claim expiry releases the reservation and returns the posts.
+                    return (0, len(claims), 0, 0)
+                return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0)
+        ledger.parsed += 1
         try:
             states = [self._finish(work_id, token, "succeeded", result=self._single_result(post, result))
                       for (work_id, token), post in items]
         except Exception:
             logger.exception("Saving social LLM results failed work_ids=%s", work_ids)
-            return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0), spare_calls
-        return (states.count("succeeded"), 0, states.count("failed_terminal"), 0), spare_calls
-
-    async def _isolate(self, items, config, current_time, code, spare_calls):
-        """Narrow an unusable batch response to the posts that provoke it.
-
-        Splitting spends only calls the run's cap left unused, so a model that
-        fails every request costs no more than one call per claimed batch did.
-        Returns the outcome totals and the calls still spare.
-        """
-        claims = tuple(claim for claim, _ in items)
-        if len(items) == 1 or code in _UNSPLITTABLE_ERRORS or spare_calls < 2:
-            return (0, 0, self._finish_many(claims, "failed_terminal", code), 0), spare_calls
-        spare_calls -= 2
-        middle = len(items) // 2
-        totals = (0, 0, 0, 0)
-        for half in (items[:middle], items[middle:]):
-            outcome, spare_calls = await self._extract(half, config, current_time, spare_calls)
-            if isinstance(outcome, str):
-                outcome, spare_calls = await self._isolate(half, config, current_time, outcome, spare_calls)
-            totals = tuple(total + part for total, part in zip(totals, outcome))
-        return totals, spare_calls
+            return (0, 0, self._finish_many(claims, "failed_terminal", "completion_unknown"), 0)
+        return (states.count("succeeded"), 0, states.count("failed_terminal"), 0)

@@ -670,4 +670,22 @@ def test_publish_refuses_a_pinned_result_that_stopped_revalidating_with_a_stable
         w.publish("run", version)
 
     with store() as db:
-        assert db.get(SocialSignalRun, "run").status == "staged"
+        run = db.get(SocialSignalRun, "run")
+        assert (run.status, run.published_at, run.application_progress_json["failure"]) == (
+            "failed", None, {"reason_code": "publication_failed"})
+    assert w.read_run_inputs("run").work_ids == (work_id,)
+
+
+def test_a_failed_close_does_not_replace_the_publication_error(store, monkeypatch):
+    w = writer(store)
+
+    def fails(message):
+        def raise_(*_args, **_kwargs):
+            raise RuntimeError(message)
+        return raise_
+
+    monkeypatch.setattr(w, "_publish", fails("publication broke"))
+    monkeypatch.setattr(w, "_close_runs", fails("database down"))
+
+    with pytest.raises(RuntimeError, match="^publication broke$"):
+        w.publish("run", 1)

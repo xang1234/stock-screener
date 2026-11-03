@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import json
+import logging
 from types import UnionType
 from typing import get_args, get_origin, get_type_hints
 
@@ -30,6 +31,8 @@ from app.services.twitter_content_identity import twitter_external_id
 from app.services.theme_evidence_eligibility_service import grant_eligibility
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
+logger = logging.getLogger(__name__)
+_RUN_FAILURES = frozenset({"analysis_failed", "social_runtime_changed", "source_participation_failed"})
 
 
 def utc(value):
@@ -145,7 +148,7 @@ class SocialSignalWriter:
                 historical_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == old.id).order_by(SocialRunWork.work_id)))
             else:
                 historical_ids = (old.prepared_json or {}).get("work_ids")
-                if historical_ids is None and failure.get("reason_code") == "analysis_failed":
+                if historical_ids is None:
                     historical_ids = failure.get("work_ids")
                 if historical_ids is None:
                     raise ValueError("terminal_run_manifest_missing")
@@ -213,9 +216,9 @@ class SocialSignalWriter:
                 raise ValueError("unsupported_existing_run_state")
         return self.publish(run_id, expected_mode_version)
 
-    def fail_analysis(self, run_id, reason_code):
-        """Close a generation on terminal extraction failure without publishing it."""
-        if reason_code != "analysis_failed":
+    def fail_run(self, run_id, reason_code):
+        """Close a collecting generation nothing will resume, without publishing it."""
+        if reason_code not in _RUN_FAILURES:
             raise ValueError("unsupported_social_run_failure")
         completed_at = self.clock()
         validate_utc_timestamp(completed_at, "completed_at")
@@ -244,9 +247,8 @@ class SocialSignalWriter:
             run.status, run.completed_at = "failed", completed_at
 
     @staticmethod
-    def _close_superseded(db, published, now):
-        """Older generations still open would only republish stale reads."""
-        failure = json.dumps({"reason_code": "generation_superseded"})
+    def _close_runs(db, reason_code, completed_at, *where):
+        failure = json.dumps({"reason_code": reason_code})
         runs = SocialSignalRun.__table__
         # PostgreSQL stores this column as json, which only concatenates as jsonb.
         if db.get_bind().dialect.name == "sqlite":
@@ -256,10 +258,18 @@ class SocialSignalWriter:
                 cast(literal('{"failure": %s}' % failure), JSONB)), JSON)
         # A Core statement loads no row. The ORM guards it bypasses protect
         # publications; neither admits a staged generation moving to failed.
-        db.execute(update(runs).where(
+        db.execute(update(runs).where(*where).values(
+            status="failed", completed_at=completed_at, application_progress_json=progress))
+
+    @classmethod
+    def _close_superseded(cls, db, published, now):
+        """Older generations still open would only republish stale reads."""
+        runs = SocialSignalRun.__table__
+        cls._close_runs(
+            db, "generation_superseded", now,
             runs.c.id != published.id, runs.c.mode == "live",
             runs.c.status.in_(("running", "staged")), runs.c.created_at <= published.created_at,
-        ).values(status="failed", completed_at=now, application_progress_json=progress))
+        )
 
     @staticmethod
     def _post(value):
@@ -587,7 +597,7 @@ class SocialSignalWriter:
                 work_ids = tuple(db.scalars(select(SocialRunWork.work_id).where(SocialRunWork.run_id == run_id).order_by(SocialRunWork.work_id)))
             else:
                 manifest = (run.prepared_json or {}).get("work_ids")
-                if manifest is None and failure.get("reason_code") == "analysis_failed":
+                if manifest is None:
                     manifest = failure.get("work_ids")
                 if manifest is None:
                     raise ValueError("terminal_run_manifest_missing")
@@ -835,6 +845,20 @@ class SocialSignalWriter:
         return result
 
     def publish(self, run_id, expected_mode_version):
+        """Publish a staged generation. Nothing retries one that fails, so a failure closes it."""
+        try:
+            return self._publish(run_id, expected_mode_version)
+        except Exception:
+            runs = SocialSignalRun.__table__
+            try:
+                with self.session_factory.begin() as db:
+                    _lock_registry(db)
+                    self._close_runs(db, "publication_failed", self.clock(), runs.c.id == run_id, runs.c.status == "staged")
+            except Exception:
+                logger.exception("Could not close social run %s after its publication failed", run_id)
+            raise
+
+    def _publish(self, run_id, expected_mode_version):
         with self.session_factory() as db:
             run = db.get(SocialSignalRun, run_id)
             if run is not None and run.application_progress_json.get("failure", {}).get("reason_code") == "generation_superseded":

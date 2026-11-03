@@ -167,7 +167,7 @@ def test_publication_closes_every_older_unpublished_live_generation(store):
     with pytest.raises(ValueError, match="run_not_collecting"):
         w.select_current_inputs("old-running")
     with pytest.raises(ValueError, match="run_not_collecting"):
-        w.fail_analysis("old-running", "analysis_failed")
+        w.fail_run("old-running", "analysis_failed")
     with pytest.raises(ValueError, match="publication_generation_superseded"):
         w.publish("old-staged", version)
     # Its frozen links remain its manifest for reads and deliberate replays.
@@ -191,6 +191,63 @@ def test_mode_change_rejects_prepared_run_and_validation_never_publishes(store):
     w.prepare_run("validation", (row("validation"),), NOW)
     assert not w.publish("validation", version+1).published
     with store() as db:
+        assert db.query(SocialSignalRunPointer).count() == 0
+
+
+@pytest.mark.parametrize("failure", ["version_changed", "database_error"])
+def test_failed_publication_closes_its_staged_generation(store, monkeypatch, failure):
+    from app.infra.db.models.social_signals import SocialSourceRegistry
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter, utc
+    w = writer(store)
+    collected(w)
+    w.prepare_run("run", (row("run"),), NOW)
+    with store.begin() as db:
+        registry = db.get(SocialSourceRegistry, 1)
+        version = registry.version
+        if failure == "version_changed":
+            registry.version = version + 1
+
+    def lost_connection(*_args):
+        raise ConnectionError("database_error")
+
+    if failure == "database_error":
+        monkeypatch.setattr(SocialSignalWriter, "_validate_inputs", lost_connection)
+    w.clock = lambda: NOW + timedelta(hours=1)
+    with pytest.raises(Exception, match=failure):
+        w.publish("run", version)
+    with store() as db:
+        run = db.get(SocialSignalRun, "run")
+        assert (run.status, run.application_progress_json["failure"]["reason_code"], utc(run.completed_at)) == (
+            "failed", "publication_failed", NOW + timedelta(hours=1))
+    assert w.read_run_inputs("run").work_ids == ()
+
+
+def test_a_run_closed_while_another_call_publishes_it_stays_failed(store, monkeypatch):
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    w = writer(store)
+    collected(w)
+    w.prepare_run("run", (row("run"),), NOW)
+    with store() as db:
+        version = db.get(SocialSignalRun, "run").registry_version
+    validate = SocialSignalWriter._validate_context
+    calls = []
+
+    def first_call_fails_meanwhile(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            with store.begin() as db:
+                run = db.get(SocialSignalRun, "run")
+                run.status = "failed"
+                run.application_progress_json = {
+                    **run.application_progress_json, "failure": {"reason_code": "publication_failed"}}
+        return validate(self, *args, **kwargs)
+
+    monkeypatch.setattr(SocialSignalWriter, "_validate_context", first_call_fails_meanwhile)
+    # The run flush guard refuses failed -> published and rolls the pointer move back.
+    with pytest.raises(ValueError, match="^social_run_immutable$"):
+        w.publish("run", version)
+    with store() as db:
+        assert db.get(SocialSignalRun, "run").status == "failed"
         assert db.query(SocialSignalRunPointer).count() == 0
 
 
@@ -290,8 +347,7 @@ def test_projection_and_pointer_roll_back_together_after_apply(store, monkeypatc
     with store() as db:
         assert db.query(ThemeCluster).count() == 0
         assert db.get(SocialSignalRunPointer, "latest_published").run_id == "prior"
-    monkeypatch.setattr(SocialThemeProjectionService, "apply_live", original)
-    assert w.publish("new", version).published
+        assert db.get(SocialSignalRun, "new").status == "failed"
 
 
 def test_published_social_work_is_admitted_to_economic_processing(store):
@@ -562,7 +618,8 @@ def test_current_replay_preserves_terminal_history_and_collection_freshness(stor
         assert tuple(s.last_successful_collection_at for s in db.query(SocialSourceConfiguration).order_by(SocialSourceConfiguration.content_source_id)) == timestamps
 
 
-def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(store):
+@pytest.mark.parametrize("reason", ["analysis_failed", "social_runtime_changed"])
+def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(store, reason):
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.models.theme import ContentItem
     from app.services.social_signal_backlog_service import ProcessSocialBacklog
@@ -583,13 +640,13 @@ def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(sto
     )
     w.select_current_inputs("failed")
 
-    w.fail_analysis("failed", "analysis_failed")
+    w.fail_run("failed", reason)
 
     with store() as db:
         run = db.get(SocialSignalRun, "failed")
         assert run.status == "failed"
         assert run.application_progress_json["failure"] == {
-            "reason_code": "analysis_failed",
+            "reason_code": reason,
             "work_ids": [work_id],
         }
         work = db.get(SocialExtractionWork, work_id)
@@ -601,8 +658,8 @@ def test_failed_analysis_generation_is_terminal_but_remains_admin_replayable(sto
     w.create_replay_run("admin-retry", "failed", NOW + timedelta(hours=1))
 
     saved = w.read_run_inputs("admin-retry")
-    assert saved.replay_manifest.saved_run_id == "failed"
-    assert saved.replay_manifest.required_inputs
+    assert (saved.replay_manifest.saved_run_id, saved.replay_manifest.historical_work_ids) == ("failed", (work_id,))
+    assert w.read_run_inputs("failed").work_ids == (work_id,)
 
 
 def test_replay_flushes_run_before_linking_successful_work(store):
@@ -949,8 +1006,8 @@ def test_grace_boundary_during_final_publication_lock_is_rejected(store):
     collected(w, "run", at)
     context = publication_context(store, at)
     prepared = w.prepare_run("run", (), at, context=context)
-    ticks = iter((at, at+timedelta(seconds=1)))
-    w.clock = lambda: next(ticks)
+    ticks = iter((at,))
+    w.clock = lambda: next(ticks, at+timedelta(seconds=1))
     with pytest.raises(ValueError, match="market_context_changed"):
         w.publish("run", prepared.registry_version)
     with store() as db:

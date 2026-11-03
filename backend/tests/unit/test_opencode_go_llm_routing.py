@@ -69,7 +69,7 @@ def test_opencode_go_never_falls_back_to_an_unrelated_openai_key():
         service._apply_provider_overrides({"model": MODEL})
 
 
-def test_metered_provider_failure_logs_only_the_exception_class(monkeypatch, caplog):
+def test_metered_provider_failure_logs_only_the_exception_class_and_status(monkeypatch, caplog):
     from app.services.llm import llm_service as llm_module
 
     class AuthenticationError(Exception):
@@ -93,7 +93,28 @@ def test_metered_provider_failure_logs_only_the_exception_class(monkeypatch, cap
             metered=True,
         ))
 
-    assert [r.getMessage() for r in caplog.records] == ["Metered LLM dispatch failed: AuthenticationError"]
+    assert [r.getMessage() for r in caplog.records] == ["Metered LLM dispatch failed: AuthenticationError status=None"]
+
+
+def test_metered_dispatch_passes_the_caller_timeout_to_the_provider(monkeypatch):
+    from app.services.llm import llm_service as llm_module
+
+    sent = {}
+
+    async def provider_call(**kwargs):
+        sent.update(kwargs)
+        return "response"
+
+    monkeypatch.setattr(llm_module, "acompletion", provider_call)
+    service = LLMService(use_case="extraction")
+    service._opencode_go_api_key = "go-secret"
+
+    asyncio.run(service.completion(
+        model=MODEL, messages=[{"role": "user", "content": "fixture"}], max_tokens=20,
+        allow_fallbacks=False, num_retries=0, metered=True, timeout=120,
+    ))
+
+    assert sent["timeout"] == 120
 
 
 def test_metered_missing_key_is_classified_before_provider_dispatch(monkeypatch):
