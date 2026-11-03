@@ -49,7 +49,7 @@ export default function SocialSignalHealthPanel() {
     queryKey: ['socialAdmin', 'health', keyGeneration],
     queryFn: () => getSocialAdminHealth(adminKey), enabled,
     refetchInterval: (query) => (
-      ['collecting', 'processing'].includes(query.state.data?.latest_live_attempt?.status) ? 5_000 : false
+      ['collecting', 'processing'].includes(query.state.data?.latest_live_attempt?.status) ? 5_000 : 30_000
     ),
   });
   const sources = useQuery({
@@ -168,8 +168,10 @@ export default function SocialSignalHealthPanel() {
           onChange={(event) => setKeyDraft(event.target.value)} />
         <Button variant="contained" disabled={!keyDraft.trim()}
           onClick={() => {
-            // A new key must not see another administrator's cached responses.
+            // A new key must not see another administrator's cached responses or drafts.
             queryClient.removeQueries({ queryKey: ['socialAdmin'] });
+            setValidation(null); setRenameDrafts({}); setReasons({});
+            setModeDraft(null); setProviderDraft(null); setUnresolvedPage(1);
             setIdentityDraft(''); setAdminKey(keyDraft.trim());
             setKeyGeneration((value) => value + 1); setMessage(null);
           }}>

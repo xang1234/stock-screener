@@ -153,6 +153,31 @@ describe('SocialSignalHealthPanel', () => {
     }
   });
 
+  it('still checks health every 30 seconds while no run is in progress', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withAttempt({ status: 'published' });
+      renderPanel();
+      await unlock();
+      const calls = api.getSocialAdminHealth.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(api.getSocialAdminHealth.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the validation preview when another key is loaded in the same panel', async () => {
+    api.getSocialValidation.mockResolvedValue({ candidates: [{}, {}], associations: [{}] });
+    renderPanel();
+    await unlock();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview validation-1' }));
+    expect(await screen.findByText(/2 staged candidates/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Social admin key'), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load Social administration' }));
+    expect(screen.queryByText(/2 staged candidates/)).not.toBeInTheDocument();
+  });
+
   it('does not show an earlier administrator\'s health after a new key is loaded', async () => {
     const { client, unmount } = renderPanel();
     await unlock();
