@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.domain.social_signals.states import ACTIONABLE_EXPOSURE_FLOOR
+from app.infra.db.models.social_analysis import SocialExtractionWork, SocialRunWork
 from app.infra.db.models.social_signals import (
     SocialPostTicker, SocialSignalRun, SocialSignalRunPointer,
     SocialSignalSnapshot, SocialSourceRegistry,
@@ -152,6 +153,10 @@ class SocialSignalQueries:
             reason = (run.application_progress_json.get("failure") or {}).get("reason_code")
             failure_reason = reason if reason in _ATTEMPT_FAILURES else "not_published"
         manifest = run.application_progress_json.get("current_manifest") or {}
+        # A post the run analysed under another revision was still scored.
+        analysed = set(self.db.scalars(select(SocialExtractionWork.content_item_id).join(
+            SocialRunWork, SocialRunWork.work_id == SocialExtractionWork.id,
+        ).where(SocialRunWork.run_id == run.id, SocialExtractionWork.state == "succeeded")))
         return {
             "run_id": run.id,
             "status": status,
@@ -159,7 +164,8 @@ class SocialSignalQueries:
             "started_at": _utc(run.created_at),
             "completed_at": _utc(run.completed_at),
             "sources": sources,
-            "unanalyzed_posts": len({value["content_item_id"] for value in manifest.get("unavailable_inputs", ())}),
+            "unanalyzed_posts": len({value["content_item_id"]
+                                     for value in manifest.get("unavailable_inputs", ())} - analysed),
         }
 
     @staticmethod
