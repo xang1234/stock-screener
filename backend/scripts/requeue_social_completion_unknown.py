@@ -2,7 +2,7 @@
 provider_rejected, to the backlog.
 
 Work qualifies when no extraction attempt for it was billed (reconciled) or is
-still in flight, and its post is inside the analysis window the backlog claims
+possibly still in flight, and its post is inside the analysis window the backlog claims
 from. Work whose attempt is uncertain is requeued deliberately, and a few of
 those requests may have been billed. --since and --until keep only work with an
 attempt created in that window, read as UTC. A dry run prints the counts;
@@ -21,6 +21,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 ERROR_CODES = ("completion_unknown", "provider_rejected")
+# Claim expiry marks a running request uncertain after 10 minutes, and metered calls
+# time out after 30 s, so an attempt this recent may still return a result.
+IN_FLIGHT_GRACE = timedelta(hours=1)
 
 
 def _utc(value):
@@ -32,13 +35,14 @@ def _classify(db, now, error_code, since, until):
 
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
 
-    attempt_states, in_window = {}, set()
+    attempt_states, latest, in_window = {}, {}, set()
     for attempt in db.scalars(select(SocialLLMAttempt).where(
         SocialLLMAttempt.operation_kind == "social_extraction"
     )):
         created = _utc(attempt.created_at)
         for work_id in attempt.work_ids:
             attempt_states.setdefault(work_id, set()).add(attempt.state)
+            latest[work_id] = max(latest.get(work_id, created), created)
             if (since is None or since <= created) and (until is None or created < until):
                 in_window.add(work_id)
     rows = db.scalars(select(SocialExtractionWork).where(
@@ -52,7 +56,7 @@ def _classify(db, now, error_code, since, until):
         published = datetime.fromisoformat(row.input_snapshot_json["created_at"])
         if "reconciled" in states:
             yield "billed", row
-        elif states & {"reserved", "dispatched"}:
+        elif states & {"reserved", "dispatched"} or latest.get(row.id, now - IN_FLIGHT_GRACE) > now - IN_FLIGHT_GRACE:
             yield "in_flight", row
         elif published < now - timedelta(days=14) and not row.requested_by_admin:
             yield "outside_window", row

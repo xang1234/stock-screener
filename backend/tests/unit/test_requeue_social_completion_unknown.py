@@ -27,6 +27,9 @@ def strand(factory, work_id, *attempt_states, admin=False):
         work.requested_by_admin = admin
 
 
+LATER = NOW + timedelta(hours=2)
+
+
 def states(factory, *work_ids):
     from app.infra.db.models.social_analysis import SocialExtractionWork
     with factory() as db:
@@ -57,13 +60,13 @@ def test_requeue_returns_only_unbilled_settled_in_window_work_to_the_backlog(bac
     before = states(backlog, *everything)
     counts = {"requeue": 3, "billed": 1, "in_flight": 1, "outside_window": 1}
 
-    assert requeue(backlog, NOW) == counts
+    assert requeue(backlog, LATER) == counts
     assert states(backlog, *everything) == before
 
-    assert requeue(backlog, NOW, apply=True) == counts
+    assert requeue(backlog, LATER, apply=True) == counts
     assert states(backlog, unknown, retried, admin_aged) == [("pending", None, None)] * 3
     assert states(backlog, billed, in_flight, aged, other) == before[2:5] + before[6:]
-    assert requeue(backlog, NOW, apply=True) == {
+    assert requeue(backlog, LATER, apply=True) == {
         "billed": 1, "in_flight": 1, "outside_window": 1,
     }
 
@@ -96,9 +99,22 @@ def test_requeue_targets_one_error_code_within_an_attempt_window(backlog):
     strand(backlog, unknown, "uncertain")
     window = {"since": NOW - timedelta(days=1), "until": (NOW - timedelta(minutes=1)).replace(tzinfo=None)}
 
-    assert requeue(backlog, NOW, apply=True, error_code="provider_rejected", **window) == {"requeue": 1}
+    assert requeue(backlog, LATER, apply=True, error_code="provider_rejected", **window) == {"requeue": 1}
     assert states(backlog, earlier, outage, unknown) == [
         ("failed_terminal", "provider_rejected", None),
         ("pending", None, None),
         ("failed_terminal", "completion_unknown", "expired-claim"),
     ]
+
+
+def test_requeue_leaves_work_whose_request_may_still_be_running(backlog):
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    work_id = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    strand(backlog, work_id, "uncertain")
+    stranded = states(backlog, work_id)
+
+    assert requeue(backlog, NOW + timedelta(minutes=30), apply=True) == {"in_flight": 1}
+    assert states(backlog, work_id) == stranded
+    assert requeue(backlog, LATER, apply=True) == {"requeue": 1}
