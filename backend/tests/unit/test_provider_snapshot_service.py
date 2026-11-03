@@ -2545,6 +2545,25 @@ def test_deserialize_legacy_manual_universe_row_defaults_non_common():
     assert official["is_common_stock"] is True
 
 
+def test_deserialize_universe_row_marks_funds_not_common_stock():
+    rows = [
+        {"symbol": "SPY", "industry": "Exchange Traded Fund", "is_common_stock": True},
+        {"symbol": "PDI", "industry": "Closed-End Fund - Debt", "is_common_stock": True},
+        {"symbol": "QQQ", "industry": "Exchange Traded Fund"},
+        {"symbol": "AAPL", "industry": "Consumer Electronics", "is_common_stock": True},
+        {"symbol": "PFD", "industry": "Banks - Regional", "is_common_stock": False},
+    ]
+
+    flags = {
+        row["symbol"]: ProviderSnapshotService._deserialize_universe_row(
+            {"market": "US", "source": "finviz", **row}
+        )["is_common_stock"]
+        for row in rows
+    }
+
+    assert flags == {"SPY": False, "PDI": False, "QQQ": False, "AAPL": True, "PFD": False}
+
+
 def test_deserialize_universe_row_normalizes_tpex_symbol_to_two_suffix():
     row = ProviderSnapshotService._deserialize_universe_row(
         {

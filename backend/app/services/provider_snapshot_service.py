@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..domain.markets import market_registry
 from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
+from ..domain.universe.ingestion import is_fund_industry
 from ..models.provider_snapshot import (
     ProviderSnapshotPointer,
     ProviderSnapshotRow,
@@ -2064,10 +2065,9 @@ class ProviderSnapshotService:
             "is_active": row.get("is_active", True),
             "status": row.get("status", UNIVERSE_STATUS_ACTIVE),
             "status_reason": row.get("status_reason"),
-            "is_common_stock": row.get(
-                "is_common_stock",
-                source != "manual",
-            ),
+            # Bundles exported before funds were classified carry True for them.
+            "is_common_stock": row.get("is_common_stock", source != "manual")
+            and not is_fund_industry(row.get("industry")),
             "is_sp500": row.get("is_sp500", False),
             "source": source,
             "added_at": _deserialize_datetime(row.get("added_at")),
