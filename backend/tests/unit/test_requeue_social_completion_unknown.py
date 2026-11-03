@@ -28,6 +28,19 @@ def strand(factory, work_id, *attempt_states, admin=False):
 
 
 LATER = NOW + timedelta(hours=2)
+HAIKU = "anthropic/claude-haiku-5-5"
+
+
+def price(factory, model=HAIKU):
+    import json
+
+    from app.models.app_settings import AppSetting
+    with factory.begin() as db:
+        row = db.scalar(select(AppSetting).where(AppSetting.key == "social_llm_pricing"))
+        value = json.loads(row.value)
+        value["models"][model] = {"provider": "anthropic", "actual_models": ["claude-haiku-5-5"],
+            "input_usd_per_million": "0.10", "output_usd_per_million": "0.50"}
+        row.value = json.dumps(value)
 
 
 def states(factory, *work_ids):
@@ -125,6 +138,7 @@ def test_requeue_moves_requeued_and_waiting_work_to_another_model(backlog):
     from scripts.requeue_social_completion_unknown import requeue
 
     configure_budget(backlog)
+    price(backlog)
     worker = processor(backlog, FakeLLM())
     unknown, waiting, taken = (enqueue(backlog, worker, post(number)) for number in range(1, 4))
     strand(backlog, unknown, "uncertain")
@@ -164,6 +178,7 @@ def test_requeue_moves_only_one_of_two_old_models_onto_the_same_post(backlog):
     from scripts.requeue_social_completion_unknown import requeue
 
     configure_budget(backlog)
+    price(backlog)
     first = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
     with backlog.begin() as db:
         source = db.get(SocialExtractionWork, first)
@@ -192,3 +207,20 @@ def test_a_dry_run_says_rows_would_move(monkeypatch, capsys):
     script.main(["--model", "anthropic/claude-haiku-5-5"])
     out = capsys.readouterr().out
     assert "would requeue 2" in out and "would move 3 waiting work rows" in out
+
+
+def test_requeue_refuses_a_model_without_a_price(backlog):
+    import pytest
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    work_id = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    with backlog.begin() as db:
+        db.get(SocialExtractionWork, work_id).state = "waiting_budget"
+
+    with pytest.raises(ValueError, match="^model_not_priced$"):
+        requeue(backlog, LATER, apply=True, model="anthropic/unpriced")
+    with backlog() as db:
+        assert db.get(SocialExtractionWork, work_id).selected_model == "synthetic/requested"

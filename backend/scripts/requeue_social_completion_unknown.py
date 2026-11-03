@@ -5,9 +5,10 @@ Work qualifies when no extraction attempt for it was billed (reconciled) or is
 possibly still in flight, and its post is inside the analysis window the backlog claims
 from. Work whose attempt is uncertain is requeued deliberately, and a few of
 those requests may have been billed. --since and --until keep only work with an
-attempt created in that window, read as UTC. --model moves the requeued work, and
-work still waiting on another model, to that model; a row whose post already has
-work for it is left alone. A dry run prints the counts;
+attempt created in that window, read as UTC; the window does not limit --model.
+--model moves the requeued work, and all work still waiting on another model, to
+that model, which must already have a social LLM price. A row whose post already
+has work for that model is left alone. A dry run prints the counts;
 --apply writes them in one transaction. Running it again finds nothing new to
 requeue.
 """
@@ -114,6 +115,11 @@ def requeue(session_factory, now, *, apply=False, error_code="completion_unknown
             model=None):
     from app.services.social_llm_budget_service import social_analysis_transaction
 
+    from app.services.social_llm_budget_service import SocialLLMBudgetService
+
+    # Unpriced work defers on every run, and deferred work blocks publication.
+    if model and SocialLLMBudgetService(session_factory).price(model) is None:
+        raise ValueError("model_not_priced")
     since, until = _utc(since), _utc(until)
     if not apply:
         with session_factory() as db:
@@ -135,9 +141,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="write the requeue instead of only counting")
     parser.add_argument("--error-code", choices=ERROR_CODES, default="completion_unknown")
-    parser.add_argument("--since", type=datetime.fromisoformat, help="earliest attempt created_at, inclusive")
-    parser.add_argument("--until", type=datetime.fromisoformat, help="latest attempt created_at, exclusive")
-    parser.add_argument("--model", help="move requeued and waiting work to this social extraction model")
+    parser.add_argument("--since", type=datetime.fromisoformat, help="earliest attempt created_at of requeued work, inclusive")
+    parser.add_argument("--until", type=datetime.fromisoformat, help="latest attempt created_at of requeued work, exclusive")
+    parser.add_argument("--model", help="move requeued work and all waiting work to this priced social extraction model")
     args = parser.parse_args(argv)
     from app.database import SessionLocal
 
