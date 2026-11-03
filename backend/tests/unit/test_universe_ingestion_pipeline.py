@@ -506,28 +506,24 @@ def test_pipeline_marks_new_fund_rows_not_common_stock() -> None:
     db.close()
 
 
-def test_pipeline_refresh_marks_funds_and_keeps_operator_classification() -> None:
+def test_pipeline_refresh_derives_common_stock_from_the_merged_industry() -> None:
     db = _make_session()()
     db.add_all(
         [
             StockUniverse(
-                symbol="ES3.SI",
+                symbol=symbol,
                 market="SG",
-                industry="Exchange Traded Fund",
+                industry=industry,
                 is_active=True,
                 status=UNIVERSE_STATUS_ACTIVE,
-                is_common_stock=True,
-                source="sg_ingest",
-            ),
-            StockUniverse(
-                symbol="D05.SI",
-                market="SG",
-                industry="Banking",
-                is_active=True,
-                status=UNIVERSE_STATUS_ACTIVE,
-                is_common_stock=False,
-                source="sg_ingest",
-            ),
+                is_common_stock=is_common_stock,
+                source=source,
+            )
+            for symbol, industry, is_common_stock, source in [
+                ("ES3.SI", "Exchange Traded Fund", True, "sg_ingest"),
+                ("C2PU.SI", "Closed-End Fund - Equity", False, "sg_ingest"),
+                ("D05.SI", None, False, "manual"),
+            ]
         ]
     )
     db.commit()
@@ -535,8 +531,9 @@ def test_pipeline_refresh_marks_funds_and_keeps_operator_classification() -> Non
     _ingest_sg(
         db,
         _row("ES3.SI", local_code="ES3", industry="Exchange Traded Fund"),
-        _row("D05.SI", local_code="D05", source_row_number=2),
+        _row("C2PU.SI", local_code="C2PU", source_row_number=2),
+        _row("D05.SI", local_code="D05", source_row_number=3),
     )
 
-    assert _common_stock_flags(db) == {"D05.SI": False, "ES3.SI": False}
+    assert _common_stock_flags(db) == {"C2PU.SI": True, "D05.SI": True, "ES3.SI": False}
     db.close()

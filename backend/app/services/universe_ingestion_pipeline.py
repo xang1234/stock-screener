@@ -413,9 +413,7 @@ class UniversePersistence:
         existing.local_code = row.local_code or existing.local_code
         existing.sector = prefer_meaningful(row.sector, existing.sector)
         existing.industry = prefer_meaningful(row.industry, existing.industry)
-        # A non-fund keeps its stored flag so an operator's classification survives.
-        if is_fund_industry(existing.industry):
-            existing.is_common_stock = False
+        existing.is_common_stock = not is_fund_industry(existing.industry)
         if row.market_cap is not None:
             existing.market_cap = row.market_cap
 
