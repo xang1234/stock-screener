@@ -82,9 +82,9 @@ class _CompletionUnknown(Exception):
 
 
 class _RunLedger:
-    def __init__(self, calls, claim_tokens):
+    def __init__(self, calls):
         self.calls_left, self.answered, self.parsed, self.refusal_status = calls, 0, 0, None
-        self.claim_tokens = claim_tokens
+        self.sendable_tokens = set()
 
     @property
     def stopped(self):
@@ -219,7 +219,7 @@ class _MeteredCompletion:
                 if valid:
                     row.state = "dispatched"
                     db.execute(update(SocialExtractionWork).where(
-                        SocialExtractionWork.claim_token.in_(self.ledger.claim_tokens),
+                        SocialExtractionWork.claim_token.in_(self.ledger.sendable_tokens),
                         SocialExtractionWork.state == "running",
                     ).values(claim_expires_at=dispatch_now + _CLAIM_TTL))
                 else:
@@ -531,7 +531,7 @@ class ProcessSocialBacklog:
             now, claim_limit, admin_work_ids, work_ids
         )
         succeeded = deferred = 0
-        ledger = _RunLedger(self.max_calls_per_run, [token for _, token, *_ in claimed])
+        ledger = _RunLedger(self.max_calls_per_run)
         queue = deque()
         for batch in self._groups(claimed, self.batch_size):
             items = []
@@ -547,6 +547,8 @@ class ProcessSocialBacklog:
             if ledger.stopped or ledger.calls_left < 1:
                 deferred += self._finish_many(claims, "pending", "provider_rejected" if ledger.stopped else code)
                 continue
+            ledger.sendable_tokens = {token for _, token in claims} | {
+                token for queued, *_ in queue for (_, token), _ in queued}
             outcome = await self._extract(items, config, current_time, ledger)
             if not isinstance(outcome, str):
                 succeeded, deferred, failed, outside = (
