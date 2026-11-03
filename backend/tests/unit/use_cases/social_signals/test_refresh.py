@@ -137,7 +137,7 @@ class Writer:
         self.batches.append(batch)
         return replace(batch, outcome=replace(batch.outcome, committed_progress=batch.outcome.proposed_progress))
 
-    def select_current_inputs(self, run_id):
+    def select_current_inputs(self, run_id, *, unfinished_as_gaps=False):
         self.events.append("writer.select")
         content_ids = tuple((batch.posts[0].provider_post_id, index + 10)
                             for index, batch in enumerate(self.batches) if batch.posts)
@@ -360,11 +360,20 @@ async def test_provider_lease_is_renewed_before_each_source_read():
 
 
 @pytest.mark.asyncio
-async def test_budget_pause_keeps_work_and_does_not_prepare():
+async def test_posts_the_backlog_deferred_do_not_hold_back_publication():
     refresh, events, _, writer, backlog, _ = use_case(deferred=1)
     result = await refresh.execute("scheduled", NOW)
-    assert result.processing_status == "deferred"
+    assert (result.processing_status, result.published) == ("complete", True)
     assert backlog.enqueued
+    assert writer.failures == []
+
+
+@pytest.mark.asyncio
+async def test_inputs_without_a_valid_saved_result_still_defer_publication():
+    refresh, events, _, writer, _, _ = use_case()
+    writer.current_inputs_ready = lambda run_id: False
+    result = await refresh.execute("scheduled", NOW)
+    assert (result.processing_status, result.reason_codes) == ("deferred", ("analysis_incomplete",))
     assert "writer.prepare" not in events
     assert writer.failures == []
 
@@ -854,6 +863,161 @@ async def test_unavailable_post_leaves_mention_history_incomplete(tmp_path):
     evidence = SocialScoringEvidenceReader(sessions).read("fixture-run", NOW)
 
     assert [(item.candidate_key, item.history_complete) for item in evidence] == [("US:AAA", False)]
+    engine.dispose()
+
+
+class SpreadRefusalLLM(FixtureLLM):
+    def __init__(self, refused):
+        super().__init__()
+        self.refused = set(refused)
+
+    async def completion(self, **kwargs):
+        import json
+        from app.services.llm.llm_service import LLMProviderRejectedError
+        if self.refused & {p["post_id"] for p in json.loads(kwargs["messages"][1]["content"])["posts"]}:
+            raise LLMProviderRejectedError("metered_provider_rejected", 400)
+        return await super().completion(**kwargs)
+
+
+def crowded_batch(request):
+    first = 0 if request.source_id == "1" else 200
+    posts = tuple(SocialPostRecord(
+        "official", f"q-{n}", request.source_id, "$AAA cooling", f"https://x.com/a/status/q-{n}",
+        f"author-{n}", NOW - timedelta(days=3) + timedelta(minutes=n), request.observed_at, likes=1,
+    ) for n in range(first, first + 200))
+    outcome = SocialSourceOutcome(
+        "success", "pending", "limited", ("bounded_provider_read",), (),
+        posts[0].created_at, posts[-1].created_at, len(posts), None, None,
+        proposed_progress=f"cursor-{request.source_id}",
+    )
+    return SocialSourceBatch(request, posts, outcome)
+
+
+@pytest.mark.asyncio
+async def test_evenly_spread_refusals_publish_every_run_with_the_unanalysed_posts_as_gaps(tmp_path):
+    from sqlalchemy import select
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.infra.db.models.social_signals import SocialSignalRunPointer, SocialSignalSnapshot
+    from app.services.social_signal_query_service import SocialSignalQueries
+
+    llm = SpreadRefusalLLM(f"q-{n}" for n in range(0, 400, 20))
+    engine, sessions, writer, refresh = real_refresh(
+        tmp_path, llm, batch_size=20, run_id_factory=lambda origin, now: f"run-{now:%d%H}",
+    )
+
+    async def run(hours):
+        at = NOW + timedelta(hours=hours)
+        writer.clock = lambda: at
+        result = await refresh.execute("scheduled", at)
+        assert (result.processing_status, result.reason_codes) == ("complete", ())
+        with sessions() as db:
+            states = {work.state for work in db.scalars(select(SocialExtractionWork))
+                      if work.input_snapshot_json["provider_post_id"].startswith("q-")}
+            pointer = db.get(SocialSignalRunPointer, "latest_published").run_id
+            mentions = db.scalar(select(SocialSignalSnapshot.mention_count).where(
+                SocialSignalSnapshot.run_id == pointer, SocialSignalSnapshot.window_days == 14,
+                SocialSignalSnapshot.candidate_key == "US:AAA"))
+            return pointer, states, SocialSignalQueries(db).latest_live_attempt()["unanalyzed_posts"], mentions
+
+    assert await run(0) == ("run-0712", set(), 0, 2)
+    refresh.providers["official"].read_source = crowded_batch
+    assert await run(6) == ("run-0718", {"pending"}, 400, 2)
+    assert await run(12) == ("run-0800", {"pending"}, 400, 2)
+    llm.refused.clear()
+    assert await run(18) == ("run-0806", {"succeeded"}, 0, 402)
+    engine.dispose()
+
+
+def social_post(post_id, text="$AAA cooling", age=timedelta(days=2)):
+    return SocialPostRecord("official", post_id, "1", text, f"https://x.com/a/status/{post_id}",
+                            "author", NOW - age, NOW, likes=10, reposts=1, replies=1)
+
+
+def lists_returning(posts_by_list):
+    def read_source(request):
+        posts = tuple(replace(post, source_id=request.source_id, observed_at=request.observed_at)
+                      for post in posts_by_list[request.source_id])
+        outcome = SocialSourceOutcome(
+            "success", "pending", "limited", ("bounded_provider_read",), (),
+            posts[0].created_at, posts[-1].created_at, len(posts), None, None,
+            proposed_progress=f"cursor-{request.source_id}",
+        )
+        return SocialSourceBatch(request, posts, outcome)
+    return read_source
+
+
+@pytest.mark.asyncio
+async def test_a_post_that_ages_out_while_the_run_waits_is_a_gap_not_a_block(tmp_path):
+    from app.services.social_signal_query_service import SocialSignalQueries
+
+    engine, sessions, writer, refresh = real_refresh(tmp_path, FixtureLLM())
+    # Current when the run starts, past fourteen days by the time the backlog dispatches it.
+    edge = social_post("edge", age=timedelta(days=14) - timedelta(microseconds=1))
+    refresh.providers["official"].read_source = lists_returning({"1": (social_post("p-1"),), "2": (edge,)})
+
+    result = await refresh.execute("fixture", NOW)
+
+    assert (result.processing_status, result.published) == ("complete", True)
+    with sessions() as db:
+        assert SocialSignalQueries(db).latest_live_attempt()["unanalyzed_posts"] == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_retained_post_that_ages_out_while_the_run_waits_stays_out_of_scoring(tmp_path):
+    from sqlalchemy import select
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.infra.db.repositories.social_refresh_support import SocialScoringEvidenceReader
+
+    engine, sessions, writer, refresh = real_refresh(
+        tmp_path, FixtureLLM(), run_id_factory=lambda origin, now: f"run-{now:%H}",
+    )
+    later = NOW + timedelta(hours=6)
+    # Current when the later run starts, past fourteen days by the time it dispatches.
+    edge = social_post("edge", age=timedelta(days=14, hours=-6) - timedelta(microseconds=1))
+    provider = refresh.providers["official"]
+    provider.read_source = lists_returning({"1": (social_post("p-1"),), "2": (edge,)})
+    assert (await refresh.execute("scheduled", NOW)).published is True
+    with sessions.begin() as db:
+        work = db.scalar(select(SocialExtractionWork).where(
+            SocialExtractionWork.input_snapshot_json["provider_post_id"].as_string() == "edge"))
+        work.state, work.error_code = "pending", None
+
+    writer.clock = lambda: later
+    provider.read_source = lists_returning({"1": (social_post("p-2"),), "2": (social_post("p-3"),)})
+    assert (await refresh.execute("scheduled", later)).published is True
+
+    evidence = SocialScoringEvidenceReader(sessions).read("run-18", later)
+    assert [(item.candidate_key, sorted({post.provider_post_id for post in item.posts}))
+            for item in evidence] == [("US:AAA", ["p-1", "p-2", "p-3"])]
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_gap_post_stays_out_of_scoring_under_an_older_revision_from_another_list(tmp_path):
+    from app.infra.db.repositories.social_refresh_support import SocialScoringEvidenceReader
+
+    engine, sessions, writer, refresh = real_refresh(
+        tmp_path, FixtureLLM(), run_id_factory=lambda origin, now: f"run-{now:%H}",
+    )
+    provider = refresh.providers["official"]
+    provider.read_source = lists_returning({"1": (social_post("shared"),), "2": (social_post("shared"),)})
+    assert (await refresh.execute("scheduled", NOW)).published is True
+
+    later = NOW + timedelta(hours=6)
+    writer.clock = lambda: later
+    refresh.backlog.max_calls_per_run = 1
+    provider.read_source = lists_returning({
+        "1": (social_post("shared", text="$AAA cooling, now shipping"),),
+        "2": (social_post("older", age=timedelta(days=3)),),
+    })
+    assert (await refresh.execute("scheduled", later)).published is True
+
+    evidence = SocialScoringEvidenceReader(sessions).read("run-18", later)
+    assert [(item.candidate_key, sorted({post.provider_post_id for post in item.posts}))
+            for item in evidence] == [("US:AAA", ["older"])]
     engine.dispose()
 
 

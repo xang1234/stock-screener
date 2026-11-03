@@ -151,6 +151,7 @@ class SocialSignalQueries:
         if status == "failed":
             reason = (run.application_progress_json.get("failure") or {}).get("reason_code")
             failure_reason = reason if reason in _ATTEMPT_FAILURES else "not_published"
+        manifest = run.application_progress_json.get("current_manifest") or {}
         return {
             "run_id": run.id,
             "status": status,
@@ -158,6 +159,7 @@ class SocialSignalQueries:
             "started_at": _utc(run.created_at),
             "completed_at": _utc(run.completed_at),
             "sources": sources,
+            "unanalyzed_posts": len({value["content_item_id"] for value in manifest.get("unavailable_inputs", ())}),
         }
 
     @staticmethod

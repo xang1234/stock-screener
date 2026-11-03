@@ -220,12 +220,10 @@ class RefreshSocialSignals:
                 run_id=run_id,
             ))
         if run_work_ids:
-            processed = await self.backlog.execute(
+            await self.backlog.execute(
                 now, len(run_work_ids), work_ids=tuple(sorted(set(run_work_ids)))
             )
-            if processed.deferred:
-                return self._result(run_id, runtime.mode, "deferred", "analysis_incomplete", sources=enabled)
-        manifest = self.writer.select_current_inputs(run_id).current_manifest
+        manifest = self.writer.select_current_inputs(run_id, unfinished_as_gaps=True).current_manifest
         if hasattr(self.writer, "current_inputs_ready") and not self.writer.current_inputs_ready(run_id):
             return self._result(run_id, runtime.mode, "deferred", "analysis_incomplete", sources=enabled)
 

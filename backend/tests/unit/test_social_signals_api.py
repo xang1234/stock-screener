@@ -258,6 +258,7 @@ async def test_unpublished_queue_shows_attempt_status_and_admin_health_the_detai
                 "reason_codes": ["bounded_provider_read"],
             },
         ],
+        "unanalyzed_posts": 0,
     }
 
 
