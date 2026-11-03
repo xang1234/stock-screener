@@ -79,7 +79,11 @@ describe('DailySocialSignalsCard', () => {
       from: 'actionable', to: 'watch', reason_code: 'stale_features',
       reason_params: { count: 300, required_session: '2026-10-30' }, watch_count: 327, risk_off_count: 0,
     }, 'No actionable signals: price features for 300 of 327 Watch signals are not yet updated for 2026-10-30.'],
-    [null, 'No signals in the latest run.'],
+    [{
+      from: 'actionable', to: 'watch', reason_code: 'market_exposure_below_50',
+      reason_params: { market_exposure: '49.7', floor: 50 }, watch_count: 0, risk_off_count: 2,
+    }, 'No actionable signals: market exposure is 49, below 50, so 2 ready setups are under Risk-off.'],
+    [null, 'No actionable signals in the latest run.'],
   ])('says why it lists no signals when the fallback is %o', async (fallback, text) => {
     getSocialSummary.mockResolvedValue({
       supported: true, available: true, stale: false, published_at: '2026-10-31T06:00:00Z',

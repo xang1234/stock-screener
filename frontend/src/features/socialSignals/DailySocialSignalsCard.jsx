@@ -68,7 +68,7 @@ export default function DailySocialSignalsCard({ market, onOpen }) {
             </Stack>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              {data.fallback ? noActionableText(data.fallback) : 'No signals in the latest run.'}
+              {data.fallback ? noActionableText(data.fallback) : 'No actionable signals in the latest run.'}
             </Typography>
           )}
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
