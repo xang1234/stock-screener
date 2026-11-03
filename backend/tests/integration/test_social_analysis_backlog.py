@@ -691,6 +691,27 @@ def test_expired_queued_claim_does_not_dispatch_after_long_previous_call(backlog
     assert llm.seen == ["1"]
 
 
+def test_a_twenty_call_run_that_outlasts_one_claim_ttl_sends_every_batch(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as process_backlog
+    configure_budget(backlog)
+    elapsed = [0]
+    monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0])
+    llm = FakeLLM()
+    original = llm.completion
+    async def haiku_paced(**kwargs):
+        response = await original(**kwargs)
+        elapsed[0] += 35
+        return response
+    llm.completion = haiku_paced
+    worker = processor(backlog, llm)
+    for number in range(1, 21):
+        enqueue(backlog, worker, post(number))
+
+    result = asyncio.run(worker.execute(NOW, 20))
+
+    assert (result.succeeded, result.deferred, llm.calls) == (20, 0, 20)
+
+
 def test_runtime_off_mid_batch_stops_new_model_dispatch_and_releases_reservation(backlog):
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
     with backlog.begin() as db:
