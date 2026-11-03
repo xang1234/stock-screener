@@ -427,6 +427,7 @@ _MARKET_JOB_TASKS = (
     'app.tasks.market_rs_tasks.bootstrap_balanced_market_rs',
     'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
     'app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline',
+    'app.tasks.daily_market_pipeline_tasks.catch_up_daily_market_pipeline',
     'app.tasks.daily_market_pipeline_tasks.guard_price_refresh',
     'app.tasks.daily_market_pipeline_tasks.guard_market_rs_result',
     'app.tasks.daily_market_pipeline_tasks.guard_breadth_result',
@@ -509,6 +510,12 @@ def _build_cache_warmup_beat_schedule(enabled_markets: list[str]) -> dict:
                 day_of_week='1-5'  # Monday-Friday only
             ),
             'options': {'queue': market_jobs_queue_for_market(_market)},
+            'kwargs': {'market': _market},
+        }
+        beat_schedule[f'catch-up-daily-market-pipeline-{_m_lower}'] = {
+            'task': 'app.tasks.daily_market_pipeline_tasks.catch_up_daily_market_pipeline',
+            'schedule': crontab(minute=_warm_m),
+            'options': {'queue': market_jobs_queue_for_market(_market), 'expires': 55 * 60},
             'kwargs': {'market': _market},
         }
 
