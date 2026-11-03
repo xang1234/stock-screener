@@ -24,6 +24,11 @@ from app.infra.db.repositories.published_social_signal_reader import (
 
 
 WINDOW_DAYS = {"1d": 1, "7d": 7, "14d": 14}
+# Why a collected live run closed without publishing (application_progress_json.failure).
+_ATTEMPT_FAILURES = {
+    "analysis_failed", "publication_failed", "generation_superseded",
+    "social_runtime_changed", "source_participation_failed",
+}
 _PUBLIC_ATTEMPT_REASONS = {
     "bounded_provider_read", "daily_limit_exhausted", "incremental_gap_suspected",
     "provider_error", "provider_network_error",
@@ -142,9 +147,14 @@ class SocialSignalQueries:
             status = "published"
         else:
             status = "failed"
+        failure_reason = None
+        if status == "failed":
+            reason = (run.application_progress_json.get("failure") or {}).get("reason_code")
+            failure_reason = reason if reason in _ATTEMPT_FAILURES else "not_published"
         return {
             "run_id": run.id,
             "status": status,
+            "failure_reason": failure_reason,
             "started_at": _utc(run.created_at),
             "completed_at": _utc(run.completed_at),
             "sources": sources,

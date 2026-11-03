@@ -243,6 +243,7 @@ async def test_unpublished_queue_shows_attempt_status_and_admin_health_the_detai
     assert health.json()["latest_live_attempt"] == {
         "run_id": "failed-collection-1",
         "status": expected_status,
+        "failure_reason": None,
         "started_at": "2026-09-08T05:49:14+00:00",
         "completed_at": None,
         "sources": [
@@ -258,6 +259,42 @@ async def test_unpublished_queue_shows_attempt_status_and_admin_health_the_detai
             },
         ],
     }
+
+
+@pytest.mark.parametrize(("run_status", "failure", "expected"), [
+    ("failed", {"reason_code": "analysis_failed"}, "analysis_failed"),
+    ("failed", {"reason_code": "publication_failed"}, "publication_failed"),
+    ("staged", None, "not_published"),
+    ("failed", {"reason_code": "something_new"}, "not_published"),
+    ("published", None, None),
+])
+def test_latest_live_attempt_says_why_a_collected_run_did_not_publish(
+    db_session, social_runtime, run_status, failure, expected
+):
+    from datetime import datetime, timezone
+
+    from app.infra.db.models.social_signals import SocialSignalRun
+    from app.services.social_signal_query_service import SocialSignalQueries
+
+    runtime = social_runtime.read_runtime()
+    current = social_runtime.apply_runtime("live", "xui", runtime.version, "admin")
+    progress = {"sources": {"1": {"name": "Minervini", "list_id": "private-list-1"}}}
+    if failure:
+        progress["failure"] = failure
+    db_session.add(SocialSignalRun(
+        id="run-1", registry_id=1, registry_version=current.version, mode="live", provider="xui",
+        status=run_status,
+        source_outcomes_json={"1": {"read_status": "success", "history_status": "limited", "received_count": 3}},
+        application_progress_json=progress,
+        feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        created_at=datetime(2026, 9, 8, 5, 49, 14, tzinfo=timezone.utc),
+    ))
+    db_session.commit()
+
+    attempt = SocialSignalQueries(db_session).latest_live_attempt()
+
+    assert (attempt["status"], attempt["failure_reason"]) == (
+        "published" if run_status == "published" else "failed", expected)
 
 
 @pytest.mark.asyncio
