@@ -140,6 +140,28 @@ describe('Social column on scan results', () => {
     expect(socialCell('NVDA')).toBe('Actionable 72');
   });
 
+  it('drops the column, not leaves it pending, when a new page lookup fails', async () => {
+    getSocialSymbols.mockResolvedValueOnce(lookup([nvda])).mockRejectedValueOnce(new Error('network'));
+    const view = renderWithProviders(section([row('NVDA', 'US')]));
+    await waitFor(() => expect(socialCell('NVDA')).toBe('Actionable 72'));
+
+    act(() => view.rerender(section([row('MSFT', 'US')])));
+
+    await waitFor(() => expect(headerNames()).not.toContain('Social 7D'));
+  });
+
+  it('closes the evidence drawer when Social is turned off', async () => {
+    getSocialSymbols.mockResolvedValue(lookup([nvda]));
+    getSocialEvidence.mockReturnValue(new Promise(() => {}));
+    const view = renderWithProviders(section([row('NVDA', 'US')]));
+    fireEvent.click(await screen.findByText('Actionable 72', {}, { timeout: 5000 }));
+    await screen.findByRole('dialog', { name: 'Social evidence' });
+
+    act(() => view.rerender(section([row('NVDA', 'US')], vi.fn(), false)));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Social evidence' })).toBeNull());
+  });
+
   it('makes no lookup on a phone', async () => {
     const matchMedia = window.matchMedia;
     window.matchMedia = (query) => ({

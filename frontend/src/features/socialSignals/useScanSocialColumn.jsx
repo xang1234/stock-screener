@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Chip } from '@mui/material';
 
@@ -29,6 +29,7 @@ export default function useScanSocialColumn(rows, enabled) {
     placeholderData: keepPreviousData,
   });
   const [selected, setSelected] = useState(null);
+  useEffect(() => { if (!lookupEnabled) setSelected(null); }, [lookupEnabled]);
   const evidence = useQuery({
     queryKey: ['socialSignals', 'evidence', selected?.candidate_key, WINDOW],
     queryFn: () => getSocialEvidence(selected.candidate_key, WINDOW),
