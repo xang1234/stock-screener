@@ -153,8 +153,7 @@ class SocialSignalQueries:
             reason = (run.application_progress_json.get("failure") or {}).get("reason_code")
             failure_reason = reason if reason in _ATTEMPT_FAILURES else "not_published"
         manifest = run.application_progress_json.get("current_manifest") or {}
-        # A post the run analysed under another revision was still scored.
-        analysed = set(self.db.scalars(select(SocialExtractionWork.content_item_id).join(
+        posts_with_a_result = set(self.db.scalars(select(SocialExtractionWork.content_item_id).join(
             SocialRunWork, SocialRunWork.work_id == SocialExtractionWork.id,
         ).where(SocialRunWork.run_id == run.id, SocialExtractionWork.state == "succeeded")))
         return {
@@ -165,7 +164,7 @@ class SocialSignalQueries:
             "completed_at": _utc(run.completed_at),
             "sources": sources,
             "unanalyzed_posts": len({value["content_item_id"]
-                                     for value in manifest.get("unavailable_inputs", ())} - analysed),
+                                     for value in manifest.get("unavailable_inputs", ())} - posts_with_a_result),
         }
 
     @staticmethod
