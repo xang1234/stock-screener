@@ -2,22 +2,27 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
-  Alert, AlertTitle, Box, Button, CircularProgress, Paper, Stack, TextField,
+  Alert, Box, Button, Chip, CircularProgress, Paper, Stack, TextField,
   Typography,
 } from '@mui/material';
 
 import {
-  getSocialContext, getSocialEvidence, getSocialQueue, getSocialUnresolved,
-  socialQueueKey,
+  getSocialContext, getSocialEvidence, getSocialQueue, socialQueueKey,
 } from '../../api/socialSignals';
 import ChartViewerModal from '../../components/Scan/ChartViewerModalLazy';
 import { useMarket } from '../../contexts/MarketContext';
 import SocialEvidenceDrawer from './SocialEvidenceDrawer';
 import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
 import SocialSignalsTable from './SocialSignalsTable';
-import { socialFreshnessLabel, visibleSocialRows } from './socialSignalPresentation';
+import {
+  ATTEMPT_TITLES, explanationMap, fallbackText, featureLagLabel, socialFreshness,
+  socialStateLabel, visibleSocialRows,
+} from './socialSignalPresentation';
 
 const EMPTY = [];
+const VIEWS = [
+  ['actionable', 'Actionable'], ['watch', 'Watch'], ['risk_off', 'Risk-off'], ['all', 'All Signals'],
+];
 const FILTERS = [
   ['source', 'Source'], ['theme', 'Theme'], ['instrument', 'Instrument'],
   ['state', 'State'], ['ticker', 'Ticker'],
@@ -39,7 +44,6 @@ export default function SocialSignalsTab() {
   const [rankMode, setRankMode] = useState('blended');
   const [page, setPage] = useState(1);
   const [contextPage, setContextPage] = useState(1);
-  const [unresolvedPage, setUnresolvedPage] = useState(1);
   const [filters, setFilters] = useState({});
   const [selected, setSelected] = useState(null);
   const [chartOpen, setChartOpen] = useState(false);
@@ -48,14 +52,11 @@ export default function SocialSignalsTab() {
     queryKey: socialQueueKey(controls), queryFn: () => getSocialQueue(controls),
     staleTime: 60_000, enabled: marketSupported,
   });
+  const { data } = queueQuery;
+  const fallback = data?.fallback;
   const contextQuery = useQuery({
     queryKey: ['socialSignals', 'context', market, window, contextPage],
     queryFn: () => getSocialContext({ market, window, page: contextPage, pageSize: 50 }),
-    enabled: marketSupported && view === 'all',
-  });
-  const unresolvedQuery = useQuery({
-    queryKey: ['socialSignals', 'unresolved', 'global', window, unresolvedPage],
-    queryFn: () => getSocialUnresolved({ market, window, page: unresolvedPage, pageSize: 50 }),
     enabled: marketSupported && view === 'all',
   });
   const evidenceQuery = useQuery({
@@ -64,13 +65,20 @@ export default function SocialSignalsTab() {
     enabled: marketSupported && Boolean(selected),
   });
   const rows = useMemo(
-    () => visibleSocialRows(queueQuery.data?.items || EMPTY, filters),
-    [filters, queueQuery.data?.items],
+    () => visibleSocialRows(data?.items || EMPTY, filters),
+    [filters, data?.items],
   );
   const visibleSymbols = useMemo(
     () => [...new Set(rows.filter((row) => row.market && row.canonical_symbol)
       .map((row) => row.canonical_symbol))], [rows],
   );
+  const attempt = data?.latest_attempt;
+  const freshness = socialFreshness(data);
+  const featureLag = rows.map((row) => featureLagLabel(explanationMap(row))).find(Boolean);
+  const filtered = Object.values(filters).some((value) => String(value || '').trim());
+  const emptyCopy = filtered ? 'No signals match these filters.'
+    : view === 'all' ? 'No signals in this window.'
+      : `No ${socialStateLabel(view)} signals in this window.`;
   const selectControl = (setter, value) => { setter(value); setPage(1); };
   const scanVisible = () => {
     const params = new URLSearchParams({ market, symbols: visibleSymbols.join(',') });
@@ -84,17 +92,16 @@ export default function SocialSignalsTab() {
           <Box>
             <Typography variant="h6">Social Signal Queue</Typography>
             <Typography variant="body2" color="text.secondary">
-              X-list attention ranked with frozen setup, relative-strength, group, Theme, and Market confirmation.
+              Stocks getting attention on tracked X lists, ranked by how well their setup, strength, theme, and the market back it up.
             </Typography>
           </Box>
           <Stack direction="row" gap={0.5} alignItems="center" flexWrap="wrap">
             {['1d', '7d', '14d'].map((value) => <Button key={value}
               variant={window === value ? 'contained' : 'outlined'}
               onClick={() => selectControl(setWindow, value)}>{value.toUpperCase()}</Button>)}
-            <Button variant={view === 'actionable' ? 'contained' : 'outlined'}
-              onClick={() => selectControl(setView, 'actionable')}>Actionable</Button>
-            <Button variant={view === 'all' ? 'contained' : 'outlined'}
-              onClick={() => selectControl(setView, 'all')}>All Signals</Button>
+            {VIEWS.map(([value, label]) => <Button key={value}
+              variant={view === value ? 'contained' : 'outlined'}
+              onClick={() => selectControl(setView, value)}>{label}</Button>)}
             <Button variant={rankMode === 'blended' ? 'contained' : 'outlined'}
               onClick={() => selectControl(setRankMode, 'blended')}>Blended</Button>
             <Button variant={rankMode === 'pure_social' ? 'contained' : 'outlined'}
@@ -120,112 +127,52 @@ export default function SocialSignalsTab() {
       {queueQuery.isError ? <Alert severity="error">
         {queueQuery.error?.response?.status === 401 ? 'Your session expired. Sign in again.' : 'Social Signals could not be loaded.'}
       </Alert> : null}
-      {queueQuery.data?.available === false ? (
-        queueQuery.data.latest_attempt
-          ? <LatestAttemptPanel attempt={queueQuery.data.latest_attempt}
-              onOpenOperations={() => navigate('/operations#sources')} />
-          : <Alert severity="info">
-              {unavailableCopy[queueQuery.data.reason_code] || 'Social Signals are temporarily unavailable.'}
-            </Alert>
+      {data?.available === false ? (
+        <Alert severity={['collection_failed', 'failed'].includes(attempt?.status) ? 'error' : 'info'}
+          action={attempt ? <Button size="small" onClick={() => navigate('/operations#sources')}>
+            Open Operations</Button> : null}>
+          {attempt
+            ? `${ATTEMPT_TITLES[attempt.status] || 'Collection is in progress'}.`
+            : unavailableCopy[data.reason_code] || 'Social Signals are temporarily unavailable.'}
+        </Alert>
       ) : null}
-      {queueQuery.data?.available ? (
+      {data?.available ? (
         <>
           <Stack direction="row" gap={1} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="caption">{queueQuery.data.total} published candidates</Typography>
-            <Typography variant="caption" color={queueQuery.data.stale ? 'warning.main' : 'success.main'}>
-              {socialFreshnessLabel(queueQuery.data)}
-            </Typography>
-            <Typography variant="caption">Formula {queueQuery.data.items?.[0]?.formula_version || '—'}</Typography>
+            <Typography variant="caption">{data.total} published candidates</Typography>
+            <Chip size="small" variant="outlined" color={freshness.color} label={freshness.label} />
+            {featureLag ? <Chip size="small" variant="outlined" color="warning" label={featureLag} /> : null}
             <Button size="small" disabled={!visibleSymbols.length} onClick={scanVisible}>Send visible to Scan</Button>
           </Stack>
-          {!rows.length ? <Alert severity="info">No signals match these controls.</Alert> : null}
-          <SocialSignalsTable items={rows} window={window} onSelect={setSelected} />
+          {fallback ? <Alert severity="info" sx={{ mb: 1 }}
+            action={fallback.risk_off_count ? <Button size="small"
+              onClick={() => selectControl(setView, 'risk_off')}>View Risk-off</Button> : null}>
+            {fallbackText(fallback)}
+          </Alert> : null}
+          {!rows.length && !fallback ? <Alert severity="info">{emptyCopy}</Alert> : null}
+          <SocialSignalsTable items={rows} onSelect={setSelected} />
           {view === 'all' ? <>
             <SocialSignalsTable title="Context" items={contextQuery.data?.items || EMPTY}
-              window={window} onSelect={setSelected} />
+              onSelect={setSelected} />
             <SectionPager page={contextPage} total={contextQuery.data?.total || 0}
               onPage={setContextPage} label="Context" />
-            <SocialSignalsTable title="Needs resolution" items={unresolvedQuery.data?.items || EMPTY}
-              window={window} onSelect={setSelected} />
-            <SectionPager page={unresolvedPage} total={unresolvedQuery.data?.total || 0}
-              onPage={setUnresolvedPage} label="Needs resolution" />
           </> : null}
           <Stack direction="row" justifyContent="flex-end" gap={1}>
             <Button disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button>
             <Typography variant="caption" sx={{ alignSelf: 'center' }}>Page {page}</Typography>
-            <Button disabled={page * 50 >= queueQuery.data.total}
+            <Button disabled={page * 50 >= data.total}
               onClick={() => setPage((value) => value + 1)}>Next</Button>
           </Stack>
         </>
       ) : null}
       <SocialEvidenceDrawer open={Boolean(selected)} onClose={() => setSelected(null)}
         selected={selected} query={evidenceQuery} onOpenChart={() => setChartOpen(true)}
-        onOpenTheme={(themeId) => navigate(`/themes?theme=${encodeURIComponent(themeId)}`)}
         onScan={scanVisible} />
       <ChartViewerModal open={chartOpen} onClose={() => setChartOpen(false)}
         initialSymbol={selected?.canonical_symbol} scanId={null}
         navigationSymbolsOverride={visibleSymbols}
         currentPageResults={rows.map((row) => ({ ...row, symbol: row.canonical_symbol }))} />
     </Box>
-  );
-}
-
-const attemptReasonCopy = {
-  daily_limit_exhausted: 'Daily X read budget used up',
-  incremental_gap_suspected: 'More posts than one read covers; some older posts were not read',
-  provider_error: 'Provider error',
-  provider_network_error: 'Network error after one retry',
-  provider_timeout: 'Provider timed out after one retry',
-  provider_unavailable: 'Provider unavailable',
-  rate_limited: 'Rate limited',
-  reauthentication_required: 'X authentication needs attention',
-};
-
-function LatestAttemptPanel({ attempt, onOpenOperations }) {
-  const collectionFailed = attempt.status === 'collection_failed';
-  const analysisFailed = attempt.status === 'failed';
-  const title = collectionFailed
-    ? 'Latest collection did not publish'
-    : analysisFailed
-      ? 'Latest analysis failed'
-    : attempt.status === 'processing'
-      ? 'Posts collected; analysis is in progress'
-      : 'First collection is in progress';
-  return (
-    <Alert severity={collectionFailed || analysisFailed ? 'error' : 'info'} sx={{ mb: 1.5 }}>
-      <AlertTitle>{title}</AlertTitle>
-      <Typography variant="body2" sx={{ mb: 1 }}>
-        Started {new Date(attempt.started_at).toLocaleString()}
-      </Typography>
-      <Stack gap={0.75}>
-        {(attempt.sources || []).map((source) => {
-          const collected = source.read_status === 'success';
-          const status = collected ? 'Collected' : source.read_status === 'failed' ? 'Failed' : 'Waiting';
-          const count = source.received_count == null ? '—' : source.received_count;
-          const limited = source.history_status === 'warming_up'
-            || (source.reason_codes || []).includes('bounded_provider_read');
-          const reasons = (source.reason_codes || [])
-            .filter((reason) => reason !== 'bounded_provider_read')
-            .map((reason) => attemptReasonCopy[reason] || reason.replaceAll('_', ' '));
-          return (
-            <Box key={source.name} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
-              <Typography variant="subtitle2">{source.name}</Typography>
-              <Typography variant="body2">{status} · {count} posts</Typography>
-              {limited ? <Typography variant="caption" color="warning.main">Limited history</Typography> : null}
-              {reasons.map((reason) => <Typography key={reason} variant="caption" display="block"
-                color={source.read_status === 'failed' ? 'error.main' : 'text.secondary'}>{reason}</Typography>)}
-            </Box>
-          );
-        })}
-      </Stack>
-      {collectionFailed ? <Typography variant="body2" sx={{ mt: 1 }}>
-        Analysis did not start because no enabled list collected successfully.
-      </Typography> : null}
-      {analysisFailed ? <Typography variant="body2" sx={{ mt: 1 }}>
-        Collected posts were not published because analysis failed. Review and retry failed work in Operations.
-      </Typography> : null}
-      <Button size="small" sx={{ mt: 1 }} onClick={onOpenOperations}>Open Operations</Button>
-    </Alert>
   );
 }
 

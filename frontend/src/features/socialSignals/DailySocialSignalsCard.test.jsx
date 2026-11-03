@@ -23,7 +23,7 @@ function renderCard(onOpen = vi.fn(), market = 'US') {
 describe('DailySocialSignalsCard', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('shows the published top five, themes, posture, coverage, freshness and navigation', async () => {
+  it('shows the published top five, themes, coverage, freshness and navigation', async () => {
     getSocialSummary.mockResolvedValue({
       supported: true, available: true, stale: true,
       published_at: '2026-09-07T06:00:00Z',
@@ -42,11 +42,36 @@ describe('DailySocialSignalsCard', () => {
     expect(screen.getByText('S4')).toBeInTheDocument();
     expect(screen.queryByText('S5')).not.toBeInTheDocument();
     expect(screen.getByText(/AI infrastructure · 4 companies/i)).toBeInTheDocument();
-    expect(screen.getByText(/Exposure 65/)).toBeInTheDocument();
     expect(screen.getByText(/3\/3 sources/)).toBeInTheDocument();
+    expect(screen.queryByText(/Exposure/)).not.toBeInTheDocument();
     expect(screen.getByText('Stale')).toBeInTheDocument();
+    expect(screen.queryByText(/session old/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Social Signals' }));
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels top signals scored from one-session-old price features', async () => {
+    getSocialSummary.mockResolvedValue({
+      supported: true, available: true, stale: true, published_at: '2026-09-07T06:00:00Z',
+      top_signals: [0, 1].map((behind) => ({
+        candidate_key: `US:S${behind}`, canonical_symbol: `S${behind}`, queue_score: 80,
+        explanation: { feature_sessions_behind: behind },
+      })),
+    });
+    renderCard();
+    expect(await screen.findByText('Price features 1 session old')).toBeInTheDocument();
+  });
+
+  it.each([
+    [{ stale: false }, 'Fresh'],
+    [{}, 'Stale'],
+  ])('labels a summary with %o as %s', async (freshness, label) => {
+    getSocialSummary.mockResolvedValue({
+      supported: true, available: true, published_at: '2026-09-07T06:00:00Z',
+      top_signals: [], ...freshness,
+    });
+    renderCard();
+    expect(await screen.findByText(label)).toBeInTheDocument();
   });
 
   it('uses typed unavailable copy without inventing zeros', async () => {

@@ -14,22 +14,10 @@ QueueView = Literal["actionable", "all", "watch", "risk_off"]
 RankMode = Literal["blended", "pure_social"]
 
 
-class SocialSourceAttempt(BaseModel):
-    name: str
-    read_status: Literal["pending", "success", "failed"]
-    received_count: int | None = None
-    history_status: str | None = None
-    reason_codes: list[str] = Field(default_factory=list)
-
-
 class SocialLatestAttempt(BaseModel):
-    run_id: str
     status: Literal[
         "collecting", "collection_failed", "processing", "failed", "published"
     ]
-    started_at: datetime
-    completed_at: datetime | None = None
-    sources: list[SocialSourceAttempt] = Field(default_factory=list)
 
 
 class SocialAvailabilityResponse(BaseModel):
@@ -68,6 +56,16 @@ class SocialQueueItem(BaseModel):
     explanation: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocialQueueFallback(BaseModel):
+    """Actionable was empty, so the same publication's Watch rows are shown instead."""
+    from_view: Literal["actionable"] = Field(alias="from")
+    to_view: Literal["watch"] = Field(alias="to")
+    reason_code: str | None = None
+    reason_params: dict[str, Any] = Field(default_factory=dict)
+    watch_count: int
+    risk_off_count: int
+
+
 class SocialQueueResponse(SocialAvailabilityResponse):
     window: WindowCode
     view: QueueView
@@ -80,6 +78,7 @@ class SocialQueueResponse(SocialAvailabilityResponse):
     generated_at: datetime | None = None
     published_at: datetime | None = None
     stale: bool | None = None
+    fallback: SocialQueueFallback | None = None
 
 
 class SocialSectionResponse(SocialAvailabilityResponse):
@@ -181,7 +180,7 @@ class SocialCompanyIdentityUpdate(BaseModel):
 __all__ = [
     "MarketCode", "QueueView", "RankMode", "SocialAvailabilityResponse",
     "SocialAssociationDecisionRequest", "SocialCompanyIdentityUpdate",
-    "SocialEvidencePost", "SocialEvidenceResponse", "SocialQueueItem",
+    "SocialEvidencePost", "SocialEvidenceResponse", "SocialQueueFallback", "SocialQueueItem",
     "SocialQueueResponse", "SocialSectionResponse", "SocialSummaryResponse", "WindowCode",
     "SocialRuntimeUpdate", "SocialSourceCreateRequest", "SocialSourceRenameRequest",
     "SocialSourceTransitionRequest", "SocialSourceVersionRequest",

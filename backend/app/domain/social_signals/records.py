@@ -724,6 +724,7 @@ class DailyFreshness:
     actual_session: date | None
     fresh: bool
     reason: str | None = None
+    sessions_behind: int | None = None
 
     @property
     def signal_state_value(self) -> bool | None:

@@ -187,12 +187,32 @@ def test_batch_rejects_invalid_setup_values(db_session, calendar, field, value):
     assert batch.inputs[0].setup_score is None
 
 
+@pytest.mark.parametrize("clock,behind,setup_score,state", [
+    ("2026-07-02T23:00:00", 0, 75, "actionable"),
+    pytest.param("2026-07-06T23:00:00", 1, 75, "actionable", id="july3_holiday_and_weekend_skipped"),
+    ("2026-07-07T23:00:00", 2, None, "watch"),
+])
+def test_batch_features_may_trail_the_required_session_by_one(db_session, calendar, clock, behind, setup_score, state):
+    from app.domain.social_signals.states import classify_signal_state
+    from app.models.market_exposure import MarketExposure
+    from app.services.social_confirmation_reader import SocialConfirmationReader
+    seed_batch(db_session)
+    db_session.add_all([MarketExposure(market="US", date=day, exposure_score=60, stance="uptrend", benchmark_symbol="SPY",
+        created_at=utc(f"{day}T21:00:00"), updated_at=utc(f"{day}T21:00:00")) for day in (date(2026, 7, 6), date(2026, 7, 7))])
+    db_session.flush()
+    batch = SocialConfirmationReader(db_session, calendar=calendar).read_market("US", ("AAA",), utc(clock))
+    fact = dict(batch.facts)["AAA"]
+    assert fact.feature_freshness.sessions_behind == behind
+    assert batch.inputs[0].setup_score == setup_score
+    assert classify_signal_state(fact.to_signal_state_input(resolved=True, active=True, market="US")).state == state
+
+
 def test_batch_stale_evidence_is_null_with_original_dates(db_session, calendar):
     from app.services.social_confirmation_reader import SocialConfirmationReader
     _, _, _ = seed_batch(db_session)
     reader = SocialConfirmationReader(db_session, calendar=calendar)
     assert callable(getattr(reader, "read_market", None)), "coherent batch evidence API is missing"
-    batch = reader.read_market("US", ("AAA",), utc("2026-07-06T23:00:00"))
+    batch = reader.read_market("US", ("AAA",), utc("2026-07-07T23:00:00"))
     row = batch.inputs[0]
     assert (row.setup_score, row.rs_rating_1m, row.rs_rating_3m, row.group_rank) == (None,)*4
     fact = dict(batch.facts)["AAA"]

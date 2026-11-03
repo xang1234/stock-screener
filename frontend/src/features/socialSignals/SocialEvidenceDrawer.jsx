@@ -3,7 +3,9 @@ import {
 } from '@mui/material';
 
 import AddToWatchlistMenu from '../../components/common/AddToWatchlistMenu';
-import { explanationMap, formatSocialScore, socialStateLabel } from './socialSignalPresentation';
+import {
+  explanationMap, featureLagLabel, formatSocialScore, handleText, socialStateLabel, stateReasonText,
+} from './socialSignalPresentation';
 
 const words = (value) => String(value || '').replaceAll('_', ' ');
 const capitalize = (value) => value.charAt(0).toUpperCase() + value.slice(1);
@@ -12,11 +14,12 @@ const stateReasons = (value) => Array.isArray(value)
   : String(value || '').split(',').filter(Boolean);
 
 export default function SocialEvidenceDrawer({
-  open, onClose, selected, query, onOpenChart, onOpenTheme, onScan,
+  open, onClose, selected, query, onOpenChart, onScan,
 }) {
   const data = query?.data;
   const item = data?.item || selected;
   const explanation = explanationMap(item);
+  const featureLag = featureLagLabel(explanation);
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>
       <Box sx={{ width: { xs: '100vw', sm: 520 }, p: 2 }} role="dialog" aria-label="Social evidence">
@@ -37,15 +40,15 @@ export default function SocialEvidenceDrawer({
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Button variant="contained" onClick={onOpenChart}>Open chart & setup</Button>
           <Button variant="outlined" onClick={onScan}>Send visible to Scan</Button>
-          {explanation.theme_id ? <Button onClick={() => onOpenTheme(explanation.theme_id)}>Open theme</Button> : null}
           {item?.canonical_symbol && item?.market ? <AddToWatchlistMenu symbols={item.canonical_symbol} /> : null}
         </Stack>
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle2">Why it surfaced</Typography>
         <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: 1 }}>
           {stateReasons(explanation.state_reasons).map((reason) => (
-            <Chip key={reason} size="small" label={words(reason)} />
+            <Chip key={reason} size="small" label={stateReasonText(reason)} />
           ))}
+          {featureLag ? <Chip size="small" color="warning" variant="outlined" label={featureLag} /> : null}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           Acceleration {formatSocialScore(explanation.acceleration)}
@@ -131,7 +134,7 @@ function ClaimList({ claims }) {
                       {' shared by '}
                     </>
                   ) : null}
-                  <Link href={claim.url} target="_blank" rel="noreferrer">@{claim.author_handle}</Link>
+                  <Link href={claim.url} target="_blank" rel="noreferrer">{handleText(claim.author_handle)}</Link>
                   {' · '}{new Date(claim.created_at).toLocaleString()}
                 </Typography>
               </Box>
@@ -149,7 +152,7 @@ function PaperPost({ post }) {
   return (
     <Box sx={{ py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
       <Typography variant="caption" color="text.secondary">
-        @{post.author_handle} · {new Date(post.created_at).toLocaleString()}
+        {handleText(post.author_handle)} · {new Date(post.created_at).toLocaleString()}
       </Typography>
       <Typography variant="body2" sx={{ my: 0.75, whiteSpace: 'pre-wrap' }}>{post.excerpt}</Typography>
       <Stack direction="row" gap={0.5} alignItems="center" flexWrap="wrap">

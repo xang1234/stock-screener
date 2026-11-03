@@ -736,8 +736,16 @@ closes, allow a configurable two-hour update grace period; once it expires,
 require that newly completed session. Equivalently, the required session is the
 latest session whose close plus grace has passed. Show actual input session dates
 explicitly; this is daily snapshot freshness, not a claim of live quotes.
-Required technical inputs older than the required session, or with unverifiable
-freshness, preclude Actionable while social evidence stays visible. Calendar
+Listing-level technical inputs from the published feature run may trail the
+required session by one trading session on the listing's calendar, because
+feature runs routinely publish a session late. Those inputs still score and can
+still reach Actionable, and the queue labels the lag as
+`feature_sessions_behind` in each candidate's explanation. It is 0 or 1 when
+the features are fresh, otherwise null. Theme measurement still requires features
+from the required session exactly. Technical
+inputs two or more sessions behind, or with unverifiable freshness, preclude
+Actionable while social evidence stays visible. Market exposure must match the
+required session exactly. Calendar
 uncertainty must not silently assume a trading day. Apply the relevant Market
 calendar to Market-level inputs and the security's MIC calendar to listing-level
 inputs. Preserve coherent snapshot joins. Social snapshot staleness remains a
@@ -810,8 +818,15 @@ candidate ranking.
 `unresolved` retains source evidence that could not be mapped deterministically.
 It never receives fabricated Market or technical data.
 
-The Actionable view includes only `actionable`. All Signals includes every
-state with clear missing-data and exclusion reasons.
+The Actionable view includes only `actionable`. When the published run has
+none and no filter is applied, the queue returns that same run's `watch` rows
+instead, with a `fallback` object that gives the Watch and Risk-off counts and
+one reason. The reason is a ladder, not a vote. Any Risk-off row makes it
+Market exposure below 50. Otherwise any Watch row with stale features makes it
+`stale_features`, with that row count and the session they wait on, even when
+another reason is more common. Otherwise it is the most common Watch reason. A
+filtered Actionable view with no rows returns no fallback. All Signals includes
+every state with clear missing-data and exclusion reasons.
 
 **Approved All Signals presentation:** Use three clearly separated sections.
 Ranked candidates contain resolved stocks and thematic ETFs in the selected

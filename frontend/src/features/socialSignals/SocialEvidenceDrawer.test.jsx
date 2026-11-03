@@ -16,7 +16,6 @@ function renderDrawer(data) {
           selected={{ canonical_symbol: 'CEG' }}
           query={{ data }}
           onOpenChart={() => {}}
-          onOpenTheme={() => {}}
           onScan={() => {}}
         />
       </ThemeProvider>
@@ -77,6 +76,28 @@ describe('SocialEvidenceDrawer', () => {
     expect(screen.getByText('Setup · Bullish').closest('[title]'))
       .toHaveAttribute('title', 'Model hint, not verified');
     expect(screen.getAllByText(/Setup ·/)).toHaveLength(1);
+  });
+
+  it('offers only the actions it can complete', () => {
+    renderDrawer({
+      available: true, posts: [], claims: [],
+      item: { canonical_symbol: 'CEG', explanation: { theme: 'nuclear_power', theme_id: 7 } },
+    });
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Close', 'Open chart & setup', 'Send visible to Scan',
+    ]);
+  });
+
+  it('explains why it surfaced in plain words, including one-session-old features', () => {
+    renderDrawer({
+      available: true, posts: [], claims: [],
+      item: { canonical_symbol: 'CEG', explanation: {
+        state_reasons: ['setup_not_ready', 'missing_liquidity'], feature_sessions_behind: 1,
+      } },
+    });
+    expect(screen.getByText('Setup not ready')).toBeInTheDocument();
+    expect(screen.getByText('Trading volume unknown')).toBeInTheDocument();
+    expect(screen.getByText('Price features 1 session old')).toBeInTheDocument();
   });
 
   it('says so when no claims were extracted', () => {

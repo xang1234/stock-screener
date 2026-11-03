@@ -310,7 +310,10 @@ def transition_admin_source(
 @router.get("/admin/health", dependencies=[Depends(require_admin)])
 def admin_health(db: Session = Depends(get_db)):
     from app.services.social_signal_operations_service import SocialSignalOperationsService
-    return SocialSignalOperationsService().snapshot(db)
+    return {
+        **SocialSignalOperationsService().snapshot(db),
+        "latest_live_attempt": SocialSignalQueries(db).latest_live_attempt(),
+    }
 
 
 @router.get("/admin/runs", dependencies=[Depends(require_admin)])

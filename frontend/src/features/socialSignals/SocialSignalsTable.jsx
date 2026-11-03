@@ -3,16 +3,14 @@ import {
   TableRow, Typography,
 } from '@mui/material';
 
-import {
-  explanationMap, formatSocialScore, socialCoverage, socialStateLabel,
-} from './socialSignalPresentation';
+import { explanationMap, formatSocialScore, socialStateLabel } from './socialSignalPresentation';
 
 const HEADINGS = [
-  'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Authors', 'Setup',
-  'RS', 'Group', 'Theme', 'State', 'Freshness',
+  'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Setup',
+  'RS', 'Group', 'Theme', 'State',
 ];
 
-export default function SocialSignalsTable({ title, items = [], window, onSelect }) {
+export default function SocialSignalsTable({ title, items = [], onSelect }) {
   if (!items.length) return null;
   return (
     <Box sx={{ mb: 2 }}>
@@ -25,7 +23,6 @@ export default function SocialSignalsTable({ title, items = [], window, onSelect
           <TableBody>
             {items.map((item) => {
               const explanation = explanationMap(item);
-              const coverage = socialCoverage(item, window);
               return (
                 <TableRow
                   hover key={item.candidate_key} tabIndex={0}
@@ -39,16 +36,11 @@ export default function SocialSignalsTable({ title, items = [], window, onSelect
                   <TableCell>{formatSocialScore(item.social_score)}</TableCell>
                   <TableCell>{formatSocialScore(item.confirmation_score)}</TableCell>
                   <TableCell>{item.mention_count}</TableCell>
-                  <TableCell>{explanation.author_count ?? '—'}</TableCell>
                   <TableCell>{explanation.readiness || formatSocialScore(explanation.setup_score)}</TableCell>
                   <TableCell>{formatSocialScore(explanation.rs_rating_3m ?? explanation.rs_rating_1m)}</TableCell>
                   <TableCell>{explanation.group_rank ?? '—'}</TableCell>
-                  <TableCell>{explanation.theme || explanation.linked_theme || '—'}</TableCell>
+                  <TableCell>{explanation.theme || '—'}</TableCell>
                   <TableCell><Chip size="small" label={socialStateLabel(item.state)} /></TableCell>
-                  <TableCell>
-                    <Typography variant="caption" display="block">{coverage.label}</Typography>
-                    <Typography variant="caption" color={`${coverage.tone}.main`}>{coverage.detail}</Typography>
-                  </TableCell>
                 </TableRow>
               );
             })}

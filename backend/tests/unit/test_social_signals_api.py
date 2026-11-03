@@ -171,7 +171,7 @@ async def test_live_without_publication_is_typed_unavailable(
     ("success", "processing"),
     ("failed", "collection_failed"),
 ])
-async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
+async def test_unpublished_queue_shows_attempt_status_and_admin_health_the_detail(
     db_session, social_runtime, monkeypatch, second_status, expected_status
 ):
     from datetime import datetime, timezone
@@ -219,11 +219,32 @@ async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
     )
 
     assert response.status_code == 200
-    attempt = response.json().get("latest_attempt")
-    assert attempt == {
+    assert response.json()["latest_attempt"] == {"status": expected_status}
+    encoded = response.text.lower()
+    assert "private-list-1" not in encoded
+    assert "minervini" not in encoded
+
+    from app.api.v1 import config
+
+    monkeypatch.setattr(config.settings, "admin_api_key", "admin-secret")
+    monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
+    operations = await _request(db_session, "GET", "/api/v1/operations/social-signals")
+    assert operations.status_code == 200
+    assert operations.json()["run_status"] == "running"
+    assert "latest_live_attempt" not in operations.json()
+    assert "minervini" not in operations.text.lower()
+    assert "ai investing" not in operations.text.lower()
+
+    health = await _request(
+        db_session, "GET", "/api/v1/social-signals/admin/health",
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+    assert health.status_code == 200
+    assert health.json()["latest_live_attempt"] == {
         "run_id": "failed-collection-1",
         "status": expected_status,
-        "started_at": "2026-09-08T05:49:14Z",
+        "failure_reason": None,
+        "started_at": "2026-09-08T05:49:14+00:00",
         "completed_at": None,
         "sources": [
             {
@@ -238,9 +259,42 @@ async def test_unpublished_queue_exposes_sanitized_latest_source_outcomes(
             },
         ],
     }
-    encoded = response.text.lower()
-    assert "private-list-1" not in encoded
-    assert "private-list-2" not in encoded
+
+
+@pytest.mark.parametrize(("run_status", "failure", "expected"), [
+    ("failed", {"reason_code": "analysis_failed"}, "analysis_failed"),
+    ("failed", {"reason_code": "publication_failed"}, "publication_failed"),
+    ("staged", None, "not_published"),
+    ("failed", {"reason_code": "something_new"}, "not_published"),
+    ("published", None, None),
+])
+def test_latest_live_attempt_says_why_a_collected_run_did_not_publish(
+    db_session, social_runtime, run_status, failure, expected
+):
+    from datetime import datetime, timezone
+
+    from app.infra.db.models.social_signals import SocialSignalRun
+    from app.services.social_signal_query_service import SocialSignalQueries
+
+    runtime = social_runtime.read_runtime()
+    current = social_runtime.apply_runtime("live", "xui", runtime.version, "admin")
+    progress = {"sources": {"1": {"name": "Minervini", "list_id": "private-list-1"}}}
+    if failure:
+        progress["failure"] = failure
+    db_session.add(SocialSignalRun(
+        id="run-1", registry_id=1, registry_version=current.version, mode="live", provider="xui",
+        status=run_status,
+        source_outcomes_json={"1": {"read_status": "success", "history_status": "limited", "received_count": 3}},
+        application_progress_json=progress,
+        feature_run_ids_json={}, exposure_dates_json={}, coverage_json={},
+        created_at=datetime(2026, 9, 8, 5, 49, 14, tzinfo=timezone.utc),
+    ))
+    db_session.commit()
+
+    attempt = SocialSignalQueries(db_session).latest_live_attempt()
+
+    assert (attempt["status"], attempt["failure_reason"]) == (
+        "published" if run_status == "published" else "failed", expected)
 
 
 @pytest.mark.asyncio
@@ -364,8 +418,12 @@ def test_published_queue_freshness_uses_oldest_successful_collection(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("feature_freshness", "sessions_behind"), [
+    ({"fresh": True, "reason": None, "sessions_behind": 1}, 1),
+    ({"fresh": False, "reason": "stale_session", "sessions_behind": 2}, None),
+])
 async def test_published_queue_exposes_frozen_candidate_context(
-    db_session, social_runtime, monkeypatch
+    db_session, social_runtime, monkeypatch, feature_freshness, sessions_behind
 ):
     from datetime import datetime, timezone
     from decimal import Decimal
@@ -405,10 +463,16 @@ async def test_published_queue_exposes_frozen_candidate_context(
                 }],
             ]},
         }],
-        "market_batches": [{"inputs": [{
-            "candidate_key": "US:AAA", "rs_rating_1m": "89",
-            "rs_rating_3m": "93", "group_rank": 4,
-        }]}],
+        "market_batches": [{
+            "inputs": [{
+                "candidate_key": "US:AAA", "rs_rating_1m": "89",
+                "rs_rating_3m": "93", "group_rank": 4,
+            }],
+            "facts": [["AAA", {"feature_freshness": {
+                "required_session": "2026-09-04", "actual_session": "2026-09-03",
+                **feature_freshness,
+            }}]],
+        }],
     }
     _publish_rows(db_session, (record,), context=context)
 
@@ -431,6 +495,244 @@ async def test_published_queue_exposes_frozen_candidate_context(
     assert explanation["acceleration"] == "2.5"
     assert explanation["post_memberships"] == ["111"]
     assert explanation["source_names"] == ["One"]
+    assert explanation["feature_sessions_behind"] == sessions_behind
+    assert explanation["feature_required_session"] == "2026-09-04"
+
+
+def _publish_states(db, rows, *, exposure):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from app.domain.social_signals.records import SocialSnapshotRecord
+
+    now = datetime(2026, 10, 31, 12, tzinfo=timezone.utc)
+    records = tuple(SocialSnapshotRecord(
+        "published-1", f"US:{symbol}", symbol, "US", state,
+        *(None if queue is None else Decimal(queue),) * 3,
+        (("state_reasons", ",".join(reasons)),), (), now, symbol, f"US:{symbol}",
+        7, 4, 2, 2,
+    ) for symbol, state, reasons, queue in rows)
+    _publish_rows(db, records, context={
+        "formula_version": "social-signal-v1",
+        "candidates": [{
+            "candidate_key": f"US:{symbol}", "window_days": 7,
+            "state_input": {"market_exposure": exposure},
+            "state_decision": {"reasons": reasons},
+        } for symbol, _, reasons, _ in rows],
+        "market_batches": [{
+            "inputs": [{"candidate_key": f"US:{symbol}"} for symbol, *_ in rows],
+            "facts": [[symbol, {"feature_freshness": {
+                "required_session": "2026-10-30", "fresh": "stale_features" not in reasons,
+            }}] for symbol, _, reasons, _ in rows],
+        }],
+    })
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("rows", "exposure", "symbols", "fallback"), [
+    pytest.param([
+        ("AAA", "watch", ["setup_not_ready"], 80),
+        ("BBB", "risk_off", ["market_exposure_below_50"], 90),
+        ("CCC", "risk_off", ["market_exposure_below_50"], 70),
+    ], "42", ["AAA"], {
+        "from": "actionable", "to": "watch",
+        "reason_code": "market_exposure_below_50",
+        "reason_params": {"market_exposure": "42", "floor": 50},
+        "watch_count": 1, "risk_off_count": 2,
+    }, id="ready_setups_under_risk_off"),
+    pytest.param([
+        ("BBB", "risk_off", ["market_exposure_below_50"], 90),
+        ("CCC", "risk_off", ["market_exposure_below_50"], 70),
+    ], "42", [], {
+        "from": "actionable", "to": "watch",
+        "reason_code": "market_exposure_below_50",
+        "reason_params": {"market_exposure": "42", "floor": 50},
+        "watch_count": 0, "risk_off_count": 2,
+    }, id="watch_empty_risk_off_full"),
+    pytest.param([
+        ("AAA", "watch", ["missing_setup_readiness", "stale_features"], 80),
+        ("BBB", "watch", ["missing_setup_readiness", "stale_features"], 70),
+        ("CCC", "watch", ["setup_not_ready"], 60),
+    ], "65", ["AAA", "BBB", "CCC"], {
+        "from": "actionable", "to": "watch", "reason_code": "stale_features",
+        "reason_params": {"count": 2, "required_session": "2026-10-30"},
+        "watch_count": 3, "risk_off_count": 0,
+    }, id="stale_features_name_their_session"),
+    pytest.param([
+        ("AAA", "watch", ["stale_features", "missing_setup_readiness"], 80),
+        ("BBB", "watch", ["missing_setup_readiness"], 70),
+        ("CCC", "watch", ["missing_setup_score"], 60),
+    ], "65", ["AAA", "BBB", "CCC"], {
+        "from": "actionable", "to": "watch", "reason_code": "stale_features",
+        "reason_params": {"count": 1, "required_session": "2026-10-30"},
+        "watch_count": 3, "risk_off_count": 0,
+    }, id="stale_features_outrank_a_more_common_shared_reason"),
+    pytest.param([
+        ("AAA", "watch", ["stale_features"], 80),
+        ("BBB", "watch", ["setup_not_ready"], 70),
+        ("CCC", "watch", ["setup_not_ready"], 60),
+    ], "65", ["AAA", "BBB", "CCC"], {
+        "from": "actionable", "to": "watch", "reason_code": "stale_features",
+        "reason_params": {"count": 1, "required_session": "2026-10-30"},
+        "watch_count": 3, "risk_off_count": 0,
+    }, id="stale_features_outrank_a_more_common_reason"),
+    pytest.param([
+        ("AAA", "watch", ["setup_not_ready"], 80),
+        ("BBB", "watch", ["liquidity_rejected"], 70),
+        ("CCC", "watch", ["setup_not_ready"], 60),
+    ], "65", ["AAA", "BBB", "CCC"], {
+        "from": "actionable", "to": "watch", "reason_code": "setup_not_ready",
+        "reason_params": {"count": 2}, "watch_count": 3, "risk_off_count": 0,
+    }, id="most_common_watch_reason"),
+    pytest.param([
+        ("AAA", "actionable", [], 80),
+        ("BBB", "watch", ["setup_not_ready"], 70),
+    ], "65", ["AAA"], None, id="actionable_rows_need_no_fallback"),
+    pytest.param([
+        ("SPY", "context", ["market_context"], None),
+    ], "65", [], None, id="nothing_to_fall_back_to"),
+])
+async def test_empty_actionable_falls_back_to_watch_with_a_reason(
+    db_session, social_runtime, monkeypatch, rows, exposure, symbols, fallback,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, rows, exposure=exposure)
+
+    response = await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d&view=actionable",
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert [item["canonical_symbol"] for item in payload["items"]] == symbols
+    assert payload["total"] == len(symbols)
+    assert payload["view"] == "actionable"
+    assert payload["fallback"] == fallback
+    summary = await _request(db_session, "GET", "/api/v1/social-signals/summary?market=US")
+    assert [item["canonical_symbol"] for item in summary.json()["top_signals"]] == [
+        symbol for symbol, state, *_ in rows if state == "actionable"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_filtered_empty_actionable_does_not_fall_back_to_watch(
+    db_session, social_runtime, monkeypatch,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [
+        ("AAA", "watch", ["setup_not_ready"], 80),
+        ("BBB", "watch", ["setup_not_ready"], 70),
+    ], exposure="65")
+    path = "/api/v1/social-signals/queue?market=US&window=7d&view=actionable"
+
+    filtered = (await _request(db_session, "GET", f"{path}&ticker=AAA")).json()
+    unfiltered = (await _request(db_session, "GET", path)).json()
+
+    assert (filtered["total"], filtered["items"], filtered["fallback"]) == (0, [], None)
+    assert unfiltered["fallback"]["reason_code"] == "setup_not_ready"
+    assert [item["canonical_symbol"] for item in unfiltered["items"]] == ["AAA", "BBB"]
+
+
+@pytest.mark.asyncio
+async def test_watch_fallback_pages_the_watch_rows(db_session, social_runtime, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [
+        ("AAA", "watch", ["setup_not_ready"], 80),
+        ("BBB", "watch", ["stale_features"], 70),
+        ("CCC", "watch", ["setup_not_ready"], 60),
+    ], exposure="65")
+
+    payload = (await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d&view=actionable&page=2&page_size=1",
+    )).json()
+
+    assert payload["total"] == 3
+    assert [item["canonical_symbol"] for item in payload["items"]] == ["BBB"]
+    assert payload["items"][0]["explanation"]["state_reasons"] == ["stale_features"]
+    assert payload["fallback"]["reason_params"] == {"count": 1, "required_session": "2026-10-30"}
+
+
+def _publish_empty_run_during_reads(db, monkeypatch):
+    """After each published-row read, point latest_published at an empty newer run."""
+    from app.infra.db.models.social_signals import SocialSignalRun, SocialSignalRunPointer
+    from app.infra.db.repositories.published_social_signal_reader import (
+        PublishedSocialSignalReader,
+    )
+
+    old = db.get(SocialSignalRun, "published-1")
+    db.add(SocialSignalRun(
+        id="published-2", registry_id=1, registry_version=2, mode="live",
+        provider="official", status="published", source_outcomes_json={},
+        application_progress_json={"sources": {}, "observations": {}},
+        prepared_json={"context": {}}, feature_run_ids_json={},
+        exposure_dates_json={}, coverage_json={}, created_at=old.created_at,
+        completed_at=old.completed_at, published_at=old.published_at,
+    ))
+    db.commit()
+    read = PublishedSocialSignalReader.queue
+
+    def publish_during_read(self, *args, **kwargs):
+        page = read(self, *args, **kwargs)
+        db.get(SocialSignalRunPointer, "latest_published").run_id = "published-2"
+        db.flush()
+        return page
+
+    monkeypatch.setattr(PublishedSocialSignalReader, "queue", publish_during_read)
+
+
+@pytest.mark.asyncio
+async def test_watch_fallback_reads_the_run_the_actionable_read_used(
+    db_session, social_runtime, monkeypatch,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [("AAA", "watch", ["setup_not_ready"], 80)], exposure="65")
+    _publish_empty_run_during_reads(db_session, monkeypatch)
+
+    payload = (await _request(
+        db_session, "GET",
+        "/api/v1/social-signals/queue?market=US&window=7d&view=actionable",
+    )).json()
+
+    assert payload["run_id"] == "published-1"
+    assert [item["canonical_symbol"] for item in payload["items"]] == ["AAA"]
+    assert payload["fallback"]["reason_code"] == "setup_not_ready"
+
+
+@pytest.mark.asyncio
+async def test_summary_counts_sources_of_the_run_its_signals_came_from(
+    db_session, social_runtime, monkeypatch,
+):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    runtime = social_runtime.read_runtime()
+    social_runtime.apply_runtime("live", "official", runtime.version, "admin")
+    _publish_states(db_session, [("AAA", "actionable", [], 80)], exposure="65")
+    _publish_empty_run_during_reads(db_session, monkeypatch)
+
+    payload = (await _request(
+        db_session, "GET", "/api/v1/social-signals/summary?market=US",
+    )).json()
+
+    assert [item["canonical_symbol"] for item in payload["top_signals"]] == ["AAA"]
+    assert (payload["enabled_source_count"], payload["participating_source_count"]) == (2, 2)
 
 
 @pytest.mark.asyncio

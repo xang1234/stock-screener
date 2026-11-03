@@ -40,6 +40,8 @@ from app.services.market_calendar_service import MarketCalendarService
 from app.services.opportunity_state_service import read_liquidity_evidence
 from app.services.security_master_service import security_master_resolver
 
+PUBLISHED_FEATURE_LAG_SESSIONS = 1
+
 
 def score_value(value):
     """Only finite observed engine scores on the documented 0–100 scale."""
@@ -65,7 +67,7 @@ class SocialConfirmationReader:
         self.registry = benchmark_registry or BenchmarkRegistryService()
         self.grace = timedelta(minutes=grace_minutes)
 
-    def freshness(self, market, as_of, actual_session, *, mic=None):
+    def freshness(self, market, as_of, actual_session, *, mic=None, max_sessions_behind=0):
         validate_utc_timestamp(as_of, "as_of")
         try:
             day = self.calendar.market_now(market, as_of, mic=mic).date()
@@ -76,10 +78,13 @@ class SocialConfirmationReader:
                 return DailyFreshness(None, actual_session, False, "calendar_unavailable")
         except (ValueError, RuntimeError, KeyError):
             return DailyFreshness(None, actual_session, False, "calendar_unavailable")
-        reason = ("missing_session" if actual_session is None else
-                  "future_session" if actual_session > required else
-                  "stale_session" if actual_session < required else None)
-        return DailyFreshness(required, actual_session, reason is None, reason)
+        if actual_session is None:
+            return DailyFreshness(required, None, False, "missing_session")
+        if actual_session > required:
+            return DailyFreshness(required, actual_session, False, "future_session")
+        behind = sum(actual_session < session <= required for session in sessions)
+        fresh = behind <= max_sessions_behind
+        return DailyFreshness(required, actual_session, fresh, None if fresh else "stale_session", behind)
 
     def pin_feature_run(self, market: str) -> PinnedFeatureRun:
         """Resolve once and share across candidates and all Theme measurements."""
@@ -121,7 +126,8 @@ class SocialConfirmationReader:
                     StockUniverse.active_filter()))
                 mic = security_master_resolver.resolve_identity(symbol=symbol, market=market,
                     exchange=security.exchange).mic if security else None
-                fact = self._read(symbol, market, now, mic=mic, pinned_run=pin, context=context)
+                fact = self._read(symbol, market, now, mic=mic, pinned_run=pin, context=context,
+                                  max_sessions_behind=PUBLISHED_FEATURE_LAG_SESSIONS)
                 feature = self.db.get(StockFeatureDaily, (pin.run_id, symbol)) if pin.run_id else None
                 details = feature.details_json or {} if feature else {}
                 rank = dict(group.cohort).get(details.get("ibd_industry_group"))
@@ -282,10 +288,11 @@ class SocialConfirmationReader:
             score_value(exposure.exposure_score) if exposure and freshness.fresh else None,
             benchmark, candidates, self.registry.TABLE_VERSION)
 
-    def _read(self, symbol, market, as_of, *, mic, pinned_run, context=None):
+    def _read(self, symbol, market, as_of, *, mic, pinned_run, context=None, max_sessions_behind=0):
         run = self.db.get(FeatureRun, pinned_run.run_id) if pinned_run.run_id is not None else None
         feature = self.db.get(StockFeatureDaily, (run.id, symbol)) if run else None
-        ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic)
+        ff = self.freshness(market, as_of, feature.as_of_date if feature else None, mic=mic,
+                            max_sessions_behind=max_sessions_behind)
         if mic is None:
             ff = replace(ff, fresh=False, reason="listing_mic_unknown")
         reasons = []

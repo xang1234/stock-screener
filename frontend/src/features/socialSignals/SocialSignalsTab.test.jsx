@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createTheme, ThemeProvider } from '@mui/material';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SocialSignalsTab from './SocialSignalsTab';
 import * as socialApi from '../../api/socialSignals';
@@ -13,8 +13,7 @@ vi.mock('../../api/socialSignals', async () => {
   const actual = await vi.importActual('../../api/socialSignals');
   return {
     ...actual,
-    getSocialQueue: vi.fn(), getSocialContext: vi.fn(),
-    getSocialUnresolved: vi.fn(), getSocialEvidence: vi.fn(),
+    getSocialQueue: vi.fn(), getSocialContext: vi.fn(), getSocialEvidence: vi.fn(),
   };
 });
 vi.mock('../../contexts/MarketContext', () => ({
@@ -34,9 +33,9 @@ const item = {
   enabled_list_count: 2, coverage: ['limited_history'],
   latest_mention: '2026-09-07T12:00:00Z', formula_version: 'social-signal-v1',
   normalization_scope: 'market', explanation: {
-    author_count: 5, setup_score: 76, readiness: 'ready', rs_rating_3m: 91,
-    group_rank: 3, theme: 'AI infrastructure', theme_id: 7,
-    state_reasons: ['setup_ready', 'market_confirmed'], security_kind: 'stock',
+    setup_score: 76, readiness: 'ready', rs_rating_3m: 91,
+    group_rank: 3, theme: 'AI infrastructure',
+    state_reasons: ['setup_not_ready'], security_kind: 'stock',
     acceleration: null,
     social_components: { authors: { value: 82, available_weight: 15, total_weight: 15 } },
     confirmation_components: { setup: { value: 76, available_weight: 20, total_weight: 20 } },
@@ -46,8 +45,19 @@ const item = {
 const queue = (overrides = {}) => ({
   supported: true, available: true, reason_code: null, market: 'HK', window: '7d',
   view: 'actionable', rank_mode: 'blended', page: 1, page_size: 50,
-  total: 1, items: [item], run_id: 'run-1', stale: false,
+  total: 1, items: [item], run_id: 'run-1', stale: true,
   published_at: '2026-09-07T12:00:00Z', ...overrides,
+});
+
+const watchItem = {
+  ...item, candidate_key: 'HK:0005', canonical_symbol: '0005', state: 'watch',
+  explanation: { ...item.explanation, market_exposure: '42' },
+};
+
+const exposureFallback = (watchCount, riskOffCount) => ({
+  from: 'actionable', to: 'watch', reason_code: 'market_exposure_below_50',
+  reason_params: { market_exposure: '42', floor: 50 },
+  watch_count: watchCount, risk_off_count: riskOffCount,
 });
 
 function LocationProbe() {
@@ -73,7 +83,6 @@ describe('SocialSignalsTab', () => {
     marketState.selectedMarket = 'HK';
     socialApi.getSocialQueue.mockResolvedValue(queue());
     socialApi.getSocialContext.mockResolvedValue(queue({ total: 0, items: [] }));
-    socialApi.getSocialUnresolved.mockResolvedValue(queue({ total: 0, items: [] }));
     socialApi.getSocialEvidence.mockResolvedValue({
       supported: true, available: true, candidate_key: 'HK:0700', window: '7d',
       item, related_listings: [{ market: 'HK', canonical_symbol: '0700' }],
@@ -83,6 +92,7 @@ describe('SocialSignalsTab', () => {
         engagement: { likes: 10 } }],
     });
   });
+  afterEach(() => vi.useRealTimers());
 
   it('shows an unsupported-market state without calling Social APIs', async () => {
     marketState.selectedMarket = 'KR';
@@ -92,31 +102,35 @@ describe('SocialSignalsTab', () => {
     expect(await screen.findByText(/available for US, HK, CN, JP, and TW markets/)).toBeInTheDocument();
     expect(socialApi.getSocialQueue).not.toHaveBeenCalled();
     expect(socialApi.getSocialContext).not.toHaveBeenCalled();
-    expect(socialApi.getSocialUnresolved).not.toHaveBeenCalled();
     expect(socialApi.getSocialEvidence).not.toHaveBeenCalled();
   });
 
-  it('renders a dense truthful queue with warming-up and stale states', async () => {
+  it('renders a dense queue with one plain freshness chip and no operator detail', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-07T15:00:00Z'));
+    socialApi.getSocialQueue.mockResolvedValue(queue({ stale: false }));
     renderTab();
     expect(await screen.findByText('0700')).toBeInTheDocument();
+    expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
+      'Symbol', 'Market', 'Queue', 'Social', 'Confirmation', 'Mentions', 'Setup',
+      'RS', 'Group', 'Theme', 'State',
+    ]);
     expect(screen.getByText('82')).toBeInTheDocument();
     expect(screen.getByText('89')).toBeInTheDocument();
-    expect(screen.getByText('1/2 lists · 7D')).toBeInTheDocument();
-    expect(screen.getByText(/Warming up/)).toBeInTheDocument();
+    expect(screen.getByText('Updated 3h ago')).toBeInTheDocument();
+    expect(screen.queryByText(/Formula/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/lists ·/)).not.toBeInTheDocument();
+    expect(socialApi.getSocialQueue.mock.calls.map(([controls]) => controls.view)).toEqual(['actionable']);
 
     socialApi.getSocialQueue.mockResolvedValue(queue({ stale: true }));
     fireEvent.click(screen.getByRole('button', { name: '14D' }));
-    expect(await screen.findByText('Stale')).toBeInTheDocument();
+    expect(await screen.findByText(/^Delayed, last update /)).toBeInTheDocument();
   });
 
-  it('changes ordering controls without hiding confirmation and separates all sections', async () => {
+  it('changes ordering controls without hiding confirmation and shows context under All Signals', async () => {
     socialApi.getSocialContext.mockResolvedValue(queue({ items: [{ ...item,
       candidate_key: 'HK:HSI', canonical_symbol: 'HSI', state: 'context',
       social_score: null, confirmation_score: null, queue_score: null }], total: 1 }));
-    socialApi.getSocialUnresolved.mockResolvedValue(queue({ items: [{ ...item,
-      candidate_key: 'unresolved:x', canonical_symbol: '$XYZ', market: null,
-      state: 'unresolved', social_score: null, confirmation_score: null,
-      queue_score: null }], total: 1 }));
     renderTab();
     await screen.findByText('0700');
     fireEvent.click(screen.getByRole('button', { name: 'Pure Social' }));
@@ -126,9 +140,8 @@ describe('SocialSignalsTab', () => {
     expect(await screen.findByText('73')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'All Signals' }));
     expect(await screen.findByRole('heading', { name: 'Context' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Needs resolution' })).toBeInTheDocument();
     expect(screen.getByText('HSI')).toBeInTheDocument();
-    expect(screen.getByText('$XYZ')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Needs resolution' })).not.toBeInTheDocument();
   });
 
   it('opens evidence before the chart and keeps posts plain linked text', async () => {
@@ -139,7 +152,7 @@ describe('SocialSignalsTab', () => {
     expect(screen.getByRole('link', { name: 'Open on X' })).toHaveAttribute(
       'href', 'https://x.com/analyst/status/1',
     );
-    expect(screen.getByText('setup ready')).toBeInTheDocument();
+    expect(screen.getByText('Setup not ready')).toBeInTheDocument();
     expect(screen.getByText('Acceleration —')).toBeInTheDocument();
     expect(screen.getByText('Social components')).toBeInTheDocument();
     expect(screen.getByText('82 · 15/15 weight')).toBeInTheDocument();
@@ -155,58 +168,107 @@ describe('SocialSignalsTab', () => {
     const first = renderTab();
     expect(await screen.findByText(/first Social Signal run/)).toBeInTheDocument();
     first.unmount();
-    socialApi.getSocialQueue.mockResolvedValueOnce(queue({ total: 0, items: [] }));
+    socialApi.getSocialQueue.mockResolvedValue(queue({ total: 0, items: [] }));
     renderTab();
-    expect(await screen.findByText('No signals match these controls.')).toBeInTheDocument();
+    expect(await screen.findByText('No Actionable signals in this window.')).toBeInTheDocument();
   });
 
-  it('explains source outcomes when every list fails to collect', async () => {
+  it('shows the Watch rows and reason the Actionable response falls back to', async () => {
+    socialApi.getSocialQueue.mockResolvedValue(queue({
+      items: [watchItem], fallback: exposureFallback(1, 2),
+    }));
+    renderTab();
+    expect(await screen.findByText(
+      'No actionable signals: market exposure is 42, below 50, so 2 ready setups are under Risk-off. Showing Watch.',
+    )).toBeInTheDocument();
+    expect(screen.getByText('0005')).toBeInTheDocument();
+    expect(screen.getByText('1 published candidates')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actionable' })).toHaveClass('MuiButton-contained');
+    expect(socialApi.getSocialQueue.mock.calls.map(([controls]) => controls.view)).toEqual(['actionable']);
+    fireEvent.click(screen.getByRole('button', { name: 'View Risk-off' }));
+    await waitFor(() => expect(socialApi.getSocialQueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ view: 'risk_off' }),
+    ));
+  });
+
+  it('explains an empty Watch when the ready setups are under Risk-off', async () => {
+    socialApi.getSocialQueue.mockResolvedValue(queue({
+      total: 0, items: [], fallback: exposureFallback(0, 1),
+    }));
+    renderTab();
+    expect(await screen.findByText(
+      'No actionable signals: market exposure is 42, below 50, so 1 ready setup is under Risk-off.',
+    )).toBeInTheDocument();
+    expect(screen.queryByText('No Actionable signals in this window.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Risk-off' })).toBeInTheDocument();
+  });
+
+  it('says no signals match the filters instead of the fallback when a filter empties Actionable', async () => {
+    socialApi.getSocialQueue.mockImplementation(async ({ filters }) => (filters.ticker
+      ? queue({ total: 0, items: [], fallback: null })
+      : queue({ items: [watchItem], fallback: exposureFallback(1, 2) })));
+    renderTab();
+    expect(await screen.findByText(/^No actionable signals: /)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'ZZZ' } });
+
+    expect(await screen.findByText('No signals match these filters.')).toBeInTheDocument();
+    expect(screen.queryByText(/^No actionable signals/)).not.toBeInTheDocument();
+    expect(socialApi.getSocialQueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ view: 'actionable', filters: { ticker: 'ZZZ' } }),
+    );
+  });
+
+  it('labels the queue when price features are one session old', async () => {
+    socialApi.getSocialQueue.mockResolvedValue(queue({ items: [
+      { ...item, explanation: { ...item.explanation, feature_sessions_behind: 1 } },
+    ] }));
+    const first = renderTab();
+    expect(await screen.findByText('Price features 1 session old')).toBeInTheDocument();
+    first.unmount();
+    socialApi.getSocialQueue.mockResolvedValue(queue({ items: [
+      { ...item, explanation: { ...item.explanation, feature_sessions_behind: 0 } },
+    ] }));
+    renderTab();
+    expect(await screen.findByText('0700')).toBeInTheDocument();
+    expect(screen.queryByText(/session old/)).not.toBeInTheDocument();
+  });
+
+  it('offers Watch and Risk-off as views', async () => {
+    renderTab();
+    await screen.findByText('0700');
+    fireEvent.click(screen.getByRole('button', { name: 'Risk-off' }));
+    await waitFor(() => expect(socialApi.getSocialQueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ view: 'risk_off' }),
+    ));
+    fireEvent.click(screen.getByRole('button', { name: 'Watch' }));
+    await waitFor(() => expect(socialApi.getSocialQueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ view: 'watch' }),
+    ));
+  });
+
+  it('says in one line that collection failed and points to Operations', async () => {
     socialApi.getSocialQueue.mockResolvedValueOnce(queue({
       available: false, reason_code: 'no_published_run', total: 0, items: [],
-      latest_attempt: {
-        run_id: 'failed-collection-1', status: 'collection_failed',
-        started_at: '2026-09-08T05:49:14Z', completed_at: null,
-        sources: [
-          { name: 'Minervini', read_status: 'failed', received_count: 0,
-            history_status: 'limited', reason_codes: ['provider_unavailable'] },
-          { name: 'AI Investing', read_status: 'failed', received_count: 0,
-            history_status: 'limited', reason_codes: ['provider_timeout'] },
-        ],
-      },
+      latest_attempt: { status: 'collection_failed' },
     }));
 
     renderTab();
 
-    expect(await screen.findByText('Latest collection did not publish')).toBeInTheDocument();
-    expect(screen.getByText('Minervini')).toBeInTheDocument();
-    expect(screen.getAllByText('Failed · 0 posts')).toHaveLength(2);
-    expect(screen.getByText('Provider unavailable')).toBeInTheDocument();
-    expect(screen.getByText('AI Investing')).toBeInTheDocument();
-    expect(screen.getByText('Provider timed out after one retry')).toBeInTheDocument();
-    expect(screen.getByText(/Analysis did not start because no enabled list collected/)).toBeInTheDocument();
+    expect(await screen.findByText('Latest collection did not publish.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Operations' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/operations#sources');
   });
 
-  it('explains terminal analysis failure and directs the admin to retry', async () => {
+  it('says analysis failed and points to Operations', async () => {
     socialApi.getSocialQueue.mockResolvedValueOnce(queue({
       available: false, reason_code: 'no_published_run', total: 0, items: [],
-      latest_attempt: {
-        run_id: 'failed-analysis-1', status: 'failed',
-        started_at: '2026-09-08T05:49:14Z', completed_at: '2026-09-08T05:50:14Z',
-        sources: [
-          { name: 'Minervini', read_status: 'success', received_count: 20,
-            history_status: 'limited', reason_codes: [] },
-          { name: 'AI Investing', read_status: 'success', received_count: 50,
-            history_status: 'limited', reason_codes: [] },
-        ],
-      },
+      latest_attempt: { status: 'failed' },
     }));
 
     renderTab();
 
-    expect(await screen.findByText('Latest analysis failed')).toBeInTheDocument();
-    expect(screen.getByText(/Review and retry failed work in Operations/)).toBeInTheDocument();
+    expect(await screen.findByText('Latest analysis failed.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Operations' })).toBeInTheDocument();
   });
 });

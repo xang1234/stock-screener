@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from .records import SUPPORTED_MARKETS, SignalStateDecision, SignalStateInput
 
+ACTIONABLE_EXPOSURE_FLOOR = 50
+
 
 def classify_signal_state(input: SignalStateInput) -> SignalStateDecision:
     if input.security_kind in {"broad_etf", "macro"}:
@@ -30,6 +32,6 @@ def classify_signal_state(input: SignalStateInput) -> SignalStateDecision:
             reasons.append(f"invalid_{name}")
     if reasons:
         return SignalStateDecision("watch", tuple(reasons))
-    if input.market_exposure < 50:
+    if input.market_exposure < ACTIONABLE_EXPOSURE_FLOOR:
         return SignalStateDecision("risk_off", ("market_exposure_below_50",))
     return SignalStateDecision("actionable")

@@ -23,7 +23,7 @@ export default function SocialThemePulse({ enabled, market }) {
     <Paper variant="outlined" sx={{ p: 1.5, my: 2 }}>
       <Typography variant="h6">Social Pulse</Typography>
       <Typography variant="body2" color="text.secondary">
-        Display-only evidence from the published Social run; it does not change legacy Theme ordering.
+        How much attention each theme gets on tracked X lists, and whether its stocks back it up.
       </Typography>
       {!marketSupported ? <Alert severity="info" sx={{ mt: 1 }}>
         {SOCIAL_SIGNAL_MARKETS_COPY}

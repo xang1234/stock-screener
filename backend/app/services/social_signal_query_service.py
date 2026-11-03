@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import quote
@@ -11,16 +13,22 @@ from urllib.parse import quote
 from sqlalchemy import select
 
 from app.config import settings
+from app.domain.social_signals.states import ACTIONABLE_EXPOSURE_FLOOR
 from app.infra.db.models.social_signals import (
     SocialPostTicker, SocialSignalRun, SocialSignalRunPointer,
     SocialSignalSnapshot, SocialSourceRegistry,
 )
 from app.infra.db.repositories.published_social_signal_reader import (
-    PublishedSocialSignalReader, SocialPublicationUnavailable,
+    PublishedSocialSignalReader,
 )
 
 
 WINDOW_DAYS = {"1d": 1, "7d": 7, "14d": 14}
+# Why a collected live run closed without publishing (application_progress_json.failure).
+_ATTEMPT_FAILURES = {
+    "analysis_failed", "publication_failed", "generation_superseded",
+    "social_runtime_changed", "source_participation_failed",
+}
 _PUBLIC_ATTEMPT_REASONS = {
     "bounded_provider_read", "daily_limit_exhausted", "incremental_gap_suspected",
     "provider_error", "provider_network_error",
@@ -94,7 +102,7 @@ class SocialSignalQueries:
             observed_at.append(_utc(parsed))
         return min(observed_at) if observed_at else None
 
-    def _latest_attempt(self):
+    def latest_live_attempt(self):
         run = self.db.scalar(select(SocialSignalRun).where(
             SocialSignalRun.mode == "live"
         ).order_by(
@@ -139,9 +147,14 @@ class SocialSignalQueries:
             status = "published"
         else:
             status = "failed"
+        failure_reason = None
+        if status == "failed":
+            reason = (run.application_progress_json.get("failure") or {}).get("reason_code")
+            failure_reason = reason if reason in _ATTEMPT_FAILURES else "not_published"
         return {
             "run_id": run.id,
             "status": status,
+            "failure_reason": failure_reason,
             "started_at": _utc(run.created_at),
             "completed_at": _utc(run.completed_at),
             "sources": sources,
@@ -161,12 +174,14 @@ class SocialSignalQueries:
         confirmation = candidate.get("confirmation") or {}
         confirmation_components = dict(confirmation.get("components", ()))
         social_components = dict(social.get("components", ()))
-        market_input = None
+        market_input, facts = None, {}
         for batch in context.get("market_batches", ()):
             market_input = next((value for value in batch.get("inputs", ())
                                  if value.get("candidate_key") == candidate_key), None)
             if market_input:
+                facts = dict(batch.get("facts", ())).get(candidate_key.partition(":")[2]) or {}
                 break
+        feature_freshness = facts.get("feature_freshness") or {}
         theme_component = confirmation_components.get("theme") or {}
         memberships = social.get("post_memberships", [])
         source_ids = set()
@@ -196,6 +211,9 @@ class SocialSignalQueries:
             "rs_rating_1m": (market_input or {}).get("rs_rating_1m"),
             "rs_rating_3m": (market_input or {}).get("rs_rating_3m"),
             "group_rank": (market_input or {}).get("group_rank"),
+            "feature_sessions_behind": (feature_freshness.get("sessions_behind")
+                                        if feature_freshness.get("fresh") else None),
+            "feature_required_session": feature_freshness.get("required_session"),
             "theme": theme_component.get("selected_key"),
             "confirmation_components": confirmation_components,
             "social_components": social_components,
@@ -204,12 +222,16 @@ class SocialSignalQueries:
             "source_names": source_names,
         }
 
+    @staticmethod
+    def _pinned_reasons(record):
+        reasons = dict(record.pinned_inputs).get("state_reasons") or ""
+        return list(reasons) if not isinstance(reasons, str) else [value for value in reasons.split(",") if value]
+
     @classmethod
     def _item(cls, record, run=None):
         pinned = dict(record.pinned_inputs)
-        reasons = pinned.get("state_reasons")
-        if isinstance(reasons, str):
-            pinned["state_reasons"] = [value for value in reasons.split(",") if value]
+        if "state_reasons" in pinned:
+            pinned["state_reasons"] = cls._pinned_reasons(record)
         pinned.update(cls._candidate_explanation(
             run, record.candidate_key, record.window_days
         ))
@@ -232,7 +254,8 @@ class SocialSignalQueries:
         }
 
     def queue(
-        self, *, market, window, view, rank_mode, page, page_size, filters=None
+        self, *, market, window, view, rank_mode, page, page_size, filters=None,
+        watch_fallback=True,
     ):
         base = {
             "supported": self._supported(), "available": False,
@@ -248,6 +271,12 @@ class SocialSignalQueries:
             if value is not None and str(value).strip()
         }
         run = self._publication()
+        if run is None:
+            attempt = self.latest_live_attempt()
+            return {
+                **base, "reason_code": "no_published_run",
+                "latest_attempt": attempt and {"status": attempt["status"]},
+            }
 
         def matches(record):
             item = self._item(record, run)
@@ -261,16 +290,18 @@ class SocialSignalQueries:
             }
             return all(value in haystacks.get(key, "") for key, value in filters.items())
 
-        try:
-            result = self.reader.queue(
-                market, WINDOW_DAYS[window], view, rank_mode, page, page_size,
-                item_filter=matches if filters else None,
-            )
-        except SocialPublicationUnavailable as exc:
-            return {
-                **base, "reason_code": exc.reason,
-                "latest_attempt": self._latest_attempt(),
-            }
+        days, scope = WINDOW_DAYS[window], {"item_filter": matches if filters else None, "run_id": run.id}
+        result = self.reader.queue(market, days, view, rank_mode, page, page_size, **scope)
+        total, items = result.total, [self._item(item, run) for item in result.items]
+        fallback = None
+        if watch_fallback and view == "actionable" and not total and not filters:
+            watch = self.reader.rows(market, days, "watch", rank_mode, run_id=run.id)
+            risk_off = self.reader.queue(market, days, "risk_off", rank_mode, 1, 1, run_id=run.id)
+            fallback = self._why_not_actionable(watch, risk_off, run)
+            if fallback:
+                total = len(watch)
+                items = [self._item(record, run)
+                         for record in watch[(page - 1) * page_size:page * page_size]]
         generated_at = _utc(run.created_at)
         published_at = _utc(run.published_at)
         oldest_observation_at = self._oldest_successful_observation_at(run)
@@ -278,8 +309,8 @@ class SocialSignalQueries:
             **base,
             "available": True,
             "reason_code": None,
-            "total": result.total,
-            "items": [self._item(item, run) for item in result.items],
+            "total": total,
+            "items": items,
             "run_id": run.id,
             "generated_at": generated_at,
             "published_at": published_at,
@@ -288,6 +319,35 @@ class SocialSignalQueries:
                 or (self.clock() - oldest_observation_at).total_seconds()
                 > settings.social_stale_after_hours * 3600
             ),
+            "fallback": fallback,
+        }
+
+    def _why_not_actionable(self, watch, risk_off, run):
+        if not watch and not risk_off.total:
+            return None
+        reasons = [self._pinned_reasons(record) for record in watch]
+        stale = [record for record, values in zip(watch, reasons) if "stale_features" in values]
+        counts = Counter(reason for values in reasons for reason in values)
+        if risk_off.items:
+            code = "market_exposure_below_50"
+            exposure = self._candidate_explanation(
+                run, risk_off.items[0].candidate_key, risk_off.items[0].window_days
+            ).get("market_exposure")
+            params = {"market_exposure": exposure, "floor": ACTIONABLE_EXPOSURE_FLOOR}
+        elif stale:
+            code = "stale_features"
+            params = {"count": len(stale), "required_session": self._candidate_explanation(
+                run, stale[0].candidate_key, stale[0].window_days
+            ).get("feature_required_session")}
+        elif counts:
+            code, count = counts.most_common(1)[0]
+            params = {"count": count}
+        else:
+            code, params = None, {}
+        return {
+            "from": "actionable", "to": "watch", "reason_code": code,
+            "reason_params": params, "watch_count": len(watch),
+            "risk_off_count": risk_off.total,
         }
 
     def section(self, *, market, window, section, page, page_size):
@@ -341,7 +401,6 @@ class SocialSignalQueries:
             datetime.fromisoformat(data["latest_mention"])
             if data["latest_mention"] else None
         )
-        from decimal import Decimal
         from app.domain.social_signals.records import SocialSnapshotRecord
         for field in ("social_score", "confirmation_score", "queue_score"):
             data[field] = Decimal(data[field]) if data[field] is not None else None
@@ -498,14 +557,14 @@ class SocialSignalQueries:
             }
         queue = self.queue(
             market=market, window="7d", view="actionable",
-            rank_mode="blended", page=1, page_size=5,
+            rank_mode="blended", page=1, page_size=5, watch_fallback=False,
         )
         if not queue["available"]:
             return {
                 "supported": True, "available": False,
                 "reason_code": queue["reason_code"], "market": market,
             }
-        run = self._publication()
+        run = self.db.get(SocialSignalRun, queue["run_id"])
         pins = run.application_progress_json.get("sources", {})
         observations = run.application_progress_json.get("observations", {})
         themes = [value for value in (run.prepared_json or {}).get("theme_evidence", [])
