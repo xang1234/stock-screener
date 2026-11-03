@@ -4,8 +4,8 @@ Universe ingestion wrote is_common_stock = true for every row. On the live
 database on 2026-11-03 that held for all 4,105 US Exchange Traded Fund rows and
 335 Closed-End Fund rows, so they counted as common stock in RS percentiles and
 breadth. Ingestion now classifies them on insert and refresh, and this backfills
-rows already stored. The prefixes match
-app.domain.universe.ingestion.FUND_INDUSTRY_PREFIXES.
+rows already stored. The prefixes are those of
+app.domain.universe.ingestion.FUND_INDUSTRY_PREFIXES at this revision.
 """
 
 from alembic import op
