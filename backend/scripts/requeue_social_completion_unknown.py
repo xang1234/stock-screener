@@ -21,8 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 ERROR_CODES = ("completion_unknown", "provider_rejected")
-# Claim expiry marks a running request uncertain after 10 minutes, and metered calls
-# time out after 30 s, so an attempt this recent may still return a result.
+# Claim expiry marks a running request uncertain after 10 minutes, and extraction calls
+# time out after 120 s (REQUEST_TIMEOUT_SECONDS), so an attempt this recent may still return a result.
 IN_FLIGHT_GRACE = timedelta(hours=1)
 
 

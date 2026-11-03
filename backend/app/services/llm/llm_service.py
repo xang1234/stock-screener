@@ -307,6 +307,8 @@ class LLMService:
             # Both LiteLLM and its provider SDK have retry layers. This path is
             # one reserved dispatch and must bypass the outer fallback/error logs.
             params.update(num_retries=0, max_retries=0)
+            if "timeout" in kwargs:
+                params["timeout"] = kwargs["timeout"]
             params["no-log"] = True
             try:
                 self._apply_provider_overrides(params)
