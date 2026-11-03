@@ -39,14 +39,14 @@ describe('Social Signal read client', () => {
   it('uses separately cached context, global unresolved, and encoded evidence routes', async () => {
     apiClient.get.mockResolvedValue({ data: { items: [] } });
     await getSocialContext({ market: 'JP', window: '7d', page: 1, pageSize: 50 });
-    await getSocialUnresolved({ market: 'JP', window: '7d', page: 3, pageSize: 10 });
+    await getSocialUnresolved({ window: '7d', page: 3, pageSize: 10 });
     await getSocialEvidence('JP:6758/primary', '1d');
     expect(apiClient.get.mock.calls).toEqual([
       ['/v1/social-signals/context', { params: {
         market: 'JP', window: '7d', page: 1, page_size: 50,
       } }],
       ['/v1/social-signals/unresolved', { params: {
-        scope: 'unknown', market: 'JP', window: '7d', page: 3, page_size: 10,
+        window: '7d', page: 3, page_size: 10,
       } }],
       ['/v1/social-signals/candidates/JP%3A6758%2Fprimary/evidence', {
         params: { window: '1d' },

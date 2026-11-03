@@ -64,19 +64,23 @@ export const featureLagLabel = (explanation = {}) => {
 
 const FALLBACK_REASONS = {
   market_exposure_below_50: ({ market_exposure: exposure, floor }, { risk_off_count: count }) => (
-    `market exposure is ${formatSocialScore(exposure)}, below ${floor}, so ${count} ready setup${count === 1 ? ' is' : 's are'} under Risk-off`
+    `market exposure is ${Math.floor(Number(exposure))}, below ${floor}, so ${count} ready setup${count === 1 ? ' is' : 's are'} under Risk-off`
   ),
   stale_features: ({ count, required_session: session }, { watch_count: total }) => (
     `price features for ${count} of ${total} Watch signals are not yet updated for ${session || 'the latest session'}`
   ),
 };
 
-export const fallbackText = (fallback) => {
+export const noActionableText = (fallback) => {
   const { reason_code: code, reason_params: params = {}, watch_count: watchCount } = fallback;
   const reason = code && (FALLBACK_REASONS[code]?.(params, fallback)
     ?? `${stateReasonText(code).toLowerCase()} for ${params.count} of ${watchCount} Watch signals`);
-  return `No actionable signals${reason ? `: ${reason}` : ''}.${watchCount ? ' Showing Watch.' : ''}`;
+  return `No actionable signals${reason ? `: ${reason}` : ''}.`;
 };
+
+export const fallbackText = (fallback) => (
+  `${noActionableText(fallback)}${fallback.watch_count ? ' Showing Watch.' : ''}`
+);
 
 export const visibleSocialRows = (rows = [], filters = {}) => rows.filter((row) => {
   if (['context', 'unresolved'].includes(row.state)) return false;

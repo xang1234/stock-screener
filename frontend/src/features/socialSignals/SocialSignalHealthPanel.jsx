@@ -16,7 +16,6 @@ import {
 } from '../../api/socialSignals';
 import { ATTEMPT_TITLES } from './socialSignalPresentation';
 
-const UNRESOLVED_PLACEHOLDER_MARKET = 'US';
 const UNRESOLVED_PAGE_SIZE = 50;
 const money = (value) => `US$${value ?? '—'}`;
 const errorCode = (error) => error?.response?.data?.detail?.code
@@ -104,8 +103,7 @@ function SocialAdminBody({ adminKey, keyGeneration }) {
   const unresolved = useQuery({
     queryKey: ['socialAdmin', 'unresolved', keyGeneration, unresolvedPage],
     queryFn: () => getSocialUnresolved({
-      market: UNRESOLVED_PLACEHOLDER_MARKET, window: '7d', page: unresolvedPage,
-      pageSize: UNRESOLVED_PAGE_SIZE,
+      window: '7d', page: unresolvedPage, pageSize: UNRESOLVED_PAGE_SIZE,
     }),
     enabled,
     placeholderData: keepPreviousData,

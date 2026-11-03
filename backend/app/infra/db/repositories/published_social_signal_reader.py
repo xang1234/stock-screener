@@ -51,7 +51,8 @@ class PublishedSocialSignalReader:
 
     @staticmethod
     def _select(db, market, window_days, view, rank_mode, run_id):
-        if market not in SUPPORTED_MARKETS or window_days not in {1, 7, 14}:
+        market_ok = market in SUPPORTED_MARKETS or (market is None and view == "unresolved")
+        if not market_ok or window_days not in {1, 7, 14}:
             raise ValueError("invalid_market_or_window")
         if view not in {"all", "actionable", "watch", "risk_off", "context", "unresolved"}:
             raise ValueError("invalid_queue_selection")

@@ -5,7 +5,9 @@ import {
 
 import { getSocialSummary } from '../../api/socialSignals';
 import { isSocialSignalMarket, SOCIAL_SIGNAL_MARKETS_COPY } from './socialSignalMarkets';
-import { explanationMap, featureLagLabel, formatSocialScore } from './socialSignalPresentation';
+import {
+  explanationMap, featureLagLabel, formatSocialScore, noActionableText,
+} from './socialSignalPresentation';
 
 const unavailableCopy = {
   no_published_run: 'The first Social Signal run is still warming up.',
@@ -56,13 +58,19 @@ export default function DailySocialSignalsCard({ market, onOpen }) {
               Last success {data.published_at ? new Date(data.published_at).toLocaleString() : '—'}
             </Typography>
           </Stack>
-          <Stack direction="row" gap={1.5} flexWrap="wrap">
-            {signals.map((item) => (
-              <Typography key={item.candidate_key} variant="body2">
-                <strong>{item.canonical_symbol}</strong> {formatSocialScore(item.queue_score)}
-              </Typography>
-            ))}
-          </Stack>
+          {signals.length ? (
+            <Stack direction="row" gap={1.5} flexWrap="wrap">
+              {signals.map((item) => (
+                <Typography key={item.candidate_key} variant="body2">
+                  <strong>{item.canonical_symbol}</strong> {formatSocialScore(item.queue_score)}
+                </Typography>
+              ))}
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              {data.fallback ? noActionableText(data.fallback) : 'No actionable signals in the latest run.'}
+            </Typography>
+          )}
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
             {(data.dominant_themes || []).slice(0, 3).map((theme) => (
               `${themeLabel(theme.theme_key)} · ${theme.accepted_company_count} companies`

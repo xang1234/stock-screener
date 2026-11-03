@@ -266,7 +266,6 @@ class SocialSignalQueries:
 
     def queue(
         self, *, market, window, view, rank_mode, page, page_size, filters=None,
-        watch_fallback=True,
     ):
         base = {
             "supported": self._supported(), "available": False,
@@ -305,7 +304,7 @@ class SocialSignalQueries:
         result = self.reader.queue(market, days, view, rank_mode, page, page_size, **scope)
         total, items = result.total, [self._item(item, run) for item in result.items]
         fallback = None
-        if watch_fallback and view == "actionable" and not total and not filters:
+        if view == "actionable" and not total and not filters:
             watch = self.reader.rows(market, days, "watch", rank_mode, run_id=run.id)
             risk_off = self.reader.queue(market, days, "risk_off", rank_mode, 1, 1, run_id=run.id)
             fallback = self._why_not_actionable(watch, risk_off, run)
@@ -591,13 +590,14 @@ class SocialSignalQueries:
             }
         queue = self.queue(
             market=market, window="7d", view="actionable",
-            rank_mode="blended", page=1, page_size=5, watch_fallback=False,
+            rank_mode="blended", page=1, page_size=5,
         )
         if not queue["available"]:
             return {
                 "supported": True, "available": False,
                 "reason_code": queue["reason_code"], "market": market,
             }
+        actionable = [] if queue["fallback"] else queue["items"]
         run = self.db.get(SocialSignalRun, queue["run_id"])
         pins = run.application_progress_json.get("sources", {})
         observations = run.application_progress_json.get("observations", {})
@@ -610,7 +610,8 @@ class SocialSignalQueries:
             "supported": True, "available": True, "reason_code": None,
             "market": market, "generated_at": queue["generated_at"],
             "published_at": queue["published_at"], "stale": queue["stale"],
-            "top_signals": queue["items"], "dominant_themes": [{
+            "top_signals": actionable,
+            "fallback": queue["fallback"], "dominant_themes": [{
                 "theme_key": value.get("theme_key"),
                 "accepted_company_count": value.get("accepted_company_count", 0),
                 "components": dict(value.get("components", ())),
