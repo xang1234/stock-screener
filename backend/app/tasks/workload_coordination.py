@@ -46,8 +46,9 @@ PIPELINE_CATCH_UP_PREFIX = "pipeline_catch_up"
 # heartbeat outage: such a claim never locks the market for longer.
 PIPELINE_CHAIN_TTL_SECONDS = 48 * 3600
 PIPELINE_CHAIN_HEARTBEAT_SECONDS = 300
-# Outlives a weekend of hourly catch-up ticks for one session.
-PIPELINE_CATCH_UP_TTL_SECONDS = 96 * 3600
+# Keeps "at most two catch-ups per session" through a host outage or a multi-day
+# market closure, while that session stays the last completed one.
+PIPELINE_CATCH_UP_TTL_SECONDS = 14 * 24 * 3600
 # How long heartbeats must find no trace of a chain before its claim is
 # released. One check can fall between a worker taking a stage and storing its
 # state, so it takes two; half an interval apart, so two heartbeats that

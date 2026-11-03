@@ -485,4 +485,4 @@ def test_pipeline_catch_up_count_is_per_market_session_and_outlives_a_weekend():
 
     assert count == 3
     pipe.incr.assert_called_once_with("pipeline_catch_up:us:2026-10-28")
-    pipe.expire.assert_called_once_with("pipeline_catch_up:us:2026-10-28", 96 * 3600)
+    pipe.expire.assert_called_once_with("pipeline_catch_up:us:2026-10-28", 14 * 24 * 3600)
