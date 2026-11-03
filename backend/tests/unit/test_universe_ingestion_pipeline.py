@@ -523,6 +523,7 @@ def test_pipeline_refresh_derives_common_stock_from_the_merged_industry() -> Non
                 ("ES3.SI", "Exchange Traded Fund", True, "sg_ingest"),
                 ("C2PU.SI", "Closed-End Fund - Equity", False, "sg_ingest"),
                 ("D05.SI", None, False, "manual"),
+                ("A17U.SI", "Exchange Traded Fund", True, "sg_ingest"),
             ]
         ]
     )
@@ -533,7 +534,14 @@ def test_pipeline_refresh_derives_common_stock_from_the_merged_industry() -> Non
         _row("ES3.SI", local_code="ES3", industry="Exchange Traded Fund"),
         _row("C2PU.SI", local_code="C2PU", source_row_number=2),
         _row("D05.SI", local_code="D05", source_row_number=3),
+        # A placeholder industry keeps the stored fund industry, so the fund stays non-common.
+        _row("A17U.SI", local_code="A17U", industry="Other", source_row_number=4),
     )
 
-    assert _common_stock_flags(db) == {"C2PU.SI": True, "D05.SI": True, "ES3.SI": False}
+    assert _common_stock_flags(db) == {
+        "A17U.SI": False,
+        "C2PU.SI": True,
+        "D05.SI": True,
+        "ES3.SI": False,
+    }
     db.close()

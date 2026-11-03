@@ -107,9 +107,8 @@ RUN_MARKET = func.coalesce(
 )
 
 
-# Marked common stock, or missing from the universe (used with an outer join). Ingestion
-# marks funds not common stock. A symbol the universe no longer lists passes, so delisted
-# symbols' past picks still count.
+# Common stock, or absent from the universe (outer join) so delisted symbols' past picks
+# still count. Ingestion marks funds not common stock.
 COMMON_STOCK_OR_UNLISTED = StockUniverse.is_common_stock.is_not(False)
 
 
