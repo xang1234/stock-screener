@@ -38,7 +38,7 @@ from app.services.price_row_normalization import (
     normalize_price_frame,
     stock_price_frames_by_symbol,
 )
-from app.services.validation_service import NOT_A_FUND
+from app.services.validation_service import COMMON_STOCK_OR_UNLISTED
 
 REPLAY_TOP_N = 10
 SCREENERS = ["minervini"]
@@ -221,12 +221,12 @@ def _runs_to_replay(
 
 
 def _eligible_symbols(db: Session, run_ids: list[int]) -> list[str]:
-    """Every non-fund symbol rated in any of the runs."""
+    """Every symbol rated in any of the runs that is common stock or no longer listed."""
     return sorted(
         symbol
         for (symbol,) in db.query(StockRsSnapshot.symbol)
         .outerjoin(StockUniverse, StockUniverse.symbol == StockRsSnapshot.symbol)
-        .filter(StockRsSnapshot.run_id.in_(run_ids), NOT_A_FUND)
+        .filter(StockRsSnapshot.run_id.in_(run_ids), COMMON_STOCK_OR_UNLISTED)
         .distinct()
     )
 

@@ -107,12 +107,9 @@ RUN_MARKET = func.coalesce(
 )
 
 
-# is_common_stock alone misses ETFs: finviz marks them common stock. A symbol the
-# universe no longer lists passes, so delisted symbols' past picks still count.
-NOT_A_FUND = and_(
-    StockUniverse.is_common_stock.is_not(False),
-    StockUniverse.industry.is_distinct_from("Exchange Traded Fund"),
-)
+# Common stock, or absent from the universe (outer join) so delisted symbols' past picks
+# still count. Ingestion marks funds not common stock.
+COMMON_STOCK_OR_UNLISTED = StockUniverse.is_common_stock.is_not(False)
 
 
 # A pick is a stock both core methods scored. Rows only the IPO screener ran
@@ -122,7 +119,7 @@ NOT_A_FUND = and_(
 SCAN_PICK_ELIGIBILITY = and_(
     StockFeatureDaily.minervini_score.is_not(None),
     StockFeatureDaily.canslim_score.is_not(None),
-    NOT_A_FUND,
+    COMMON_STOCK_OR_UNLISTED,
 )
 
 
