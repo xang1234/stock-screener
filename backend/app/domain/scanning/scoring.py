@@ -17,10 +17,6 @@ underlying fundamentals are incomplete (per T2's
 - **Downgrade**: completeness between ``QUALITY_EXCLUSION_THRESHOLD``
   and ``QUALITY_DOWNGRADE_THRESHOLD`` drops the rating one tier
   (STRONG_BUY → BUY, BUY → WATCH, WATCH → WATCH).
-- **Tie-break**: rows with equal ``composite_score`` should break by
-  higher ``field_completeness_score``. This module documents the
-  semantics but does not mutate the score itself (keeps the displayed
-  score honest).
 
 Unknown completeness (``None``) is a pass-through: legacy rows from
 before the T2 migration are treated as "unknown quality" rather than

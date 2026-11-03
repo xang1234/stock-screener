@@ -74,7 +74,9 @@ class SqlOptionsCandidateSource:
                 dividend_source=(
                     "pinned_feature_run" if dividend_yield is not None else None
                 ),
-                core_scored=is_core_scored(feature.minervini_score, feature.canslim_score),
+                core_scored=is_core_scored(
+                    details.get("minervini_score"), details.get("canslim_score")
+                ),
             )
             candidates.append(item)
             rs_rating = _number(details.get("rs_rating"))
