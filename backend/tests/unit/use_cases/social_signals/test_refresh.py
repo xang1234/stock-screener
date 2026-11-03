@@ -965,6 +965,54 @@ async def test_a_post_that_ages_out_while_the_run_waits_is_a_gap_not_a_block(tmp
 
 
 @pytest.mark.asyncio
+async def test_a_post_scored_under_one_of_its_revisions_is_not_counted_as_unanalysed(tmp_path):
+    from sqlalchemy import select
+
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_signal_query_service import SocialSignalQueries
+
+    engine, sessions, writer, refresh = real_refresh(tmp_path, FixtureLLM())
+    refresh.backlog.max_calls_per_run = 1
+    refresh.providers["official"].read_source = lists_returning({
+        "1": (social_post("shared", age=timedelta(days=3)), social_post("other")),
+        "2": (social_post("shared", text="$AAA cooling, now shipping", age=timedelta(days=3)),),
+    })
+
+    assert (await refresh.execute("fixture", NOW)).published is True
+
+    with sessions() as db:
+        states = sorted((work.input_snapshot_json["provider_post_id"], work.state)
+                        for work in db.scalars(select(SocialExtractionWork)))
+        assert states == [("other", "pending"), ("shared", "pending"), ("shared", "succeeded")]
+        assert SocialSignalQueries(db).latest_live_attempt()["unanalyzed_posts"] == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_run_left_with_only_unresolved_posts_to_score_keeps_the_previous_snapshot(tmp_path):
+    from app.infra.db.models.social_signals import SocialSignalRunPointer
+
+    engine, sessions, writer, refresh = real_refresh(
+        tmp_path, FixtureLLM(malformed_post_ids={"a-1"}), run_id_factory=lambda origin, now: f"run-{now:%H}",
+    )
+    provider = refresh.providers["official"]
+    provider.read_source = lists_returning({"1": (social_post("z-1", "$ZZZ cooling"),),
+                                            "2": (social_post("z-2", "$ZZZ cooling"),)})
+    assert (await refresh.execute("scheduled", NOW)).published is True
+
+    later = NOW + timedelta(hours=6)
+    writer.clock = lambda: later
+    provider.read_source = lists_returning({"1": (social_post("a-1"),),
+                                            "2": (social_post("z-3", "$ZZZ cooling"),)})
+    result = await refresh.execute("scheduled", later)
+
+    assert (result.processing_status, result.reason_codes) == ("failed", ("analysis_failed",))
+    with sessions() as db:
+        assert db.get(SocialSignalRunPointer, "latest_published").run_id == "run-12"
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_a_retained_post_that_ages_out_while_the_run_waits_stays_out_of_scoring(tmp_path):
     from sqlalchemy import select
 
