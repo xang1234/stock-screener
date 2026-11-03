@@ -72,6 +72,7 @@ def _taken(db, row, model):
     from app.infra.db.models.social_analysis import SocialExtractionWork
 
     return db.scalar(select(SocialExtractionWork.id).where(
+        SocialExtractionWork.id != row.id,
         SocialExtractionWork.content_item_id == row.content_item_id,
         SocialExtractionWork.input_hash == row.input_hash,
         SocialExtractionWork.prompt_version == row.prompt_version,
@@ -86,15 +87,26 @@ def _plan(db, now, error_code, since, until, model):
     from app.infra.db.models.social_analysis import SocialExtractionWork
     from app.services.social_signal_backlog_service import NO_SIGNAL_GATE
 
-    plan = []
+    plan, assigned = [], set()
+
+    def moved(row):
+        """Whether row can take model: no other row holds it, nor one this plan moves first."""
+        if row.selected_model == model:
+            return True
+        identity = (row.content_item_id, row.input_hash, row.prompt_version, row.schema_version)
+        if identity in assigned or _taken(db, row, model):
+            return False
+        assigned.add(identity)
+        return True
+
     for kind, row in _classify(db, now, error_code, since, until):
-        plan.append(("retarget_duplicate" if kind == "requeue" and model and _taken(db, row, model) else kind, row))
+        plan.append(("retarget_duplicate" if kind == "requeue" and model and not moved(row) else kind, row))
     if model:
         for row in db.scalars(select(SocialExtractionWork).where(
             SocialExtractionWork.state.in_(("pending", "waiting_budget", "failed_retryable")),
             SocialExtractionWork.selected_model.not_in((model, NO_SIGNAL_GATE)),
         ).order_by(SocialExtractionWork.id)):
-            plan.append(("retarget_duplicate" if _taken(db, row, model) else "retarget", row))
+            plan.append(("retarget" if moved(row) else "retarget_duplicate", row))
     return plan
 
 

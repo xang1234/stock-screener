@@ -146,3 +146,38 @@ def test_requeue_moves_requeued_and_waiting_work_to_another_model(backlog):
     assert models == {unknown: (model, "pending"), waiting: (model, "waiting_budget"),
                       taken: ("synthetic/requested", "pending")}
     assert requeue(backlog, LATER, apply=True, model=model) == {"retarget_duplicate": 1}
+
+
+def test_requeue_with_the_current_model_still_requeues(backlog):
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    work_id = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    strand(backlog, work_id, "uncertain")
+
+    assert requeue(backlog, LATER, apply=True, model="synthetic/requested") == {"requeue": 1}
+    assert states(backlog, work_id) == [("pending", None, None)]
+
+
+def test_requeue_moves_only_one_of_two_old_models_onto_the_same_post(backlog):
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from scripts.requeue_social_completion_unknown import requeue
+
+    configure_budget(backlog)
+    first = enqueue(backlog, processor(backlog, FakeLLM()), post(1))
+    with backlog.begin() as db:
+        source = db.get(SocialExtractionWork, first)
+        source.state = "waiting_budget"
+        twin = SocialExtractionWork(
+            content_item_id=source.content_item_id, input_hash=source.input_hash,
+            prompt_version=source.prompt_version, schema_version=source.schema_version,
+            selected_model="other/old", input_snapshot_json=source.input_snapshot_json,
+            state="pending", created_at=NOW, updated_at=NOW)
+        db.add(twin)
+        db.flush()
+        second = twin.id
+
+    model = "anthropic/claude-haiku-5-5"
+    assert requeue(backlog, LATER, apply=True, model=model) == {"retarget": 1, "retarget_duplicate": 1}
+    with backlog() as db:
+        assert sorted(db.get(SocialExtractionWork, i).selected_model for i in (first, second)) == [model, "other/old"]
