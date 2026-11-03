@@ -691,6 +691,57 @@ def test_expired_queued_claim_does_not_dispatch_after_long_previous_call(backlog
     assert llm.seen == ["1"]
 
 
+def test_a_twenty_call_run_that_outlasts_one_claim_ttl_sends_every_batch(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as process_backlog
+    configure_budget(backlog)
+    elapsed = [0]
+    monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0])
+    llm = FakeLLM()
+    original = llm.completion
+    async def haiku_paced(**kwargs):
+        response = await original(**kwargs)
+        elapsed[0] += 35
+        return response
+    llm.completion = haiku_paced
+    worker = processor(backlog, llm)
+    for number in range(1, 21):
+        enqueue(backlog, worker, post(number))
+
+    result = asyncio.run(worker.execute(NOW, 20))
+
+    assert (result.succeeded, result.deferred, llm.calls) == (20, 0, 20)
+
+
+def test_a_batch_left_for_claim_expiry_is_not_renewed_by_later_dispatches(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as process_backlog
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_llm_budget_service import SocialLLMBudgetService
+    configure_budget(backlog)
+    elapsed = [0]
+    monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0])
+    outage = [True]
+    price = SocialLLMBudgetService.price_in_transaction
+
+    def first_lookup_fails(db, model):
+        if outage:
+            outage.clear()
+            elapsed[0] = 300
+            raise RuntimeError("ledger unavailable")
+        return price(db, model)
+
+    monkeypatch.setattr(SocialLLMBudgetService, "price_in_transaction", staticmethod(first_lookup_fails))
+    llm = FakeLLM()
+    work_ids = [enqueue(backlog, processor(backlog, llm), post(number)) for number in (1, 2)]
+
+    first = asyncio.run(processor(backlog, llm).execute(NOW, 2))
+    later = asyncio.run(processor(backlog, llm).execute(NOW + timedelta(minutes=11), 1))
+
+    with backlog() as db:
+        states = [db.get(SocialExtractionWork, work_id).state for work_id in work_ids]
+    assert ((first.succeeded, first.deferred), later.succeeded, llm.calls, states) == (
+        (1, 1), 1, 2, ["succeeded", "succeeded"])
+
+
 def test_runtime_off_mid_batch_stops_new_model_dispatch_and_releases_reservation(backlog):
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
     with backlog.begin() as db:
@@ -1302,6 +1353,53 @@ def test_failure_before_dispatch_is_left_for_claim_expiry_not_completion_unknown
         attempts = [attempt.state for attempt in db.scalars(select(SocialLLMAttempt))]
         assert ((first.deferred, first.failed), later.succeeded, llm.calls, work.state, attempts) == (
             (1, 0), 1, 1, "succeeded", ["reconciled"])
+
+
+def test_a_client_that_fails_to_build_is_left_for_claim_expiry_not_completion_unknown(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as module
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+
+    llm = FakeLLM()
+    broken = [True]
+
+    def build(**_kwargs):
+        if broken:
+            raise RuntimeError("client construction failed")
+        return llm
+
+    monkeypatch.setattr(module, "LLMService", build)
+    work_id = enqueue(backlog, processor(backlog, None), post(1))
+
+    first = asyncio.run(processor(backlog, None).execute(NOW, 1))
+    broken.clear()
+    later = asyncio.run(processor(backlog, None).execute(NOW + timedelta(minutes=11), 1))
+
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        attempts = [attempt.state for attempt in db.scalars(select(SocialLLMAttempt))]
+        assert ((first.deferred, first.failed), later.succeeded, llm.calls, work.state, attempts) == (
+            (1, 0), 1, 1, "succeeded", ["reconciled"])
+
+
+def test_a_client_missing_its_key_fails_the_post_without_reserving(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as module
+    from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
+    from app.services.llm.llm_service import LLMPreDispatchError
+
+    def build(**_kwargs):
+        raise LLMPreDispatchError("metered_provider_configuration_error")
+
+    monkeypatch.setattr(module, "LLMService", build)
+    worker = processor(backlog, None)
+    work_id = enqueue(backlog, worker, post(1))
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    with backlog() as db:
+        work = db.get(SocialExtractionWork, work_id)
+        attempts = [attempt.state for attempt in db.scalars(select(SocialLLMAttempt))]
+        assert (result.failed, attempts, work.state, work.error_code) == (
+            1, [], "failed_terminal", "llm_configuration_error")
 
 
 @pytest.mark.parametrize("admin_requested", [False, True])

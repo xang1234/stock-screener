@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 PROVIDER = "anthropic"
 # On 40 live posts Claude Haiku 5.5 kept 11 claims at medium against 7-9 at low;
-# high took ~41 s a call, close to the backlog's claim expiry for a 20-call run.
+# high took ~41 s a call.
 EFFORT = "medium"
 
 

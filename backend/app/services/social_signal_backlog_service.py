@@ -11,7 +11,7 @@ import re
 from time import monotonic
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.domain.social_signals.records import (
     SKIPPED_NO_SIGNAL, BacklogResult, ExtractionPostJudgment, ExtractionResult, SocialPostRecord,
@@ -37,6 +37,7 @@ _WORD = re.compile(r"\w+")
 _SYMBOL = re.compile(r"[A-Za-z0-9]+(?:[.\-][A-Za-z]{1,3}\b)?")  # MU, BRK.B, 0700.HK, 3008.TWO
 _CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 _SYMBOL_BASE = re.compile(r"[.\-]")
+_CLAIM_TTL = timedelta(minutes=10)
 
 
 def _alias_phrases():
@@ -83,6 +84,7 @@ class _CompletionUnknown(Exception):
 class _RunLedger:
     def __init__(self, calls):
         self.calls_left, self.answered, self.parsed, self.refusal_status = calls, 0, 0, None
+        self.sendable_tokens = set()
 
     @property
     def stopped(self):
@@ -115,6 +117,15 @@ class _MeteredCompletion:
         if price is None:
             self.owner._finish_many(self.claims, "waiting_budget", "pricing_not_configured")
             raise _Deferred(len(self.claims))
+        try:
+            if self.owner.llm is not None:
+                llm = self.owner.llm
+            elif kwargs["model"].startswith("anthropic/"):
+                llm = AnthropicMeteredLLM()
+            else:
+                llm = LLMService(use_case="extraction")
+        except LLMPreDispatchError:
+            raise SocialExtractionError("llm_configuration_error") from None
         # UTF-8 bytes upper-bound text tokens; fixed margin covers chat envelope.
         inputs = len(json.dumps(kwargs["messages"], ensure_ascii=False).encode("utf-8")) + 1024
         outputs = kwargs["max_tokens"]
@@ -207,6 +218,10 @@ class _MeteredCompletion:
                     and price_valid and runtime_available and not outside_ids and call_available)
                 if valid:
                     row.state = "dispatched"
+                    db.execute(update(SocialExtractionWork).where(
+                        SocialExtractionWork.claim_token.in_(self.ledger.sendable_tokens),
+                        SocialExtractionWork.state == "running",
+                    ).values(claim_expires_at=dispatch_now + _CLAIM_TTL))
                 else:
                     if row.state == "reserved":
                         row.state, row.completed_at = "released", dispatch_now
@@ -230,12 +245,6 @@ class _MeteredCompletion:
             self.dispatched = True
             self.ledger.calls_left -= 1
             try:
-                if self.owner.llm is not None:
-                    llm = self.owner.llm
-                elif kwargs["model"].startswith("anthropic/"):
-                    llm = AnthropicMeteredLLM()
-                else:
-                    llm = LLMService(use_case="extraction")
                 response = await llm.completion(**kwargs, metered=True)
             except LLMPreDispatchError as exc:
                 if not budget.release_unbilled(attempt):
@@ -444,7 +453,7 @@ class ProcessSocialBacklog:
             for row in eligible[:limit]:
                 row.state, row.error_code = "running", None
                 row.claim_token = uuid4().hex
-                row.claim_expires_at = now + timedelta(minutes=10)
+                row.claim_expires_at = now + _CLAIM_TTL
                 row.updated_at = now
                 claimed.append((row.id, row.claim_token, row.selected_model, row.prompt_version,
                     row.schema_version, dict(row.input_snapshot_json)))
@@ -538,6 +547,8 @@ class ProcessSocialBacklog:
             if ledger.stopped or ledger.calls_left < 1:
                 deferred += self._finish_many(claims, "pending", "provider_rejected" if ledger.stopped else code)
                 continue
+            ledger.sendable_tokens = {token for _, token in claims} | {
+                token for queued, *_ in queue for (_, token), _ in queued}
             outcome = await self._extract(items, config, current_time, ledger)
             if not isinstance(outcome, str):
                 succeeded, deferred, failed, outside = (
