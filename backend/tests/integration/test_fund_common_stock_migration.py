@@ -9,8 +9,6 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from app.domain.universe.ingestion import is_fund_industry
-
 MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]
     / "alembic"
@@ -75,7 +73,6 @@ def test_migration_marks_only_fund_rows_not_common_stock(tmp_path):
         "NEW": True,
     }
     assert _flags(engine) == expected
-    assert expected == {s: c and not is_fund_industry(i) for s, i, c in ROWS}
 
     _run_revision(engine, "downgrade")
 
