@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import json
+import logging
 from types import UnionType
 from typing import get_args, get_origin, get_type_hints
 
@@ -30,6 +31,7 @@ from app.services.twitter_content_identity import twitter_external_id
 from app.services.theme_evidence_eligibility_service import grant_eligibility
 
 METRICS = ("likes", "reposts", "replies", "quotes", "bookmarks", "views")
+logger = logging.getLogger(__name__)
 _RUN_FAILURES = frozenset({"analysis_failed", "social_runtime_changed", "source_participation_failed"})
 
 
@@ -848,9 +850,12 @@ class SocialSignalWriter:
             return self._publish(run_id, expected_mode_version)
         except Exception:
             runs = SocialSignalRun.__table__
-            with self.session_factory.begin() as db:
-                _lock_registry(db)
-                self._close_runs(db, "publication_failed", self.clock(), runs.c.id == run_id, runs.c.status == "staged")
+            try:
+                with self.session_factory.begin() as db:
+                    _lock_registry(db)
+                    self._close_runs(db, "publication_failed", self.clock(), runs.c.id == run_id, runs.c.status == "staged")
+            except Exception:
+                logger.exception("Could not close social run %s after its publication failed", run_id)
             raise
 
     def _publish(self, run_id, expected_mode_version):
