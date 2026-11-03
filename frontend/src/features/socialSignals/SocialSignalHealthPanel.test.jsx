@@ -161,7 +161,7 @@ describe('SocialSignalHealthPanel', () => {
       await unlock();
       const calls = api.getSocialAdminHealth.mock.calls.length;
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-      expect(api.getSocialAdminHealth.mock.calls.length).toBeGreaterThan(calls);
+      expect(api.getSocialAdminHealth.mock.calls.length).toBe(calls + 1);
     } finally {
       vi.useRealTimers();
     }
@@ -175,6 +175,29 @@ describe('SocialSignalHealthPanel', () => {
     expect(await screen.findByText(/2 staged candidates/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Social admin key'), { target: { value: 'other' } });
     fireEvent.click(screen.getByRole('button', { name: 'Load Social administration' }));
+    expect(screen.queryByText(/2 staged candidates/)).not.toBeInTheDocument();
+  });
+
+  it('clears the new-list fields when another key is loaded', async () => {
+    renderPanel();
+    await unlock();
+    fireEvent.change(screen.getByLabelText('List name'), { target: { value: 'Old admin list' } });
+    fireEvent.change(screen.getByLabelText(/List ID or URL/), { target: { value: '123' } });
+    fireEvent.change(screen.getByLabelText('Social admin key'), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load Social administration' }));
+    expect(screen.getByLabelText('List name')).toHaveValue('');
+    expect(screen.getByLabelText(/List ID or URL/)).toHaveValue('');
+  });
+
+  it('ignores a validation preview that finishes after another key is loaded', async () => {
+    let finish;
+    api.getSocialValidation.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    renderPanel();
+    await unlock();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview validation-1' }));
+    fireEvent.change(screen.getByLabelText('Social admin key'), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load Social administration' }));
+    await act(async () => { finish({ candidates: [{}, {}], associations: [] }); });
     expect(screen.queryByText(/2 staged candidates/)).not.toBeInTheDocument();
   });
 

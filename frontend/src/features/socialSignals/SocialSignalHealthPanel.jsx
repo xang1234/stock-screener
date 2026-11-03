@@ -27,6 +27,32 @@ export default function SocialSignalHealthPanel() {
   const [keyDraft, setKeyDraft] = useState('');
   const [adminKey, setAdminKey] = useState('');
   const [keyGeneration, setKeyGeneration] = useState(0);
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mt: 3 }}>
+      <Typography variant="h6">Social Signals administration</Typography>
+      <Typography variant="body2" color="text.secondary">
+        Shared provider, source, analysis budget, and published-run health. The key stays in this page only.
+      </Typography>
+      <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ my: 2 }}>
+        <TextField size="small" type="password" label="Social admin key" value={keyDraft}
+          onChange={(event) => setKeyDraft(event.target.value)} />
+        <Button variant="contained" disabled={!keyDraft.trim()}
+          onClick={() => {
+            // A new key must not see another administrator's cached responses.
+            queryClient.removeQueries({ queryKey: ['socialAdmin'] });
+            setAdminKey(keyDraft.trim()); setKeyGeneration((value) => value + 1);
+          }}>
+          Load Social administration
+        </Button>
+      </Stack>
+      {/* Remounting per key drops every draft and late response from the previous key. */}
+      <SocialAdminBody key={keyGeneration} adminKey={adminKey} keyGeneration={keyGeneration} />
+    </Paper>
+  );
+}
+
+function SocialAdminBody({ adminKey, keyGeneration }) {
+  const queryClient = useQueryClient();
   const [showArchived, setShowArchived] = useState(false);
   const [newName, setNewName] = useState('');
   const [newRef, setNewRef] = useState('');
@@ -158,26 +184,7 @@ export default function SocialSignalHealthPanel() {
   };
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, mt: 3 }}>
-      <Typography variant="h6">Social Signals administration</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Shared provider, source, analysis budget, and published-run health. The key stays in this page only.
-      </Typography>
-      <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ my: 2 }}>
-        <TextField size="small" type="password" label="Social admin key" value={keyDraft}
-          onChange={(event) => setKeyDraft(event.target.value)} />
-        <Button variant="contained" disabled={!keyDraft.trim()}
-          onClick={() => {
-            // A new key must not see another administrator's cached responses or drafts.
-            queryClient.removeQueries({ queryKey: ['socialAdmin'] });
-            setValidation(null); setRenameDrafts({}); setReasons({});
-            setModeDraft(null); setProviderDraft(null); setUnresolvedPage(1);
-            setIdentityDraft(''); setAdminKey(keyDraft.trim());
-            setKeyGeneration((value) => value + 1); setMessage(null);
-          }}>
-          Load Social administration
-        </Button>
-      </Stack>
+    <>
       {!enabled ? <Alert severity="info">Enter the admin key to load Social health and controls.</Alert> : null}
       {message ? <Alert severity={message.severity} sx={{ mb: 2 }}>{message.text}</Alert> : null}
       {enabled && [runtime, health, sources].some((query) => query.isError) ? (
@@ -291,7 +298,7 @@ export default function SocialSignalHealthPanel() {
           {validation.candidates?.length || 0} staged candidates · {validation.associations?.length || 0} association proposals · not published
         </Typography> : null}
       </Collapse>
-    </Paper>
+    </>
   );
 }
 
