@@ -474,3 +474,15 @@ def test_pipeline_chain_starts_read_every_market_in_one_mget():
     mock_redis.get.assert_not_called()
     # Held but unparseable still reads as held ("").
     assert starts == {"US": "2026-10-16T20:30:00+00:00", "HK": None, "JP": ""}
+
+
+def test_pipeline_catch_up_count_is_per_market_session_and_outlives_a_weekend():
+    coordination, mock_redis, _ = _make_coordination()
+    pipe = mock_redis.pipeline.return_value
+    pipe.execute.return_value = [3, True]
+
+    count = coordination.count_pipeline_catch_up("US", "2026-10-28")
+
+    assert count == 3
+    pipe.incr.assert_called_once_with("pipeline_catch_up:us:2026-10-28")
+    pipe.expire.assert_called_once_with("pipeline_catch_up:us:2026-10-28", 14 * 24 * 3600)

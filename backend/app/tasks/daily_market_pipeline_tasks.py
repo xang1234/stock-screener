@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from celery import chain
 
 from app.celery_app import celery_app
+from app.config import settings
 from app.database import SessionLocal
 from app.domain.markets.catalog import get_market_catalog
 from app.domain.markets.registry import critical_price_symbols
@@ -38,6 +40,10 @@ _BENCHMARK_RERUN_COUNTDOWN_SECONDS = 45 * 60
 _BENCHMARK_RERUN_EXPIRES_SECONDS = 55 * 60
 _BENCHMARK_REFETCH_PERIOD = "1y"
 PRIMARY_BENCHMARK_MISSING = "primary_benchmark_missing"
+_MAX_CATCH_UPS = 2
+# A dispatch for a named session starts no later than this before the next
+# session opens, so its chain (about 35 minutes for US) ends before the open.
+_PRE_OPEN_MARGIN = timedelta(hours=2)
 
 
 def _normalize_pipeline_market(market: str | None) -> str:
@@ -198,6 +204,20 @@ def ensure_benchmark_prices(
                 "fallback" if any(_benchmark_bar_present(s, as_of) for s in fallbacks) else "missing"
             )
     return {**result, "benchmark": report}
+
+
+def _session_open_or_due(calendar, market: str, session: date) -> bool:
+    """Whether a session is under way, lunch break included, or opens within
+    _PRE_OPEN_MARGIN, so that a chain for ``session`` started now could
+    fetch the next session's partial bars."""
+    if calendar.is_market_open(market):
+        return True
+    now = calendar.market_now(market)
+    today = now.date()
+    if session >= today or not calendar.is_trading_day(market, today):
+        return False
+    opens = calendar.session_open(market, today)
+    return opens is None or now >= opens - _PRE_OPEN_MARGIN
 
 
 def _schedule_benchmark_rerun(
@@ -849,9 +869,10 @@ def queue_daily_market_pipeline(
 ) -> dict:
     """Dispatch the market's daily chain for its last completed session.
 
-    A re-run (``rerun_attempt`` > 0, queued by guard_price_refresh for
-    ``rerun_as_of_date``) runs only while that is still the last completed
-    session and the market is closed; otherwise it skips, and the next Beat
+    A dispatch for a named session (``rerun_as_of_date``: a benchmark re-run
+    queued by guard_price_refresh, or a catch-up) runs on any day, but only
+    while that is still the last completed session and no session is under
+    way or due (_session_open_or_due); otherwise it skips, and the next Beat
     dispatch covers the newer session.
     """
     from app.services.runtime_preferences_service import is_market_enabled_now
@@ -882,7 +903,7 @@ def queue_daily_market_pipeline(
 
     calendar = MarketCalendarService()
     today = calendar.market_now(market_code).date()
-    if not rerun_attempt and not calendar.is_trading_day(market_code, today):
+    if rerun_as_of_date is None and not calendar.is_trading_day(market_code, today):
         return {
             "status": "skipped",
             "reason": "not_trading_day",
@@ -892,7 +913,7 @@ def queue_daily_market_pipeline(
         }
 
     trading_day = calendar.last_completed_trading_day(market_code)
-    if rerun_attempt:
+    if rerun_as_of_date is not None:
         if trading_day.isoformat() != rerun_as_of_date:
             return {
                 "status": "skipped",
@@ -902,7 +923,7 @@ def queue_daily_market_pipeline(
                 "rerun_as_of_date": rerun_as_of_date,
                 "timestamp": datetime.now().isoformat(),
             }
-        if calendar.is_market_open(market_code):
+        if _session_open_or_due(calendar, market_code, trading_day):
             return {
                 "status": "skipped",
                 "reason": "market_open",
@@ -970,3 +991,93 @@ def queue_daily_market_pipeline(
         "task_id": task.id,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+def _published_session(market: str) -> date | None:
+    from app.infra.db.uow import SqlUnitOfWork
+
+    with SqlUnitOfWork(SessionLocal) as uow:
+        run = uow.feature_runs.get_latest_published(f"latest_published_market:{market}")
+    return run.as_of_date if run is not None else None
+
+
+@celery_app.task(
+    name="app.tasks.daily_market_pipeline_tasks.catch_up_daily_market_pipeline",
+    queue="celery",
+)
+def catch_up_daily_market_pipeline(*, market: str) -> dict:
+    """Dispatch the market's last completed session when its published
+    features still miss it an hour after the session's Beat slot (#714).
+
+    Beat otherwise dispatches a session only at its slot, so a slot the host
+    slept or restarted through, or a chain that died, leaves the features a
+    session behind until the next weekday's slot or a manual Run. Beat runs
+    this hourly. It leaves the session alone while a session is under way or
+    due (see _session_open_or_due) or a chain holds the claim, and the
+    dispatcher checks both again for the named session. At most
+    _MAX_CATCH_UPS dispatches per session, and their chains queue no
+    benchmark re-run: an hourly retry of a chain that fails the same way
+    would refetch the market all night. A market that has never published is
+    left to its bootstrap and its slot.
+    """
+    from app.services.runtime_preferences_service import is_market_enabled_now
+
+    market_code = _normalize_pipeline_market(market)
+    calendar = MarketCalendarService()
+    session = calendar.last_completed_trading_day(market_code)
+    published = _published_session(market_code)
+    close = calendar.session_close(market_code, session).astimezone(
+        ZoneInfo(settings.celery_timezone)
+    )
+    slot_hour, slot_minute = settings.cache_warm_schedule_for(market_code)
+    slot = close.replace(hour=slot_hour, minute=slot_minute, second=0, microsecond=0)
+    if slot < close:
+        slot += timedelta(days=1)
+
+    if published is None:
+        reason = "never_published"
+    elif published >= session:
+        reason = "current"
+    elif not is_market_enabled_now(market_code):
+        reason = "market_disabled"
+    elif _local_runtime_bootstrap_blocker(market_code) is not None:
+        reason = "local_runtime_bootstrap_not_ready"
+    elif calendar.market_now(market_code) < slot + timedelta(hours=1):
+        reason = "slot_pending"
+    elif _session_open_or_due(calendar, market_code, session):
+        reason = "market_open"
+    elif (
+        _pipeline_chain_holder(_pipeline_chain_claims(), market_code) is not None
+        or _market_pipeline_active(market_code)
+    ):
+        reason = "market_pipeline_already_active"
+    else:
+        reason = None
+    # Counted last, once every check the dispatcher repeats has passed.
+    if reason is None and (
+        _pipeline_chain_claims().count_pipeline_catch_up(market_code, session.isoformat())
+        > _MAX_CATCH_UPS
+    ):
+        reason = "exhausted"
+
+    outcome = {
+        "market": market_code,
+        "as_of_date": session.isoformat(),
+        "published_as_of_date": published.isoformat() if published is not None else None,
+    }
+    if reason is not None:
+        return {"status": "skipped", "reason": reason, **outcome}
+    task = queue_daily_market_pipeline.apply_async(
+        kwargs={
+            "market": market_code,
+            "rerun_as_of_date": session.isoformat(),
+            "rerun_attempt": _MAX_BENCHMARK_RERUNS,
+        },
+        queue=market_jobs_queue_for_market(market_code),
+    )
+    logger.warning(
+        "Catching up the %s pipeline for %s (published features cover %s)",
+        market_code, session, published,
+        extra={"market": market_code, "as_of_date": session.isoformat()},
+    )
+    return {"status": "queued", **outcome, "task_id": task.id}

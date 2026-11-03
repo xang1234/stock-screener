@@ -37,6 +37,7 @@ PIPELINE_CHAIN_PREFIX = "pipeline_chain"
 PIPELINE_CHAIN_TASKS_PREFIX = "pipeline_chain_tasks"
 PIPELINE_CHAIN_MISSES_PREFIX = "pipeline_chain_misses"
 PIPELINE_CHAIN_HEARTBEAT_KEY = "pipeline_chain_heartbeat"
+PIPELINE_CATCH_UP_PREFIX = "pipeline_catch_up"
 # Held from dispatch until the daily pipeline chain's last stage or first
 # failure. renew_daily_market_pipeline_claims renews it while any stage of
 # the chain is still queued, reserved or running, and releases it once the
@@ -45,6 +46,9 @@ PIPELINE_CHAIN_HEARTBEAT_KEY = "pipeline_chain_heartbeat"
 # heartbeat outage: such a claim never locks the market for longer.
 PIPELINE_CHAIN_TTL_SECONDS = 48 * 3600
 PIPELINE_CHAIN_HEARTBEAT_SECONDS = 300
+# Keeps "at most two catch-ups per session" through a host outage or a multi-day
+# market closure, while that session stays the last completed one.
+PIPELINE_CATCH_UP_TTL_SECONDS = 14 * 24 * 3600
 # How long heartbeats must find no trace of a chain before its claim is
 # released. One check can fall between a worker taking a stage and storing its
 # state, so it takes two; half an interval apart, so two heartbeats that
@@ -120,6 +124,10 @@ def _market_workload_key(market: Optional[str]) -> str:
 
 def _pipeline_chain_key(market: Optional[str]) -> str:
     return f"{PIPELINE_CHAIN_PREFIX}:{market_suffix(market)}"
+
+
+def _pipeline_catch_up_key(market: Optional[str], session: str) -> str:
+    return f"{PIPELINE_CATCH_UP_PREFIX}:{market_suffix(market)}:{session}"
 
 
 def _parse_task_id(lock_value: bytes) -> Optional[str]:
@@ -263,6 +271,15 @@ class WorkloadCoordination:
         if renewed:
             self.redis.expire(_pipeline_chain_tasks_key(token), PIPELINE_CHAIN_TTL_SECONDS)
         return renewed
+
+    def count_pipeline_catch_up(self, market: Optional[str], session: str) -> int:
+        """Record one catch-up dispatch of the market's session and return how
+        many it has had."""
+        pipe = self.redis.pipeline()
+        pipe.incr(_pipeline_catch_up_key(market, session))
+        pipe.expire(_pipeline_catch_up_key(market, session), PIPELINE_CATCH_UP_TTL_SECONDS)
+        count, _ = pipe.execute()
+        return int(count)
 
     def get_pipeline_chain_task_ids(self, token: str) -> Optional[list[str]]:
         """The chain's stage ids in order; None for a claim taken before #605."""
