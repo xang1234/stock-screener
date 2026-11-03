@@ -712,6 +712,36 @@ def test_a_twenty_call_run_that_outlasts_one_claim_ttl_sends_every_batch(backlog
     assert (result.succeeded, result.deferred, llm.calls) == (20, 0, 20)
 
 
+def test_a_batch_left_for_claim_expiry_is_not_renewed_by_later_dispatches(backlog, monkeypatch):
+    from app.services import social_signal_backlog_service as process_backlog
+    from app.infra.db.models.social_analysis import SocialExtractionWork
+    from app.services.social_llm_budget_service import SocialLLMBudgetService
+    configure_budget(backlog)
+    elapsed = [0]
+    monkeypatch.setattr(process_backlog, "monotonic", lambda: elapsed[0])
+    outage = [True]
+    price = SocialLLMBudgetService.price_in_transaction
+
+    def first_lookup_fails(db, model):
+        if outage:
+            outage.clear()
+            elapsed[0] = 300
+            raise RuntimeError("ledger unavailable")
+        return price(db, model)
+
+    monkeypatch.setattr(SocialLLMBudgetService, "price_in_transaction", staticmethod(first_lookup_fails))
+    llm = FakeLLM()
+    work_ids = [enqueue(backlog, processor(backlog, llm), post(number)) for number in (1, 2)]
+
+    first = asyncio.run(processor(backlog, llm).execute(NOW, 2))
+    later = asyncio.run(processor(backlog, llm).execute(NOW + timedelta(minutes=11), 1))
+
+    with backlog() as db:
+        states = [db.get(SocialExtractionWork, work_id).state for work_id in work_ids]
+    assert ((first.succeeded, first.deferred), later.succeeded, llm.calls, states) == (
+        (1, 1), 1, 2, ["succeeded", "succeeded"])
+
+
 def test_runtime_off_mid_batch_stops_new_model_dispatch_and_releases_reservation(backlog):
     from app.infra.db.models.social_analysis import SocialExtractionWork, SocialLLMAttempt
     with backlog.begin() as db:
