@@ -129,14 +129,25 @@ describe('SocialSignalHealthPanel', () => {
   };
 
   it.each([
-    ['analysis_failed', /because analysis failed\. Retry failed work under Saved analysis/],
+    ['analysis_failed', /could be scored, so nothing was published\. Later runs retry queued posts\. Retry failed work/],
     ['publication_failed', /Analysis finished, but publishing failed/],
     ['not_published', /Analysis finished, but the run was not published/],
   ])('says why a collected run did not publish (%s)', async (reason, copy) => {
-    await withAttempt({ status: 'failed', failure_reason: reason });
+    await withAttempt({ status: 'failed', failure_reason: reason, unanalyzed_posts: 3 });
     renderPanel();
     await unlock();
     expect(screen.getByText(copy)).toBeInTheDocument();
+    expect(screen.queryByText(/left out of this run's scores/)).not.toBeInTheDocument();
+  });
+
+  it('counts the posts a published run left out of its scores', async () => {
+    await withAttempt({ status: 'published', unanalyzed_posts: 400 });
+    renderPanel();
+    await unlock();
+    expect(screen.getByText('Latest run published')).toBeInTheDocument();
+    expect(screen.getByText(
+      "400 collected posts were not analysed and left out of this run's scores. Later runs retry the ones still queued.",
+    )).toBeInTheDocument();
   });
 
   it('refreshes health while the latest run is still in progress', async () => {
