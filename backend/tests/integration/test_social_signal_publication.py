@@ -222,6 +222,35 @@ def test_failed_publication_closes_its_staged_generation(store, monkeypatch, fai
     assert w.read_run_inputs("run").work_ids == ()
 
 
+def test_a_run_closed_while_another_call_publishes_it_stays_failed(store, monkeypatch):
+    from app.infra.db.repositories.social_signal_writer import SocialSignalWriter
+    w = writer(store)
+    collected(w)
+    w.prepare_run("run", (row("run"),), NOW)
+    with store() as db:
+        version = db.get(SocialSignalRun, "run").registry_version
+    validate = SocialSignalWriter._validate_context
+    calls = []
+
+    def first_call_fails_meanwhile(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            with store.begin() as db:
+                run = db.get(SocialSignalRun, "run")
+                run.status = "failed"
+                run.application_progress_json = {
+                    **run.application_progress_json, "failure": {"reason_code": "publication_failed"}}
+        return validate(self, *args, **kwargs)
+
+    monkeypatch.setattr(SocialSignalWriter, "_validate_context", first_call_fails_meanwhile)
+    # The run flush guard refuses failed -> published and rolls the pointer move back.
+    with pytest.raises(ValueError, match="^social_run_immutable$"):
+        w.publish("run", version)
+    with store() as db:
+        assert db.get(SocialSignalRun, "run").status == "failed"
+        assert db.query(SocialSignalRunPointer).count() == 0
+
+
 def test_prepared_run_cannot_be_retimed_after_backlog(store):
     w = writer(store)
     collected(w)
