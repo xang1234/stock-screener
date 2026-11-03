@@ -146,7 +146,7 @@ def main(argv=None) -> int:
     verb = "requeued" if args.apply else "would requeue"
     print(f"{verb} {counts['requeue']} {args.error_code} work rows")
     if args.model:
-        print(f"moved {counts['retarget']} waiting work rows to {args.model}")
+        print(f"{'moved' if args.apply else 'would move'} {counts['retarget']} waiting work rows to {args.model}")
     for kind in ("billed", "in_flight", "outside_window", "retarget_duplicate"):
         print(f"left {kind}: {counts[kind]}")
     return 0

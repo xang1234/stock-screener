@@ -181,3 +181,14 @@ def test_requeue_moves_only_one_of_two_old_models_onto_the_same_post(backlog):
     assert requeue(backlog, LATER, apply=True, model=model) == {"retarget": 1, "retarget_duplicate": 1}
     with backlog() as db:
         assert sorted(db.get(SocialExtractionWork, i).selected_model for i in (first, second)) == [model, "other/old"]
+
+
+def test_a_dry_run_says_rows_would_move(monkeypatch, capsys):
+    from collections import Counter
+
+    from scripts import requeue_social_completion_unknown as script
+
+    monkeypatch.setattr(script, "requeue", lambda *_args, **_kwargs: Counter(requeue=2, retarget=3))
+    script.main(["--model", "anthropic/claude-haiku-5-5"])
+    out = capsys.readouterr().out
+    assert "would requeue 2" in out and "would move 3 waiting work rows" in out
