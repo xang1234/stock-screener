@@ -38,8 +38,8 @@ export default function SocialEvidenceDrawer({
           <Chip label={`Confirmation ${formatSocialScore(item?.confirmation_score)}`} />
         </Stack>
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          <Button variant="contained" onClick={onOpenChart}>Open chart & setup</Button>
-          <Button variant="outlined" onClick={onScan}>Send visible to Scan</Button>
+          {onOpenChart ? <Button variant="contained" onClick={onOpenChart}>Open chart & setup</Button> : null}
+          {onScan ? <Button variant="outlined" onClick={onScan}>Send visible to Scan</Button> : null}
           {item?.canonical_symbol && item?.market ? <AddToWatchlistMenu symbols={item.canonical_symbol} /> : null}
         </Stack>
         <Divider sx={{ my: 2 }} />
@@ -57,6 +57,9 @@ export default function SocialEvidenceDrawer({
         <ComponentMath title="Confirmation components" components={explanation.confirmation_components} />
         {query?.isLoading ? <CircularProgress aria-label="Loading evidence" sx={{ mt: 3 }} /> : null}
         {query?.isError ? <Typography color="error" sx={{ mt: 2 }}>Evidence could not be loaded.</Typography> : null}
+        {data?.reason_code === 'candidate_not_found' ? (
+          <Typography color="text.secondary" sx={{ mt: 2 }}>This signal is not in the latest published run.</Typography>
+        ) : null}
         {data?.related_listings?.length ? (
           <Box sx={{ mt: 2 }}>
             <Typography variant="subtitle2">Related listings</Typography>

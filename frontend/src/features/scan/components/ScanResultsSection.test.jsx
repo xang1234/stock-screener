@@ -6,6 +6,10 @@ import ScanResultsSection from './ScanResultsSection';
 
 const resultsTableSpy = vi.fn();
 
+vi.mock('../../socialSignals/useScanSocialColumn', () => ({
+  default: () => ({ renderCell: null, drawer: { open: false, selected: null, query: {}, onClose: () => {} } }),
+}));
+
 vi.mock('../../../components/Scan/ResultsTable', () => ({
   default: (props) => {
     resultsTableSpy(props);

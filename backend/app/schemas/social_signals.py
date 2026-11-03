@@ -91,6 +91,26 @@ class SocialSectionResponse(SocialAvailabilityResponse):
     run_id: str | None = None
 
 
+class SocialSymbolSignal(BaseModel):
+    """A listed symbol's state in the latest published run."""
+    candidate_key: str
+    canonical_symbol: str
+    market: MarketCode
+    state: Literal["actionable", "watch", "risk_off", "context"]
+    queue_score: float | None
+    social_score: float | None
+    confirmation_score: float | None
+    mention_count: int
+
+
+class SocialSymbolsResponse(BaseModel):
+    supported: bool
+    available: bool
+    reason_code: str | None = None
+    window: WindowCode
+    items: list[SocialSymbolSignal] = Field(default_factory=list)
+
+
 class SocialEvidencePost(BaseModel):
     post_id: str
     author_handle: str
@@ -181,7 +201,8 @@ __all__ = [
     "MarketCode", "QueueView", "RankMode", "SocialAvailabilityResponse",
     "SocialAssociationDecisionRequest", "SocialCompanyIdentityUpdate",
     "SocialEvidencePost", "SocialEvidenceResponse", "SocialQueueFallback", "SocialQueueItem",
-    "SocialQueueResponse", "SocialSectionResponse", "SocialSummaryResponse", "WindowCode",
+    "SocialQueueResponse", "SocialSectionResponse", "SocialSummaryResponse",
+    "SocialSymbolSignal", "SocialSymbolsResponse", "WindowCode",
     "SocialRuntimeUpdate", "SocialSourceCreateRequest", "SocialSourceRenameRequest",
     "SocialSourceTransitionRequest", "SocialSourceVersionRequest",
 ]

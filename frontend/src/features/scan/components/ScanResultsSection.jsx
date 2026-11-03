@@ -3,6 +3,8 @@ import DownloadIcon from '@mui/icons-material/Download';
 import ResultsTable from '../../../components/Scan/ResultsTable';
 import { expressionSummary } from '../filterExpressionBuilder';
 import { TableSkeleton } from '../../../components/common/LoadingSkeletons';
+import SocialEvidenceDrawer from '../../socialSignals/SocialEvidenceDrawer';
+import useScanSocialColumn from '../../socialSignals/useScanSocialColumn';
 
 export default function ScanResultsSection({
   resultsLoading,
@@ -21,7 +23,9 @@ export default function ScanResultsSection({
   onOpenChart,
   onRowHover,
   onRetry,
+  showSocialSignals = false,
 }) {
+  const social = useScanSocialColumn(resultsData?.results, showSocialSignals);
   const errorMessage = resultsError?.response?.data?.detail
     || resultsError?.message
     || 'The results request failed. Your previous results are still shown.';
@@ -85,6 +89,14 @@ export default function ScanResultsSection({
           loading={resultsLoading}
           showOpportunityState={resultsData.capabilities?.opportunity_state === true}
           opportunityTelemetrySurface="scan"
+          renderSocialCell={social.renderCell}
+        />
+        <SocialEvidenceDrawer
+          {...social.drawer}
+          onOpenChart={onOpenChart ? () => {
+            onOpenChart(social.drawer.selected.canonical_symbol);
+            social.drawer.onClose();
+          } : undefined}
         />
       </>
     );

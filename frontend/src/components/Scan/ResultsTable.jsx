@@ -172,6 +172,7 @@ const MOBILE_SORT_FIELDS = [
 ];
 const SYMBOL_COLUMN_WIDTH = 210;
 const OPPORTUNITY_COLUMNS_WIDTH = 153;
+const SOCIAL_COLUMN_WIDTH = 110;
 const TABLE_MIN_WIDTH = Object.freeze({
   WITH_ACTIONS: 2673,
   WITHOUT_ACTIONS: 2613,
@@ -233,6 +234,7 @@ const columns = [
   { id: 'se_pivot_price', label: 'Pvt$', sortable: true, width: 55 },
   { id: 'resilience_score', label: 'Res', sortable: true, width: 48 },
   { id: 'action_state', label: 'Action', sortable: true, width: 105 },
+  { id: 'social', label: 'Social 7D', sortable: false, width: SOCIAL_COLUMN_WIDTH },
   { id: 'rs_rating', label: 'RS', sortable: true, width: 40 },
   { id: 'rs_rating_1m', label: '1M', sortable: true, width: 40 },
   { id: 'rs_rating_3m', label: '3M', sortable: true, width: 40 },
@@ -395,6 +397,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
   mcapDisplay,
   showOpportunityState,
   onOpenOpportunity,
+  renderSocialCell,
 }) {
   const statusChip = getStatusChipProps(row);
   const handleRowClick = useCallback(() => {
@@ -620,6 +623,8 @@ const VirtualTableRow = memo(function VirtualTableRow({
         onOpenEvidence={onOpenOpportunity}
       />
 
+      {renderSocialCell ? <TableCell align="center" className="rt-w110">{renderSocialCell(row)}</TableCell> : null}
+
       <TableCell align="center" className="rt-mono rt-w40">
         {row.rs_rating?.toFixed(0) || '-'}
       </TableCell>
@@ -750,6 +755,7 @@ function ResultsTable({
   isChartEnabled,
   showOpportunityState = false,
   opportunityTelemetrySurface,
+  renderSocialCell = null,
 }) {
   const parentRef = useRef(null);
   // MCap column display mode — kept as local state; scan-level persistence
@@ -767,14 +773,15 @@ function ResultsTable({
   const visibleColumns = useMemo(() => {
     const base = columns.filter((column) => (
       (showActions || column.id !== 'chart') &&
-      (showOpportunityState || !['resilience_score', 'action_state'].includes(column.id))
+      (showOpportunityState || !['resilience_score', 'action_state'].includes(column.id)) &&
+      (renderSocialCell || column.id !== 'social')
     ));
     return base.map((column) =>
       column.id === 'market_cap'
         ? { ...column, label: mcapDisplay === MCAP_DISPLAY.USD ? 'MCap ($)' : 'MCap (local)' }
         : column,
     );
-  }, [showActions, showOpportunityState, mcapDisplay]);
+  }, [showActions, showOpportunityState, renderSocialCell, mcapDisplay]);
 
   const toggleMcapDisplay = useCallback(() => {
     setMcapDisplay((mode) =>
@@ -998,7 +1005,8 @@ function ResultsTable({
             minWidth: (showActions
               ? TABLE_MIN_WIDTH.WITH_ACTIONS
               : TABLE_MIN_WIDTH.WITHOUT_ACTIONS) +
-              (showOpportunityState ? OPPORTUNITY_COLUMNS_WIDTH : 0),
+              (showOpportunityState ? OPPORTUNITY_COLUMNS_WIDTH : 0) +
+              (renderSocialCell ? SOCIAL_COLUMN_WIDTH : 0),
           }}
         >
           <TableHead>
@@ -1052,6 +1060,7 @@ function ResultsTable({
                   mcapDisplay={mcapDisplay}
                   showOpportunityState={showOpportunityState}
                   onOpenOpportunity={handleOpenOpportunity}
+                  renderSocialCell={renderSocialCell}
                 />
               );
             })}
@@ -1086,6 +1095,7 @@ export default memo(ResultsTable, (prevProps, nextProps) => {
     prevProps.isChartEnabled === nextProps.isChartEnabled &&
     prevProps.sortingEnabled === nextProps.sortingEnabled &&
     prevProps.showOpportunityState === nextProps.showOpportunityState &&
-    prevProps.opportunityTelemetrySurface === nextProps.opportunityTelemetrySurface
+    prevProps.opportunityTelemetrySurface === nextProps.opportunityTelemetrySurface &&
+    prevProps.renderSocialCell === nextProps.renderSocialCell
   );
 });

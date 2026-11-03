@@ -52,6 +52,13 @@ export const getSocialEvidence = async (candidateKey, window = '7d') => {
   return response.data;
 };
 
+export const getSocialSymbols = async (symbols, window = '7d') => {
+  const response = await apiClient.get('/v1/social-signals/symbols', {
+    params: { window, symbols: symbols.join(',') },
+  });
+  return response.data;
+};
+
 export const getSocialSummary = async (market) => {
   const response = await apiClient.get('/v1/social-signals/summary', { params: { market } });
   return response.data;

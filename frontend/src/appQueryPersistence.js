@@ -16,6 +16,7 @@ const NON_PERSISTED_QUERY_ROOTS = new Set([
 // write and pushes localStorage toward its quota.
 const LATEST_ONLY_QUERY_ROOTS = new Set([
   'scanResultsQuery',
+  'scanSocialSymbols',
 ]);
 
 export const PERSISTED_QUERY_CACHE_BUSTER = 'v4';
