@@ -481,14 +481,18 @@ hiding the excess or automatically increasing the allowance.
 
 **Approved budget-deferral workflow:** Keep collected
 posts and unfinished extraction in a durable database backlog, resume bounded
-batches after the daily reset, and reuse completed results. Six-hour X collection
-continues under its separate limits; deferred LLM processing does not re-read X.
-Keep the previous complete Social snapshot visible, marking it stale when due;
-a fresh installation shows processing pending until a complete run can publish.
-Operations shows budget usage, waiting-post count, oldest pending age, and next
-reset. Deferred batches do not imply a provider-specific Batch API or a discount.
-Sustained arrivals above daily processing capacity cause growing delay; expose
-that delay rather than silently dropping evidence or publishing incomplete results.
+batches in later runs and after the daily reset, and reuse completed results.
+Six-hour X collection continues under its separate limits; deferred LLM
+processing does not re-read X. A run publishes with the posts it could not
+analyse as coverage gaps (#711). Their text stays out of the scores, mention
+history is marked incomplete, and the backlog keeps the posts for later runs.
+A run with nothing left to score in the window does not publish, so the previous
+Social snapshot stays visible and is marked stale when due. Operations shows
+budget usage, waiting-post count, oldest pending age, next reset, and the latest
+run's unanalysed posts. Deferred batches do not imply a provider-specific Batch
+API or a discount. Sustained arrivals above daily processing capacity cause
+growing delay; expose that delay and the gaps rather than silently dropping
+evidence.
 
 **Approved backlog ordering and aging:** Process the oldest waiting posts still
 within the rolling fourteen-day signal window first, using post publication time
