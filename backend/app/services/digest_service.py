@@ -313,34 +313,33 @@ class DigestService:
         if latest_run is None:
             return [], ["missing_leader_candidates"]
 
-        rows = (
-            db.query(StockFeatureDaily)
-            .filter(StockFeatureDaily.run_id == latest_run.id)
-            .order_by(
-                *composite_rank_order(StockFeatureDaily),
-                StockFeatureDaily.symbol.asc(),
+        run_rows = db.query(StockFeatureDaily).filter(StockFeatureDaily.run_id == latest_run.id)
+
+        def top_rows(query) -> list[StockFeatureDaily]:
+            return (
+                query.order_by(
+                    *composite_rank_order(StockFeatureDaily),
+                    StockFeatureDaily.symbol.asc(),
+                )
+                .limit(max(profile_detail.digest.leader_limit * 4, DIGEST_LEADERS_LIMIT))
+                .all()
             )
-            .limit(max(profile_detail.digest.leader_limit * 4, DIGEST_LEADERS_LIMIT))
-            .all()
-        )
-        if not rows:
+
+        candidate_rows = top_rows(
+            run_rows.filter(
+                StockFeatureDaily.composite_score
+                >= profile_detail.digest.leader_min_composite_score
+            )
+        ) or top_rows(run_rows)
+        if not candidate_rows:
             return [], ["missing_leader_candidates"]
 
         name_map = {
             row.symbol: row.name
             for row in db.query(StockUniverse.symbol, StockUniverse.name)
-            .filter(StockUniverse.symbol.in_([item.symbol for item in rows]))
+            .filter(StockUniverse.symbol.in_([item.symbol for item in candidate_rows]))
             .all()
         }
-
-        candidate_rows = [
-            row
-            for row in rows
-            if row.composite_score is not None
-            and row.composite_score >= profile_detail.digest.leader_min_composite_score
-        ]
-        if not candidate_rows:
-            candidate_rows = rows
 
         def _leader_sort_key(row: StockFeatureDaily) -> tuple[Any, ...]:
             details = row.details_json or {}

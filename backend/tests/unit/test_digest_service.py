@@ -503,6 +503,48 @@ def test_digest_watchlist_leader_overlap_skips_ipo_only_rows_below_the_leader_de
     assert payload.watchlists[0].matched_symbols == ["NVDA"]
 
 
+def test_digest_leader_minimum_score_applies_before_the_candidate_window(session):
+    run = FeatureRun(
+        as_of_date=date(2026, 4, 4),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 4, 21, 0, tzinfo=UTC),
+    )
+    session.add(run)
+    session.flush()
+    scores = {"CORE80": 80.0, **{f"CORE{index:02d}": 60.0 for index in range(19)}}
+    session.add_all(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol=symbol,
+            as_of_date=run.as_of_date,
+            composite_score=score,
+            overall_rating=3,
+            passes_count=1,
+            details_json={"minervini_score": score},
+        )
+        for symbol, score in scores.items()
+    )
+    session.add(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol="IPO",
+            as_of_date=run.as_of_date,
+            composite_score=99.0,
+            overall_rating=4,
+            passes_count=1,
+            details_json={"scan_mode": "ipo_weighted", "ipo_score": 70.0},
+        )
+    )
+    session.commit()
+
+    payload = DigestService(validation_service=_FakeValidationService()).get_daily_digest(
+        session, as_of_date=date(2026, 4, 4)
+    )
+
+    assert [leader.symbol for leader in payload.leaders] == ["CORE80", "IPO"]
+
+
 def test_digest_service_falls_back_to_ranked_rows_when_threshold_excludes_scored_rows(session):
     _seed_digest_data(session)
     run = session.query(FeatureRun).filter(FeatureRun.as_of_date == date(2026, 4, 4)).first()
