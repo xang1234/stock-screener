@@ -167,9 +167,9 @@ def test_cashtags_end_a_sentence_without_losing_listing_suffixes():
 
 
 def test_bare_acronym_that_is_also_a_ticker_names_the_word(resolver, db_session):
-    db_session.add(StockUniverse(symbol="AI", market="US", is_active=True))
+    db_session.add_all(StockUniverse(symbol=word, market="US", is_active=True) for word in ("AI", "GPT"))
     db_session.flush()
-    assert resolver.resolve("AI").status == "unresolved"
+    assert [resolver.resolve(word).status for word in ("AI", "GPT")] == ["unresolved"] * 2
     assert [resolver.resolve(token, market).symbol for token, market in (
-        ("$AI", None), ("AI", "US"), ("HSBC", None),
-    )] == ["AI", "AI", "HSBC"]
+        ("$AI", None), ("AI", "US"), ("$GPT", None), ("GPT", "US"), ("HSBC", None),
+    )] == ["AI", "AI", "GPT", "GPT", "HSBC"]
