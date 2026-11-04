@@ -210,6 +210,15 @@ def test_seed_writes_an_empty_ledger_for_a_market_with_no_records(tmp_path) -> N
     assert ledger.load_ledger(output / asset_name("MY"), "MY") == {}
 
 
+def test_seed_refuses_an_input_directory_with_no_market_files(tmp_path, capsys) -> None:
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(tmp_path / "mistyped"), "--output", str(output)]) == 1
+
+    assert "No <market>.jsonl.gz input" in capsys.readouterr().out
+    assert not output.exists()
+
+
 def test_seed_refuses_a_record_from_another_market(tmp_path, capsys) -> None:
     source = tmp_path / "input"
     write_seed_input(source, "US", [seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["0700.HK"], market="HK")])

@@ -270,9 +270,12 @@ def seed_days(records: list[dict[str, Any]], market: str) -> dict[date, LedgerDa
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
+    sources = {market: args.input / f"{market}.jsonl.gz" for market in MARKETS}
+    # A mistyped path must not produce twelve valid empty ledgers ready to upload.
+    if not any(source.exists() for source in sources.values()):
+        raise LedgerError(f"No <market>.jsonl.gz input in {args.input}")
     args.output.mkdir(parents=True, exist_ok=True)
-    for market in MARKETS:
-        source = args.input / f"{market}.jsonl.gz"
+    for market, source in sources.items():
         records = read_jsonl_gz(source) if source.exists() else []
         days = seed_days(records, market)
         target = args.output / asset_name(market)
