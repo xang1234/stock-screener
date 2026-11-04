@@ -86,7 +86,10 @@ def _display_width(text: str) -> int:
 
 def _cell(row: dict[str, Any], field: str, template: str) -> str:
     value = row.get(field)
-    text = "-" if value is None else template.format(value)
+    try:
+        text = "-" if value is None else template.format(value)
+    except (TypeError, ValueError):
+        text = str(value)
     while _display_width(text) > MAX_CELL_WIDTH:
         text = text[:-1]
     return text
