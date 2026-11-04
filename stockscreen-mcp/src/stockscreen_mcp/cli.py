@@ -58,6 +58,8 @@ COLUMNS = (
     ("GROUP", "ibd_industry_group", "{}", "<"),
 )
 MAX_CELL_WIDTH = 32
+# https://in.tradingview.com/support/solutions/43000611193: "Watchlist can contain no more than 1000 symbols."
+TRADINGVIEW_LIST_CAP = 1000
 
 
 def _stderr(message: str) -> None:
@@ -138,6 +140,11 @@ def _write_watchlist(result: server.ScreenResult, target: str) -> int:
     if not tokens:
         _stderr("Nothing to write: no match has a TradingView symbol.")
         return 1
+    if len(tokens) > TRADINGVIEW_LIST_CAP:
+        _stderr(
+            f"Warning: {len(tokens)} symbols is over TradingView's limit of {TRADINGVIEW_LIST_CAP} per watchlist, "
+            "so they will not all fit in one list."
+        )
 
     text = ",".join(tokens)
     if target == "-":
