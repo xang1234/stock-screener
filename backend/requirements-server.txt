@@ -24,6 +24,7 @@ xlrd>=2.0.1
 python-multipart==0.0.6
 finvizfinance==1.2.0
 celery==5.3.4
+kombu==5.6.2  # 5.7 requires redis>=6.1; redis is pinned to 5.0.1
 redis==5.0.1
 groq>=0.4.0
 litellm>=1.50.0
