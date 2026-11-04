@@ -25,9 +25,11 @@ uvx stockscreen-mcp screen minervini --tradingview        # save a TradingView w
 ```
 
 - `--tradingview` writes every match to a comma-separated file such as `minervini-US-2026-11-04.txt`, ignoring `--limit`. TradingView's watchlist import requires a comma-separated file. Pass a filename to choose the path, or `-` for stdout.
+- TradingView watchlists hold at most 1,000 symbols. A longer list is still written in full, with a warning on stderr.
+- Symbols are derived from the published listing data and not checked against TradingView, so a few may not import.
 - Malaysia and Beijing listings are skipped and listed on stderr, because they have no TradingView symbol this tool can derive.
 - `--limit` sets how many rows the table shows, and `--json` prints those rows as JSON.
-- The data date and any late-data warning go to stderr, so stdout stays clean for pipes.
+- The data date, the row count and any warnings go to stderr, so stdout stays clean for pipes.
 
 ## What you can ask
 

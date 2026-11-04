@@ -24,7 +24,7 @@ See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in s
 
 ## Use it from your terminal
 
-With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, there's nothing else to set up:
+With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, `uvx` fetches the rest:
 
 ```bash
 uvx stockscreen-mcp screen minervini --market US
