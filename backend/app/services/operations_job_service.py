@@ -18,6 +18,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     redis = None
 
+from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
 from app.celery_app import _MARKET_JOB_TASKS, celery_app
@@ -145,6 +146,54 @@ def run_worker_queue_heartbeat(worker: str, queues: list[str], stop: threading.E
                 logger.warning("Could not write the worker queue heartbeat", exc_info=True)
         if stop.wait(WORKER_QUEUES_HEARTBEAT_SECONDS):
             return
+
+
+def held_task_ids() -> set[str] | None:
+    """Ids of every task a worker is running or holding, or None when that
+    cannot be known: the inspect replies are missing, the roster is unreadable
+    or younger than one round of heartbeats, or a worker that beat within the
+    last round did not answer (a busy solo-pool worker answers nothing).
+
+    A worker killed with its task stops beating, so it stops counting after
+    WORKER_QUEUES_COMPLETE_AFTER.
+    """
+    inspect = celery_app.control.inspect(timeout=1.0)
+    try:
+        active, reserved, scheduled = inspect.active(), inspect.reserved(), inspect.scheduled()
+    except (OSError, OperationalError):
+        logger.warning("Could not inspect the workers", exc_info=True)
+        return None
+    if not active or reserved is None or scheduled is None:
+        return None
+    client = get_redis_client()
+    if client is None:
+        return None
+    now = _utcnow()
+    try:
+        client.set(WORKER_QUEUES_SINCE_KEY, now.isoformat(), nx=True)
+        since_raw = client.get(WORKER_QUEUES_SINCE_KEY)
+        stored = client.hgetall(WORKER_QUEUES_KEY)
+    except redis.RedisError:
+        logger.warning("Could not read the worker queue roster", exc_info=True)
+        return None
+    since = _parse_iso(since_raw.decode()) if since_raw else None
+    if since is None or now - since < WORKER_QUEUES_COMPLETE_AFTER:
+        return None
+    answered = active.keys() & reserved.keys() & scheduled.keys()
+    for raw_name, raw_entry in stored.items():
+        try:
+            seen_at = _parse_iso(json.loads(raw_entry)["seen_at"])
+        except (ValueError, TypeError, KeyError):
+            return None
+        if seen_at is None:
+            return None
+        if now - seen_at <= WORKER_QUEUES_COMPLETE_AFTER and raw_name.decode() not in answered:
+            return None
+    held = {task["id"] for reply in (active, reserved) for tasks in reply.values() for task in tasks}
+    held.update(
+        entry["request"]["id"] for entries in scheduled.values() for entry in entries
+    )
+    return held
 
 
 def start_worker_queue_heartbeat(worker: str, queues: list[str]) -> None:
