@@ -43,6 +43,10 @@ async def test_all_tools_against_the_live_publish():
             symbol = minervini["rows"][0]["symbol"]
             stock = await call(client, "get_stock", symbol=symbol, market="US")
             assert "minervini" in stock["passes_screens"]
+            audit = await call(client, "audit_stocks", symbols=[symbol], market="US")
+            verdicts = audit["stocks"][0]["screens"]
+            assert [i for i, v in verdicts.items() if v["passes"]] == stock["passes_screens"]
+            assert verdicts["minervini"] == {"passes": True, "failed": []}
 
         overview = await call(client, "market_overview", market="US")
         assert overview["exposure"]["exposure_score"] is not None

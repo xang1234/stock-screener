@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from .data import StaticData
 from .screens import (
     evaluate_expression,
+    explain_condition,
     expression_fields,
     filters_to_conditions,
     preset_requires_opportunity_state,
@@ -67,6 +68,10 @@ BREADTH_FIELDS = (
 GROUP_STOCK_FIELDS = (
     "symbol", "company_name", "rs_rating", "rs_rating_1m", "rs_rating_3m", "rs_rating_12m", "stage",
     "price", "price_change_1d", "eps_growth_qq", "sales_growth_qq", "composite_score",
+)
+SNAPSHOT_FIELDS = (
+    "company_name", "current_price", "price_change_1d", "rs_rating", "rs_rating_3m", "stage", "composite_score",
+    "ibd_industry_group", "ibd_group_rank",
 )
 
 
@@ -255,6 +260,76 @@ def get_stock(
     passes = [p["id"] for p in _visible_presets(market, scan) if evaluate_expression(row, p["filter_expression"])]
     stock = {k: v for k, v in row.items() if k not in HIDDEN_STOCK_FIELDS and v is not None}
     return {**stock, "as_of_date": scan.get("as_of_date"), "passes_screens": passes}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def audit_stocks(
+    symbols: Annotated[list[str], Field(
+        min_length=1, max_length=50, description="Tickers to check in this market, e.g. a watchlist or holdings.",
+    )],
+    market: Market = "US",
+    screens: Annotated[list[str] | None, Field(
+        description="Preset ids from list_screens to check; defaults to every screen in the market.",
+    )] = None,
+    include_passing: Annotated[bool, Field(description="Also list the rules each stock meets, under `passed`.")] = False,
+) -> dict[str, Any]:
+    """Check a list of stocks against the preset screens in one call: for each symbol and screen,
+    pass/fail plus every rule it fails and by how much.
+
+    Use it to review a watchlist or holdings, find near misses, or see what has deteriorated in a
+    position, meaning which rules it fails today. Use get_stock instead for every field on one
+    symbol, and run_screen to discover new candidates.
+
+    short_by is the positive distance between a failed numeric rule's bound and the stock's value
+    (rs_rating 60 against a min of 70 is short_by 10); it is absent when the value is missing and
+    on non-numeric rules. `passes` matches the website and get_stock's passes_screens. failed and
+    passed cover the rules list_screens shows, and a `note` marks a failure that comes from an
+    optional rule group instead. near_misses lists the screens a stock fails on exactly one rule.
+    Symbols absent from the market's scan are listed in not_found rather than raising an error.
+    Output grows with symbols times screens, so pass `screens` for more than a few symbols.
+    """
+    scan, rows = data.scan(market)
+    presets = {p["id"]: p for p in _visible_presets(market, scan)}
+    wanted = {s.strip().lower() for s in screens or presets}
+    unknown = sorted(wanted - presets.keys())
+    if unknown:
+        raise ToolError(f"Unknown screen {', '.join(map(repr, unknown))}. Available: {', '.join(presets)}.")
+    audited = [p for p in presets.values() if p["id"] in wanted]
+
+    by_symbol = {str(r.get("symbol", "")).upper(): r for r in rows}
+    requested = list(dict.fromkeys(s.strip().upper() for s in symbols))
+    stocks = []
+    for symbol in requested:
+        row = by_symbol.get(symbol)
+        if row is None:
+            continue
+        results = {}
+        for preset in audited:
+            expression = preset["filter_expression"]
+            explained = [explain_condition(row, c) for c in expression["required"]["conditions"]]
+            result = {
+                "passes": evaluate_expression(row, expression),
+                "failed": [e for e in explained if not e["passes"]],
+            }
+            if include_passing:
+                result["passed"] = [e for e in explained if e["passes"]]
+            has_groups = any(g.get("enabled") is not False for g in expression.get("groups") or [])
+            if has_groups and not result["passes"] and not result["failed"]:
+                result["note"] = "fails an optional rule group"
+            results[preset["id"]] = result
+        stocks.append({
+            "symbol": row["symbol"],
+            "snapshot": _pick(row, SNAPSHOT_FIELDS),
+            "screens": results,
+            "near_misses": [i for i, r in results.items() if not r["passes"] and len(r["failed"]) == 1],
+        })
+    return {
+        "market": market.upper(),
+        "as_of_date": scan.get("as_of_date"),
+        "screens": [p["id"] for p in audited],
+        "stocks": stocks,
+        "not_found": [s for s in requested if s not in by_symbol],
+    }
 
 
 @mcp.tool(annotations=READ_ONLY)

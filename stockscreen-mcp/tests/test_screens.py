@@ -5,6 +5,7 @@ import pytest
 from stockscreen_mcp.screens import (
     evaluate_condition,
     evaluate_expression,
+    explain_condition,
     filters_to_conditions,
     preset_requires_opportunity_state,
     sort_rows,
@@ -141,3 +142,48 @@ def test_caller_sorts_keep_rows_without_the_field_last():
 )
 def test_js_coercion_and_strict_equality(row, cond, expected):
     assert evaluate_condition(row, cond) is expected
+
+
+@pytest.mark.parametrize(
+    ("row", "cond", "expected"),
+    [
+        ({"rs_rating": 60}, condition("rs_rating", "range", min=70, max=None),
+         {"field": "rs_rating", "value": 60, "needs": {"min": 70}, "passes": False, "short_by": 10.0}),
+        ({"extended": 30}, condition("extended", "range", min=None, max=25),
+         {"field": "extended", "value": 30, "needs": {"max": 25}, "passes": False, "short_by": 5.0}),
+        ({"stage": 3}, condition("stage", "range", min=2, max=2),
+         {"field": "stage", "value": 3, "needs": {"min": 2, "max": 2}, "passes": False, "short_by": 1.0}),
+        ({"stage": 1}, condition("stage", "range", min=2, max=2),
+         {"field": "stage", "value": 1, "needs": {"min": 2, "max": 2}, "passes": False, "short_by": 1.0}),
+        ({"rs_rating": 80}, condition("rs_rating", "range", min=70, max=None),
+         {"field": "rs_rating", "value": 80, "needs": {"min": 70}, "passes": True}),
+        # 70 - 50.52 is 19.479999999999997 in floats; callers repeat this number to people.
+        ({"canslim_score": 50.52}, condition("canslim_score", "range", min=70, max=None),
+         {"field": "canslim_score", "value": 50.52, "needs": {"min": 70}, "passes": False, "short_by": 19.48}),
+        # Missing data fails with no distance to report.
+        ({"rs_rating": None}, condition("rs_rating", "range", min=70, max=None),
+         {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False}),
+        ({}, condition("rs_rating", "range", min=70, max=None),
+         {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False}),
+        # Same coercion as the evaluator: a numeric string is measured as a number.
+        ({"rs_rating": "50"}, condition("rs_rating", "range", min=70, max=None),
+         {"field": "rs_rating", "value": "50", "needs": {"min": 70}, "passes": False, "short_by": 20.0}),
+        ({"current_price": 4}, condition("price", "range", min=10, max=None),
+         {"field": "price", "value": 4, "needs": {"min": 10}, "passes": False, "short_by": 6.0}),
+        # inf is not valid JSON, so it reads as null without changing the verdict.
+        ({"scan_mode": "listing_only"}, condition("listing_aware_volume", "range", min=100, max=None),
+         {"field": "listing_aware_volume", "value": None, "needs": {"min": 100}, "passes": True}),
+        ({"scan_mode": "listing_only"}, condition("listing_aware_volume", "range", min=None, max=100),
+         {"field": "listing_aware_volume", "value": None, "needs": {"max": 100}, "passes": False}),
+        ({"ma_alignment": "true"}, condition("ma_alignment", "boolean", value=True),
+         {"field": "ma_alignment", "value": "true", "needs": {"is": True}, "passes": False}),
+        ({"p": "cup"}, condition("p", "categorical", values=["cup"], mode="include"),
+         {"field": "p", "value": "cup", "needs": {"in": ["cup"]}, "passes": True}),
+        ({"p": "cup"}, condition("p", "categorical", values=["cup", "vcp"], mode="exclude"),
+         {"field": "p", "value": "cup", "needs": {"not_in": ["cup", "vcp"]}, "passes": False}),
+        ({"group": "Semiconductors"}, condition("group", "text", pattern="semi"),
+         {"field": "group", "value": "Semiconductors", "needs": {"contains": "semi"}, "passes": True}),
+    ],
+)
+def test_explain_condition_reports_the_requirement_and_shortfall(row, cond, expected):
+    assert explain_condition(row, cond) == expected

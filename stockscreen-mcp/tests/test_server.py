@@ -30,7 +30,8 @@ async def test_every_tool_is_listed_as_read_only():
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     assert set(tools) == {
-        "list_markets", "list_screens", "run_screen", "get_stock", "market_overview", "group_rankings",
+        "list_markets", "list_screens", "run_screen", "get_stock", "audit_stocks", "market_overview",
+        "group_rankings",
     }
     for tool in tools.values():
         assert tool.annotations.read_only_hint is True
@@ -228,3 +229,134 @@ async def test_group_lookup_accepts_a_unique_partial_name():
     # IBD names are abbreviated ("Elec-Semiconductor Equip"); a unique substring should do.
     detail = await call("group_rankings", market="US", group="semiconduct")
     assert detail["group"]["group"] == "Semiconductors"
+
+
+CCC_FAILS_STAGE = {"field": "stage", "value": 3, "needs": {"min": 2, "max": 2}, "passes": False, "short_by": 1.0}
+
+
+async def test_audit_stocks_explains_a_passing_and_a_failing_symbol():
+    result = await call("audit_stocks", symbols=["AAA", "CCC"], screens=["minervini"])
+
+    assert result == {
+        "market": "US",
+        "as_of_date": "2026-10-09",
+        "screens": ["minervini"],
+        "stocks": [
+            {
+                "symbol": "AAA",
+                "snapshot": {"company_name": "AAA Corp", "current_price": 10.0, "rs_rating": 95, "stage": 2,
+                             "composite_score": 81, "ibd_industry_group": "Semiconductors", "ibd_group_rank": 3},
+                "screens": {"minervini": {"passes": True, "failed": []}},
+                "near_misses": [],
+            },
+            {
+                "symbol": "CCC",
+                "snapshot": {"company_name": "CCC Corp", "current_price": 10.0, "rs_rating": 99, "stage": 3,
+                             "composite_score": 90, "ibd_industry_group": "Semiconductors", "ibd_group_rank": 3},
+                "screens": {"minervini": {"passes": False, "failed": [CCC_FAILS_STAGE]}},
+                "near_misses": ["minervini"],
+            },
+        ],
+        "not_found": [],
+    }
+
+
+async def test_audit_stocks_near_misses_fail_exactly_one_rule(use_fake_data):
+    _, rows = use_fake_data.scan("US")
+    next(r for r in rows if r["symbol"] == "BBB").update(rs_rating=60, stage=3)
+
+    result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC"], screens=["minervini"])
+
+    assert {s["symbol"]: s["near_misses"] for s in result["stocks"]} == {"AAA": [], "BBB": [], "CCC": ["minervini"]}
+    assert result["stocks"][1]["screens"]["minervini"]["failed"] == [
+        {"field": "rs_rating", "value": 60, "needs": {"min": 70}, "passes": False, "short_by": 10.0},
+        CCC_FAILS_STAGE,
+    ]
+
+
+async def test_audit_stocks_matches_any_case_dedupes_and_reports_not_found():
+    result = await call("audit_stocks", symbols=["ccc", "zZz", " Aaa ", "CCC", "zzz"], screens=["minervini"])
+
+    assert [s["symbol"] for s in result["stocks"]] == ["CCC", "AAA"]
+    assert result["not_found"] == ["ZZZ"]
+
+    nothing = await call("audit_stocks", symbols=["zzz"], screens=["minervini"])
+    assert (nothing["stocks"], nothing["not_found"]) == ([], ["ZZZ"])
+
+
+async def test_audit_stocks_unknown_screen_lists_the_available_ids():
+    message = await call_error("audit_stocks", symbols=["AAA"], screens=["minervini", "minerva"])
+    assert "Unknown screen 'minerva'. Available: minervini, correction_survivors, se_cup_handle." in message
+    # Hidden where the market has no opportunity state, as in list_screens.
+    message = await call_error("audit_stocks", symbols=["AAA"], market="AU", screens=["correction_survivors"])
+    assert "Unknown screen 'correction_survivors'. Available: minervini, se_cup_handle." in message
+
+
+async def test_audit_stocks_include_passing_lists_the_rules_met():
+    result = await call("audit_stocks", symbols=["CCC"], screens=["minervini"], include_passing=True)
+
+    assert result["stocks"][0]["screens"]["minervini"] == {
+        "passes": False,
+        "failed": [CCC_FAILS_STAGE],
+        "passed": [
+            {"field": "minervini_score", "value": 95, "needs": {"min": 70}, "passes": True},
+            {"field": "rs_rating", "value": 99, "needs": {"min": 70}, "passes": True},
+            {"field": "ma_alignment", "value": True, "needs": {"is": True}, "passes": True},
+        ],
+    }
+
+
+async def test_audit_stocks_defaults_to_every_visible_screen_in_list_screens_order():
+    assert (await call("audit_stocks", symbols=["AAA"]))["screens"] == [
+        "minervini", "correction_survivors", "se_cup_handle",
+    ]
+    assert (await call("audit_stocks", symbols=["AAA"], market="AU"))["screens"] == ["minervini", "se_cup_handle"]
+    assert (await call("audit_stocks", symbols=["AAA"], screens=["se_cup_handle", "MINERVINI"]))["screens"] == [
+        "minervini", "se_cup_handle",
+    ]
+
+
+async def test_audit_stocks_passes_agree_with_get_stock():
+    result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC", "DDD", "EEE"])
+
+    passing = {s["symbol"]: [i for i, r in s["screens"].items() if r["passes"]] for s in result["stocks"]}
+    assert passing == {
+        "AAA": ["minervini", "correction_survivors", "se_cup_handle"], "BBB": ["minervini"],
+        "CCC": [], "DDD": [], "EEE": [],
+    }
+    for symbol, screens in passing.items():
+        assert screens == (await call("get_stock", symbol=symbol))["passes_screens"]
+
+
+async def test_audit_stocks_missing_data_fails_with_no_shortfall():
+    result = await call("audit_stocks", symbols=["DDD"], screens=["minervini"])
+
+    assert result["stocks"][0]["screens"]["minervini"]["failed"] == [
+        {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False},
+    ]
+
+
+async def test_audit_stocks_notes_a_failure_from_an_optional_group(use_fake_data):
+    scan, _ = use_fake_data.scan("US")
+    grouped = copy.deepcopy(scan["preset_screens"][0])  # minervini: AAA and BBB pass its required rules
+    grouped["id"] = "minervini_semis"
+    grouped["filter_expression"]["groups"] = [
+        {"id": "semis", "name": "Semis", "enabled": True, "match": "all",
+         "conditions": [{"field": "ibd_industry_group", "kind": "categorical", "values": ["Semiconductors"]}]},
+    ]
+    scan["preset_screens"].append(grouped)
+
+    aaa, bbb = (await call("audit_stocks", symbols=["AAA", "BBB"], screens=["minervini_semis"]))["stocks"]
+
+    assert aaa["screens"]["minervini_semis"] == {"passes": True, "failed": []}
+    assert bbb["screens"]["minervini_semis"] == {
+        "passes": False, "failed": [], "note": "fails an optional rule group",
+    }
+    assert bbb["near_misses"] == []
+
+
+async def test_audit_stocks_limits_the_symbol_list():
+    listed = [f"S{i}" for i in range(50)]
+    assert (await call("audit_stocks", symbols=listed, screens=["minervini"]))["not_found"] == listed
+    assert "symbols" in await call_error("audit_stocks", symbols=[*listed, "S50"])
+    assert "symbols" in await call_error("audit_stocks", symbols=[])

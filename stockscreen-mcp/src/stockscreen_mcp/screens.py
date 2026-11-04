@@ -108,6 +108,38 @@ def evaluate_condition(row: dict[str, Any], condition: dict[str, Any]) -> bool:
     return bool(evaluator and evaluator(row, condition))
 
 
+_NEEDS = {
+    "range": lambda c: {bound: c[bound] for bound in ("min", "max") if c.get(bound) is not None},
+    "categorical": lambda c: {"not_in" if c.get("mode") == "exclude" else "in": c.get("values", [])},
+    "boolean": lambda c: {"is": c.get("value")},
+    "text": lambda c: {"contains": c.get("pattern", "")},
+}
+
+
+def explain_condition(row: dict[str, Any], condition: dict[str, Any]) -> dict[str, Any]:
+    """One condition's verdict for a row: its value, the requirement, and any numeric shortfall."""
+    kind = condition.get("kind")
+    value = row_value(row, condition["field"])
+    if isinstance(value, float) and not math.isfinite(value):
+        value = None  # inf/NaN (e.g. listing_aware_volume) are not valid JSON
+    passes = evaluate_condition(row, condition)
+    explanation = {
+        "field": condition["field"],
+        "value": value,
+        "needs": _NEEDS[kind](condition) if kind in _NEEDS else {},
+        "passes": passes,
+    }
+    number = _js_number(value)
+    if kind == "range" and not passes and math.isfinite(number):
+        # Compares the number, not the raw value, so text bounds can't yield a negative or NaN gap.
+        # Rounded because 70 - 50.52 is 19.479999999999997, and callers repeat this number to people.
+        if _less(number, condition.get("min")):
+            explanation["short_by"] = round(_js_number(condition["min"]) - number, 6)
+        elif _less(condition.get("max"), number):
+            explanation["short_by"] = round(number - _js_number(condition["max"]), 6)
+    return explanation
+
+
 def evaluate_group(row: dict[str, Any], group: dict[str, Any]) -> bool:
     if group.get("enabled") is False:
         return False
