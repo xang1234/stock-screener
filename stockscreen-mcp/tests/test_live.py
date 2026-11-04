@@ -46,7 +46,7 @@ async def test_all_tools_against_the_live_publish():
             audit = await call(client, "audit_stocks", symbols=[symbol], market="US", detail=True)
             verdict = audit["stocks"][0]
             assert verdict["passes"] == stock["passes_screens"]
-            assert set(verdict["failed_rules"]) == set(verdict["fails"])
+            assert set(verdict["failed_rules"]) == set(audit["screens"]) - set(verdict["passes"])
 
         overview = await call(client, "market_overview", market="US")
         assert overview["exposure"]["exposure_score"] is not None

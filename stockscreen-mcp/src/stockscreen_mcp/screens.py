@@ -166,8 +166,7 @@ def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[
         explanation = explain_condition(row, condition)
         if not explanation.pop("passes"):
             failed.append(explanation)
-    any_of = required.get("match") == "any"
-    if any_of and evaluate_group(row, required):
+    if required.get("match") == "any" and evaluate_group(row, required):
         failed = []  # an unmet alternative is not a failure
     passes = evaluate_expression(row, expression)
     disabled = required.get("enabled") is False
@@ -175,8 +174,7 @@ def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[
     result = {
         "passes": passes,
         "failed": failed,
-        "near_miss": not passes and groups_ok and not disabled and not any_of
-        and len(conditions) >= 2 and len(failed) == 1,
+        "near_miss": not passes and groups_ok and not disabled and len(conditions) >= 2 and len(failed) == 1,
     }
     if disabled:
         result["note"] = "required rule group is disabled"

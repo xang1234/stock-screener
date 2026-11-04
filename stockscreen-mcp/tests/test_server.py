@@ -248,9 +248,9 @@ async def test_audit_stocks_summarises_a_passing_and_a_failing_symbol():
         "as_of_date": "2026-10-09",
         "screens": ["minervini"],
         "stocks": [
-            {"symbol": "AAA", "snapshot": AAA_SNAPSHOT, "passes": ["minervini"], "fails": [], "near_misses": {}},
-            {"symbol": "CCC", "snapshot": CCC_SNAPSHOT, "passes": [], "fails": ["minervini"],
-             "near_misses": {"minervini": CCC_FAILS_STAGE}},
+            {"symbol": "AAA", "snapshot": AAA_SNAPSHOT, "passes": ["minervini"], "near_misses": {}},
+            {"symbol": "CCC", "snapshot": CCC_SNAPSHOT, "passes": [],
+             "near_misses": {"minervini": "stage short_by 1.0"}},
         ],
         "not_found": [],
     }
@@ -261,10 +261,9 @@ async def test_audit_stocks_detail_adds_every_failed_rule_on_every_failing_scree
 
     assert result["stocks"] == [
         {"symbol": "AAA", "snapshot": AAA_SNAPSHOT, "passes": ["minervini", "correction_survivors", "se_cup_handle"],
-         "fails": [], "near_misses": {}, "failed_rules": {}},
+         "near_misses": {}, "failed_rules": {}},
         {"symbol": "CCC", "snapshot": CCC_SNAPSHOT, "passes": [],
-         "fails": ["minervini", "correction_survivors", "se_cup_handle"],
-         "near_misses": {"minervini": CCC_FAILS_STAGE},
+         "near_misses": {"minervini": "stage short_by 1.0"},
          "failed_rules": {
              "minervini": [CCC_FAILS_STAGE],
              "correction_survivors": [{"field": "correction_survivor", "value": None, "needs": {"is": True}}],
@@ -280,7 +279,7 @@ async def test_audit_stocks_near_misses_fail_exactly_one_rule(use_fake_data):
     result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC"], screens=["minervini"], detail=True)
 
     assert {s["symbol"]: s["near_misses"] for s in result["stocks"]} == {
-        "AAA": {}, "BBB": {}, "CCC": {"minervini": CCC_FAILS_STAGE},
+        "AAA": {}, "BBB": {}, "CCC": {"minervini": "stage short_by 1.0"},
     }
     assert result["stocks"][1]["failed_rules"] == {"minervini": [
         {"field": "rs_rating", "value": 60, "needs": {"min": 70}, "short_by": 10.0},
@@ -291,8 +290,8 @@ async def test_audit_stocks_near_misses_fail_exactly_one_rule(use_fake_data):
 async def test_audit_stocks_near_misses_need_at_least_two_rules():
     ccc = (await call("audit_stocks", symbols=["CCC"]))["stocks"][0]
 
-    assert ccc["fails"] == ["minervini", "correction_survivors", "se_cup_handle"]
-    assert ccc["near_misses"] == {"minervini": CCC_FAILS_STAGE}
+    assert ccc["passes"] == []
+    assert ccc["near_misses"] == {"minervini": "stage short_by 1.0"}
 
 
 async def test_audit_stocks_short_by_stays_positive_when_the_gap_rounds_to_zero(use_fake_data):
@@ -361,15 +360,24 @@ async def test_audit_stocks_passes_agree_with_get_stock():
     }
     for symbol, screens in passing.items():
         assert screens == (await call("get_stock", symbol=symbol))["passes_screens"]
-    assert result["stocks"][1]["fails"] == ["correction_survivors", "se_cup_handle"]
 
 
 async def test_audit_stocks_missing_data_fails_with_no_shortfall():
     result = await call("audit_stocks", symbols=["DDD"], screens=["minervini"])
 
-    assert result["stocks"][0]["near_misses"] == {
-        "minervini": {"field": "rs_rating", "value": None, "needs": {"min": 70}},
-    }
+    assert result["stocks"][0]["near_misses"] == {"minervini": "rs_rating"}
+
+
+async def test_audit_stocks_non_numeric_near_miss_is_the_bare_field(use_fake_data):
+    scan, rows = use_fake_data.scan("US")
+    next(r for r in rows if r["symbol"] == "AAA")["ma_alignment"] = False
+    scan["preset_screens"].append(preset("aligned", "Aligned", [
+        condition("stage", "range", min=2, max=2), condition("ma_alignment", "boolean", value=True),
+    ]))
+
+    aaa = (await call("audit_stocks", symbols=["AAA"], screens=["aligned"]))["stocks"][0]
+
+    assert aaa["near_misses"] == {"aligned": "ma_alignment"}
 
 
 async def test_audit_stocks_notes_a_failure_from_an_optional_group(use_fake_data):
@@ -386,7 +394,7 @@ async def test_audit_stocks_notes_a_failure_from_an_optional_group(use_fake_data
 
     assert (aaa["passes"], aaa["failed_rules"]) == (["minervini_semis"], {})
     assert "notes" not in aaa
-    assert (bbb["fails"], bbb["near_misses"], bbb["failed_rules"]) == (["minervini_semis"], {}, {"minervini_semis": []})
+    assert (bbb["passes"], bbb["near_misses"], bbb["failed_rules"]) == ([], {}, {"minervini_semis": []})
     assert bbb["notes"] == {"minervini_semis": "fails an optional rule group"}
 
 

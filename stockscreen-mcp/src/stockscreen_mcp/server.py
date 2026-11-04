@@ -76,9 +76,9 @@ SNAPSHOT_FIELDS = (
 )
 # audit_stocks detail: found symbols x rules in the audited screens. Many symbols over a few one-rule
 # screens set this, because each symbol also carries a snapshot and each screen its id. The largest
-# response constructible on the 2026-11-03 US publish is 46 symbols x 3 one-rule screens, 57.2 KB of
+# response constructible on the 2026-11-03 US publish is 46 symbols x 3 one-rule screens, 52.7 KB of
 # client text against a budget of about 60 KB. The uncapped summary of 50 symbols over all 28 screens
-# measured 55 KB to 205 KB on that publish, rising with the symbols' near misses.
+# measured 65.0 KB on that publish for the symbols with the most near misses.
 AUDIT_DETAIL_MAX_RULES = 140
 
 
@@ -269,6 +269,10 @@ def get_stock(
     return {**stock, "as_of_date": scan.get("as_of_date"), "passes_screens": passes}
 
 
+def _near_miss(rule: dict[str, Any]) -> str:
+    return f"{rule['field']} short_by {rule['short_by']}" if "short_by" in rule else rule["field"]
+
+
 @mcp.tool(annotations=READ_ONLY)
 def audit_stocks(
     symbols: Annotated[list[str], Field(
@@ -283,22 +287,24 @@ def audit_stocks(
     )] = False,
 ) -> dict[str, Any]:
     """Check a watchlist or holdings against the preset screens in one call: which screens each stock
-    passes and fails, and which it nearly passes.
+    passes, and which it nearly passes.
 
     Use it to review a list of stocks, find near misses, or see what a position fails today. Use
     get_stock for every field on one symbol, and run_screen to discover new candidates. A long list
     over every screen returns a lot of text, so pass a `screens` list when you only need some.
 
-    Each stock returns a snapshot, `passes` and `fails` (screen ids in list_screens order, matching
-    the website and get_stock's passes_screens), near_misses, and notes when there are any.
-    near_misses maps each screen the stock fails on exactly one of at least two rules to that rule.
-    It ignores how far short the stock is, so check short_by before calling one close. short_by is
-    the positive distance between a failed numeric rule's bound and the stock's value (rs_rating 60
-    against a min of 70 is short_by 10); it is absent when the value is missing and on non-numeric
-    rules. notes maps a screen to the reason when its rules alone don't explain the result: a failing
-    optional rule group, or a disabled required group.
+    Each stock returns a snapshot, `passes` (screen ids in list_screens order, matching the website
+    and get_stock's passes_screens), near_misses, and notes when there are any. The top-level `screens`
+    list minus `passes` gives the failing ids.
+    near_misses maps each screen the stock fails on exactly one of at least two rules to
+    "field short_by N", or to the field alone when short_by is absent. It ignores how far short the
+    stock is, so check short_by before calling one close. short_by is the positive distance between a
+    failed numeric rule's bound and the stock's value (rs_rating 60 against a min of 70 is short_by 10);
+    it is absent when the value is missing and on non-numeric rules. notes maps a screen to the reason
+    when its rules alone don't explain the result: a failing optional rule group, or a disabled
+    required group.
 
-    detail=True adds failed_rules: every failed rule for each screen in `fails`. Found symbols times
+    detail=True adds failed_rules: every failed rule for each failing screen. Found symbols times
     the total rules in the audited screens may not exceed 140; past that the call raises an error
     that says how many symbols fit, so pass fewer symbols or a shorter `screens` list.
 
@@ -331,8 +337,7 @@ def audit_stocks(
             "symbol": row["symbol"],
             "snapshot": _pick(row, SNAPSHOT_FIELDS),
             "passes": [i for i, e in explained.items() if e["passes"]],
-            "fails": [i for i, e in explained.items() if not e["passes"]],
-            "near_misses": {i: e["failed"][0] for i, e in explained.items() if e["near_miss"]},
+            "near_misses": {i: _near_miss(e["failed"][0]) for i, e in explained.items() if e["near_miss"]},
         }
         notes = {i: e["note"] for i, e in explained.items() if "note" in e}
         if notes:
