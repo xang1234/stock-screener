@@ -77,7 +77,8 @@ def tradingview_symbol(row: dict[str, Any], market: str) -> str | None:
         venue = SUFFIX_VENUES.get(dot + suffix)
     if venue is None:
         return None
-    return f"{venue.exchange}:{code.replace('-', venue.dash).lstrip(venue.strip)}"
+    ticker = code.replace("-", venue.dash).lstrip(venue.strip)
+    return f"{venue.exchange}:{ticker}" if ticker else None
 
 
 def _display_width(text: str) -> int:
@@ -190,7 +191,10 @@ def _run_screen(args: argparse.Namespace) -> int:
 
 
 def _positive_int(text: str) -> int:
-    value = int(text)
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number") from None
     if value < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return value
@@ -204,7 +208,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     screen = commands.add_parser("screen", help="List a market's screens, or run one.")
     screen.add_argument("screen", nargs="?", help="Screen id, such as minervini. Omit it to list the screens.")
-    screen.add_argument("--market", default="US", help="Market code, such as US, HK or JP (default: US).")
+    screen.add_argument("--market", default="US", type=str.strip, help="Market code, such as US, HK or JP (default: US).")
     screen.add_argument("--limit", type=_positive_int, default=25, help="Rows to show (default: 25).")
     output = screen.add_mutually_exclusive_group()
     output.add_argument("--json", action="store_true", help="Print JSON instead of a table.")
@@ -235,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     except ToolError as exc:
         _stderr(f"Error: {exc}")
         return 1
+    except KeyboardInterrupt:
+        return 130
     except OSError as exc:
         if exc.errno not in (errno.EPIPE, errno.EINVAL):
             raise
