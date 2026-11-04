@@ -149,6 +149,18 @@ export const useStaticGroupsRRG = (marketEntry) => {
   }));
 };
 
+export const useStaticScoreboard = (marketEntry) => {
+  const path = marketEntry?.assets?.scoreboard?.path;
+  const { generation, dataRoot } = useStaticGeneration();
+  return useQuery(staticQueryOptions({
+    key: ['staticScoreboard', path],
+    generation,
+    queryFn: () => fetchStaticJson(path, dataRoot),
+    enabled: Boolean(path),
+    gcTime: Infinity,
+  }));
+};
+
 export const getStaticSupportedMarkets = (manifest) => {
   if (Array.isArray(manifest?.supported_markets) && manifest.supported_markets.length > 0) {
     return manifest.supported_markets;

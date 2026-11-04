@@ -19,6 +19,7 @@ import { useLocation } from 'react-router-dom';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import CandlestickChartIcon from '@mui/icons-material/CandlestickChart';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
+import ScoreboardIcon from '@mui/icons-material/Scoreboard';
 import {
   BrandMark,
   ColorModeButton,
@@ -38,6 +39,9 @@ import { useStaticGenerationLifecycle } from './useStaticGenerationLifecycle';
 import { REPO_URL, SITE_NAME, SITE_TITLE } from './siteMeta';
 import { marketFlag } from '../utils/marketFlags';
 import { isStaticOptionsAvailable } from '../features/options/optionsAvailability';
+
+const OPTIONS_NAV_ITEM = { path: '/options', label: 'Options', matchPrefix: true, icon: <CandlestickChartIcon /> };
+const SCOREBOARD_NAV_ITEM = { path: '/scoreboard', label: 'Scoreboard', icon: <ScoreboardIcon /> };
 
 // Late once the publish says so, or once its deadline passes with nothing new
 // published: a stalled pipeline must not leave a market "current" (#503).
@@ -72,10 +76,14 @@ function StaticLayout({ children }) {
   const selectedUnavailable = getStaticUnavailableMarkets(manifestQuery.data).includes(selectedMarket);
   const now = useMinuteClock();
   const status = selectedUnavailable ? null : publicationStatus(marketEntry.publication, now);
-  const allNavItems = [...CORE_NAV_ITEMS, { path: '/options', label: 'Options', matchPrefix: true, icon: <CandlestickChartIcon /> }];
-  const navItems = isStaticOptionsAvailable(marketEntry) ? allNavItems : CORE_NAV_ITEMS;
+  const allNavItems = [...CORE_NAV_ITEMS, OPTIONS_NAV_ITEM, SCOREBOARD_NAV_ITEM];
+  const navItems = [
+    ...CORE_NAV_ITEMS,
+    ...(isStaticOptionsAvailable(marketEntry) ? [OPTIONS_NAV_ITEM] : []),
+    ...(marketEntry.assets?.scoreboard?.path ? [SCOREBOARD_NAV_ITEM] : []),
+  ];
   const { pathname } = useLocation();
-  // Title from every route: /options still renders (an unavailable notice) when its nav item is hidden.
+  // Title from every route: /options and /scoreboard still render (an unavailable notice) when their nav items are hidden.
   const pageLabel = allNavItems.find((item) => (
     item.matchPrefix ? pathname.startsWith(item.path) : pathname === item.path
   ))?.label;
