@@ -37,15 +37,20 @@ def strict_json(text):
 
 
 class ClosedPipeStdout(io.TextIOWrapper):
-    """A stdout whose reader left: the first flush fails with the errno the platform reports."""
+    """A stdout whose reader left: flushing written text fails once, with the errno the platform reports."""
 
     def __init__(self, path, code):
         super().__init__(open(path, "wb"), encoding="utf-8")
         self.code = code
+        self.pending = False
+
+    def write(self, text):
+        self.pending = True
+        return super().write(text)
 
     def flush(self):
-        code, self.code = self.code, None
-        if code:
+        if self.pending and self.code:
+            code, self.code = self.code, None
             raise OSError(code, "closed pipe")
         super().flush()
 
