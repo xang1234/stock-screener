@@ -231,7 +231,7 @@ async def test_group_lookup_accepts_a_unique_partial_name():
     assert detail["group"]["group"] == "Semiconductors"
 
 
-CCC_FAILS_STAGE = {"field": "stage", "value": 3, "needs": {"min": 2, "max": 2}, "passes": False, "short_by": 1.0}
+CCC_FAILS_STAGE = {"field": "stage", "value": 3, "needs": {"min": 2, "max": 2}, "short_by": 1.0}
 
 
 async def test_audit_stocks_explains_a_passing_and_a_failing_symbol():
@@ -269,9 +269,24 @@ async def test_audit_stocks_near_misses_fail_exactly_one_rule(use_fake_data):
 
     assert {s["symbol"]: s["near_misses"] for s in result["stocks"]} == {"AAA": [], "BBB": [], "CCC": ["minervini"]}
     assert result["stocks"][1]["screens"]["minervini"]["failed"] == [
-        {"field": "rs_rating", "value": 60, "needs": {"min": 70}, "passes": False, "short_by": 10.0},
+        {"field": "rs_rating", "value": 60, "needs": {"min": 70}, "short_by": 10.0},
         CCC_FAILS_STAGE,
     ]
+
+
+async def test_audit_stocks_near_misses_need_at_least_two_rules():
+    ccc = (await call("audit_stocks", symbols=["CCC"]))["stocks"][0]
+
+    assert ccc["screens"] == {
+        "minervini": {"passes": False, "failed": [CCC_FAILS_STAGE]},
+        "correction_survivors": {
+            "passes": False, "failed": [{"field": "correction_survivor", "value": None, "needs": {"is": True}}],
+        },
+        "se_cup_handle": {
+            "passes": False, "failed": [{"field": "se_pattern_primary", "value": None, "needs": {"in": ["cup_handle"]}}],
+        },
+    }
+    assert ccc["near_misses"] == ["minervini"]
 
 
 async def test_audit_stocks_matches_any_case_dedupes_and_reports_not_found():
@@ -299,9 +314,9 @@ async def test_audit_stocks_include_passing_lists_the_rules_met():
         "passes": False,
         "failed": [CCC_FAILS_STAGE],
         "passed": [
-            {"field": "minervini_score", "value": 95, "needs": {"min": 70}, "passes": True},
-            {"field": "rs_rating", "value": 99, "needs": {"min": 70}, "passes": True},
-            {"field": "ma_alignment", "value": True, "needs": {"is": True}, "passes": True},
+            {"field": "minervini_score", "value": 95, "needs": {"min": 70}},
+            {"field": "rs_rating", "value": 99, "needs": {"min": 70}},
+            {"field": "ma_alignment", "value": True, "needs": {"is": True}},
         ],
     }
 
@@ -332,7 +347,7 @@ async def test_audit_stocks_missing_data_fails_with_no_shortfall():
     result = await call("audit_stocks", symbols=["DDD"], screens=["minervini"])
 
     assert result["stocks"][0]["screens"]["minervini"]["failed"] == [
-        {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False},
+        {"field": "rs_rating", "value": None, "needs": {"min": 70}},
     ]
 
 
@@ -360,3 +375,27 @@ async def test_audit_stocks_limits_the_symbol_list():
     assert (await call("audit_stocks", symbols=listed, screens=["minervini"]))["not_found"] == listed
     assert "symbols" in await call_error("audit_stocks", symbols=[*listed, "S50"])
     assert "symbols" in await call_error("audit_stocks", symbols=[])
+
+
+async def test_audit_stocks_accepts_exactly_the_cell_limit():
+    listed = ["AAA", *(f"S{i}" for i in range(49))]
+
+    result = await call("audit_stocks", symbols=listed)
+
+    assert result["screens"] == ["minervini", "correction_survivors", "se_cup_handle"]
+    assert [s["symbol"] for s in result["stocks"]] == ["AAA"]
+    assert result["not_found"] == listed[1:]
+
+
+async def test_audit_stocks_refuses_more_cells_than_the_limit(use_fake_data):
+    scan, _ = use_fake_data.scan("US")
+    scan["preset_screens"].append(copy.deepcopy(scan["preset_screens"][0]) | {"id": "fourth"})
+    listed = [f"S{i}" for i in range(50)]
+
+    message = await call_error("audit_stocks", symbols=listed)
+    assert "50 symbols x 4 screens = 200 cells; the limit is 150. Pass fewer symbols or a `screens` list." in message
+
+    # Duplicates don't count: 50 entries are 37 symbols, and 37 x 4 is 148 cells.
+    deduped = await call("audit_stocks", symbols=[*listed[:37], *listed[:13]])
+    assert deduped["not_found"] == listed[:37]
+    assert (await call("audit_stocks", symbols=listed, screens=["minervini"]))["not_found"] == listed

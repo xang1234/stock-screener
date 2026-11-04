@@ -36,7 +36,8 @@ Daily stock-screening data from the open-source stock-screener project
   the stock's own market (99 = strongest). Group ranks are IBD-style industry
   groups ranked by their stocks' RS (1 = strongest).
 - Start with list_screens / run_screen for candidates, get_stock for one ticker,
-  market_overview for market health and breadth, group_rankings for leading groups.
+  audit_stocks to check a watchlist or holdings against the screens, market_overview
+  for market health and breadth, group_rankings for leading groups.
 - This is educational screening data, not investment advice.
 """
 
@@ -73,6 +74,9 @@ SNAPSHOT_FIELDS = (
     "company_name", "current_price", "price_change_1d", "rs_rating", "rs_rating_3m", "stage", "composite_score",
     "ibd_industry_group", "ibd_group_rank",
 )
+# audit_stocks symbols x screens. On the live US publish, 10 symbols over all 28 screens
+# reached 63 KB, past the MCP output budget of common clients.
+AUDIT_MAX_CELLS = 150
 
 
 class Filter(BaseModel):
@@ -284,9 +288,10 @@ def audit_stocks(
     (rs_rating 60 against a min of 70 is short_by 10); it is absent when the value is missing and
     on non-numeric rules. `passes` matches the website and get_stock's passes_screens. failed and
     passed cover the rules list_screens shows, and a `note` marks a failure that comes from an
-    optional rule group instead. near_misses lists the screens a stock fails on exactly one rule.
-    Symbols absent from the market's scan are listed in not_found rather than raising an error.
-    Output grows with symbols times screens, so pass `screens` for more than a few symbols.
+    optional rule group instead. near_misses lists the screens a stock fails on exactly one of at
+    least two rules. Symbols absent from the market's scan are listed in not_found rather than
+    raising an error. Symbols times screens may not exceed 150; past that the call raises an
+    error, so pass fewer symbols or a `screens` list.
     """
     scan, rows = data.scan(market)
     presets = {p["id"]: p for p in _visible_presets(market, scan)}
@@ -298,6 +303,12 @@ def audit_stocks(
 
     by_symbol = {str(r.get("symbol", "")).upper(): r for r in rows}
     requested = list(dict.fromkeys(s.strip().upper() for s in symbols))
+    cells = len(requested) * len(audited)
+    if cells > AUDIT_MAX_CELLS:
+        raise ToolError(
+            f"{len(requested)} symbols x {len(audited)} screens = {cells} cells; the limit is {AUDIT_MAX_CELLS}. "
+            "Pass fewer symbols or a `screens` list."
+        )
     stocks = []
     for symbol in requested:
         row = by_symbol.get(symbol)
@@ -306,13 +317,13 @@ def audit_stocks(
         results = {}
         for preset in audited:
             expression = preset["filter_expression"]
-            explained = [explain_condition(row, c) for c in expression["required"]["conditions"]]
-            result = {
-                "passes": evaluate_expression(row, expression),
-                "failed": [e for e in explained if not e["passes"]],
-            }
+            failed, passed = [], []
+            for condition in expression["required"]["conditions"]:
+                explanation = explain_condition(row, condition)
+                (passed if explanation.pop("passes") else failed).append(explanation)
+            result = {"passes": evaluate_expression(row, expression), "failed": failed}
             if include_passing:
-                result["passed"] = [e for e in explained if e["passes"]]
+                result["passed"] = passed
             has_groups = any(g.get("enabled") is not False for g in expression.get("groups") or [])
             if has_groups and not result["passes"] and not result["failed"]:
                 result["note"] = "fails an optional rule group"
@@ -321,7 +332,11 @@ def audit_stocks(
             "symbol": row["symbol"],
             "snapshot": _pick(row, SNAPSHOT_FIELDS),
             "screens": results,
-            "near_misses": [i for i, r in results.items() if not r["passes"] and len(r["failed"]) == 1],
+            "near_misses": [
+                i for i, r in results.items()
+                if not r["passes"] and len(r["failed"]) == 1
+                and len(presets[i]["filter_expression"]["required"]["conditions"]) >= 2
+            ],
         })
     return {
         "market": market.upper(),
