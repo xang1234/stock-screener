@@ -168,6 +168,8 @@ def test_js_coercion_and_strict_equality(row, cond, expected):
          {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False}),
         ({}, condition("rs_rating", "range", min=70, max=None),
          {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False}),
+        ({"x": -1e308}, condition("x", "range", min=1e308, max=None),
+         {"field": "x", "value": -1e308, "needs": {"min": 1e308}, "passes": False}),
         ({"rs_rating": "50"}, condition("rs_rating", "range", min=70, max=None),
          {"field": "rs_rating", "value": "50", "needs": {"min": 70}, "passes": False, "short_by": 20.0}),
         ({"current_price": 4}, condition("price", "range", min=10, max=None),

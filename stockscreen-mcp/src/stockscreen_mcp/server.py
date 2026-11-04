@@ -211,7 +211,7 @@ def run_screen(
 
     preset = None
     if screen is not None:
-        presets = {p["id"]: p for p in _visible_presets(market, scan)}
+        presets = {p["id"].lower(): p for p in _visible_presets(market, scan)}
         preset = presets.get(screen.strip().lower())
         if preset is None:
             raise ToolError(f"Unknown screen {screen!r}. Available: {', '.join(presets)}.")
@@ -314,12 +314,12 @@ def audit_stocks(
     Symbols absent from the market's scan are listed in not_found rather than raising an error.
     """
     scan, rows = data.scan(market)
-    presets = {p["id"]: p for p in _visible_presets(market, scan)}
+    presets = {p["id"].lower(): p for p in _visible_presets(market, scan)}
     wanted = set(presets) if screens is None else {s.strip().lower() for s in screens}
     unknown = sorted(wanted - presets.keys())
     if unknown:
         raise ToolError(f"Unknown screen {', '.join(map(repr, unknown))}. Available: {', '.join(presets)}.")
-    audited = [p for p in presets.values() if p["id"] in wanted]
+    audited = [p for key, p in presets.items() if key in wanted]
 
     by_symbol = {str(r.get("symbol", "")).upper(): r for r in rows}
     requested = list(dict.fromkeys(s.strip().upper() for s in symbols))

@@ -149,7 +149,7 @@ def explain_condition(row: dict[str, Any], condition: dict[str, Any]) -> dict[st
     if kind == "range" and not passes and math.isfinite(number):
         low, high = _js_number(condition.get("min")), _js_number(condition.get("max"))
         gap = low - number if number < low else number - high
-        if gap > 0:
+        if gap > 0 and math.isfinite(gap):
             explanation["short_by"] = float(f"{gap:.12g}")
     return explanation
 

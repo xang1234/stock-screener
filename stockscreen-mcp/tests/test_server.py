@@ -388,6 +388,18 @@ async def test_audit_stocks_notes_a_failure_from_an_optional_group(use_fake_data
     assert bbb["notes"] == {"minervini_semis": "fails an optional rule group"}
 
 
+async def test_screen_ids_from_list_screens_work_in_any_case(use_fake_data):
+    scan, _ = use_fake_data.scan("US")
+    mixed = copy.deepcopy(scan["preset_screens"][0])
+    mixed["id"] = "MixedCase"
+    scan["preset_screens"].append(mixed)
+
+    assert "MixedCase" in {s["id"] for s in (await call("list_screens"))["screens"]}
+    audited = await call("audit_stocks", symbols=["AAA"], screens=["MixedCase"])
+    assert (audited["screens"], audited["stocks"][0]["passes"]) == (["MixedCase"], ["MixedCase"])
+    assert (await call("run_screen", screen="MixedCase"))["total_matches"] == 2
+
+
 async def test_audit_stocks_limits_the_symbol_list():
     listed = [f"S{i}" for i in range(50)]
     assert (await call("audit_stocks", symbols=listed, screens=["minervini"]))["not_found"] == listed

@@ -34,7 +34,7 @@ All tools are read-only.
 | `list_screens` | The 28 preset screens and their exact rules: Minervini, CANSLIM, VCP, cup with handle, high tight flag, momentum, IPOs and more |
 | `run_screen` | A preset and/or your own filters over every stock in a market's scan, sorted, with the match count. A preset returns exactly the stocks the website shows for it |
 | `get_stock` | One stock: RS ratings (overall, 1M, 3M, 12M), stage, screener scores, growth, group rank, setup and pattern fields, and the screens it passes |
-| `audit_stocks` | A watchlist of up to 50 symbols against the preset screens: the screens each stock passes, and near misses that fail exactly one of several rules, as the field and how far short it is. `detail` also returns every failed rule per failing screen; responses over 80,000 characters are refused with a hint of how many symbols fit |
+| `audit_stocks` | A watchlist of up to 50 symbols against the preset screens: the screens each stock passes, and near misses that fail exactly one of several rules, as the field and how far short it is (the field alone when the rule is not numeric or the value is missing). `detail` also returns every failed rule per failing screen; responses over 80,000 characters are refused with a hint of how many symbols fit |
 | `market_overview` | Exposure score and stance, distribution days, follow-through day, StockBee-style breadth (4% movers, 5/10-day ratios, T2108, 52-week highs/lows), key index moves, top groups |
 | `group_rankings` | IBD-style industry groups ranked by relative strength, with 1W/1M/3M/6M rank changes and weekly movers. Pass a group for its rank history and strongest stocks |
 
