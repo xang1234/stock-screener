@@ -1245,11 +1245,15 @@ def test_held_task_ids_reads_running_reserved_and_scheduled_tasks():
 
 
 def test_held_task_ids_ignores_a_worker_that_stopped_beating():
-    assert _held(active={"a@1": []}, roster={"a@1": 10, "killed@2": 180}) == set()
+    assert _held(active={"a@1": []}, roster={"a@1": 10, "killed@2": 301}) == set()
 
 
 def test_held_task_ids_is_unknown_while_a_beating_worker_is_silent():
     assert _held(active={"a@1": []}, roster={"a@1": 10, "busy-solo@2": 30}) is None
+
+
+def test_held_task_ids_is_unknown_while_a_stalled_worker_is_remembered():
+    assert _held(active={"a@1": []}, roster={"a@1": 10, "stalled@2": 299}) is None
 
 
 def test_held_task_ids_is_unknown_while_the_roster_is_young():

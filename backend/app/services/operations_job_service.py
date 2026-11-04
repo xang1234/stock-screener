@@ -150,12 +150,13 @@ def run_worker_queue_heartbeat(worker: str, queues: list[str], stop: threading.E
 def held_task_ids() -> set[str] | None:
     """Ids of every task a worker is running or holding, or None when that
     cannot be known: the inspect replies are missing, the roster is unreadable
-    or younger than one round of heartbeats, or a worker that beat within the
-    last round did not answer. A busy solo-pool worker answers nothing, so on
-    a solo pool this is usually None.
+    or younger than one round of heartbeats, or a worker the roster has not
+    yet forgotten did not answer. A busy solo-pool worker answers nothing, so
+    on a solo pool this is usually None.
 
     A worker killed with its task stops beating, so it stops counting after
-    WORKER_QUEUES_COMPLETE_AFTER.
+    WORKER_QUEUES_MEMORY. A worker frozen for longer than that reads as gone
+    while its task may still resume.
     """
     inspect = celery_app.control.inspect(timeout=1.0)
     active, reserved, scheduled = inspect.active(), inspect.reserved(), inspect.scheduled()
@@ -183,7 +184,7 @@ def held_task_ids() -> set[str] | None:
             return None
         if seen_at is None:
             return None
-        if now - seen_at <= WORKER_QUEUES_COMPLETE_AFTER and raw_name.decode() not in answered:
+        if now - seen_at <= WORKER_QUEUES_MEMORY and raw_name.decode() not in answered:
             return None
     held = {task["id"] for reply in (active, reserved) for tasks in reply.values() for task in tasks}
     held.update(
