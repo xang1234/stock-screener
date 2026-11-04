@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import sys
@@ -151,7 +152,7 @@ def _write_watchlist(result: server.ScreenResult, target: str) -> int:
 
     text = ",".join(tokens)
     if target == "-":
-        print(text)
+        print(text, flush=True)
         destination = "stdout"
     else:
         destination = target or f"{screen_id}-{result.market}-{result.as_of_date}.txt"
@@ -183,8 +184,8 @@ def _run_screen(args: argparse.Namespace) -> int:
             indent=2,
         ))
         return 0
-    print(_table(shown))
-    print(f"{len(shown)} of {result.total}")
+    print(_table(shown), flush=True)
+    _stderr(f"{len(shown)} of {result.total}")
     return 0
 
 
@@ -234,7 +235,10 @@ def main(argv: list[str] | None = None) -> int:
     except ToolError as exc:
         _stderr(f"Error: {exc}")
         return 1
-    except BrokenPipeError:
-        # The reader left (`| head`), which is not a failure. Shutdown flushes stdout again, so aim it at devnull.
+    except OSError as exc:
+        if exc.errno not in (errno.EPIPE, errno.EINVAL):
+            raise
+        # The reader left (`| head`), which is not a failure. Windows reports a closed pipe as EINVAL.
+        # Shutdown flushes stdout again, so aim it at devnull.
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 0
