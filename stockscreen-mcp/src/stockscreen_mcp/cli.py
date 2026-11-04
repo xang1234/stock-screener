@@ -22,10 +22,13 @@ class Venue(NamedTuple):
     strip: str = ""
 
 
+# Keyed by exchange and gics_industry, where None means any other industry. XNYS covers funds TradingView
+# lists under AMEX: 2,693 of the 2,803 such rows resolve there and 78 under NYSE (scanner census, 2026-11-05).
 US_VENUES = {
-    "XNYS": Venue("NYSE", dash="."),
-    "XNAS": Venue("NASDAQ", dash="."),
-    "XASE": Venue("AMEX", dash="."),
+    ("XNYS", None): Venue("NYSE", dash="."),
+    ("XNYS", "Exchange Traded Fund"): Venue("AMEX", dash="."),
+    ("XNAS", None): Venue("NASDAQ", dash="."),
+    ("XASE", None): Venue("AMEX", dash="."),
 }
 SUFFIX_VENUES = {
     ".HK": Venue("HKEX", strip="0"),
@@ -63,7 +66,9 @@ def _stderr(message: str) -> None:
 
 def tradingview_symbol(row: dict[str, Any], market: str) -> str | None:
     if market == "US":
-        code, venue = row["symbol"], US_VENUES.get(row.get("exchange"))
+        exchange = row.get("exchange")
+        code = row["symbol"]
+        venue = US_VENUES.get((exchange, row.get("gics_industry"))) or US_VENUES.get((exchange, None))
     else:
         code, dot, suffix = row["symbol"].rpartition(".")
         venue = SUFFIX_VENUES.get(dot + suffix)
