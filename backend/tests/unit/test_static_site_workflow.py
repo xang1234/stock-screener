@@ -1021,6 +1021,113 @@ def test_publisher_deploys_only_from_default_branch_dispatch() -> None:
     assert deploy["environment"]["name"] == "github-pages"
 
 
+def _step_names(steps: list[dict]) -> list[str | None]:
+    return [step.get("name") for step in steps]
+
+
+def test_record_ledger_runs_only_after_a_production_deploy() -> None:
+    jobs = _publish_workflow()["jobs"]
+    job = jobs["record-ledger"]
+    assert job["if"] == jobs["deploy"]["if"]
+    assert PRODUCTION_RUN in job["if"]
+    assert job["needs"] == ["build", "deploy"]
+    assert job["permissions"] == {"contents": "write"}
+
+
+def test_record_ledger_installs_nothing_and_runs_only_the_ledger_script() -> None:
+    steps = _publish_workflow()["jobs"]["record-ledger"]["steps"]
+    assert [step["uses"].split("@")[0] for step in steps if "uses" in step] == [
+        "actions/checkout",
+        "actions/download-artifact",
+    ]
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert [step["run"].split() for step in steps if "run" in step] == [
+        [
+            "cd",
+            "backend",
+            "python3",
+            "-m",
+            "app.scripts.scoreboard_ledger",
+            "record",
+            "--days-dir",
+            "/tmp/scoreboard-days",
+        ]
+    ]
+
+
+def test_record_ledger_reads_the_artifact_the_build_uploads() -> None:
+    upload = _publish_step("Upload published screen matches")
+    steps = _publish_workflow()["jobs"]["record-ledger"]["steps"]
+    download = next(step for step in steps if step.get("name") == "Download published screen matches")
+    assert download["with"]["name"] == upload["with"]["name"] == "scoreboard-days"
+    assert download["with"]["path"] == upload["with"]["path"]
+
+
+def test_extraction_reads_the_built_site_and_never_blocks_the_deploy() -> None:
+    names = _step_names(_publish_workflow()["jobs"]["build"]["steps"])
+    extract = names.index("Extract published screen matches")
+    upload = names.index("Upload published screen matches")
+    assert names.index("Build static frontend") < extract < upload < names.index("Upload Pages artifact")
+    assert _publish_step("Extract published screen matches")["continue-on-error"] is True
+    assert _publish_step("Upload published screen matches")["continue-on-error"] is True
+    assert "--site-dir ../frontend/dist/static-data" in _publish_step("Extract published screen matches")["run"]
+
+
+def test_publisher_rehearses_a_ledger_script_change() -> None:
+    # PyYAML reads the bare ``on`` key as True.
+    paths = _publish_workflow()[True]["pull_request"]["paths"]
+    assert "backend/app/scripts/scoreboard_ledger.py" in paths
+
+
+def _market_step(name: str) -> dict:
+    steps = _site_workflow()["jobs"]["build-market"]["steps"]
+    return next(step for step in steps if step.get("name") == name)
+
+
+def test_market_scoreboard_runs_between_export_and_upload_and_cannot_lose_the_market() -> None:
+    names = _step_names(_site_workflow()["jobs"]["build-market"]["steps"])
+    download = names.index("Download scoreboard ledger")
+    build = names.index("Build market scoreboard")
+    assert names.index("Export market static data bundle") < download < build < names.index("Upload market artifact")
+
+    has_artifact = "steps.export-market.outputs.has_artifact == 'true'"
+    for step in (_market_step("Download scoreboard ledger"), _market_step("Build market scoreboard")):
+        assert has_artifact in step["if"]
+        assert step["continue-on-error"] is True
+    scoreboard = _market_step("Build market scoreboard")
+    assert scoreboard["timeout-minutes"] == 20
+    assert "steps.download-scoreboard-ledger.outcome == 'success'" in scoreboard["if"]
+
+
+def test_market_scoreboard_arguments_name_the_uploaded_market_directory() -> None:
+    run = _market_step("Build market scoreboard")["run"]
+    assert _workflow_script_args(run, "app.scripts.build_static_scoreboard") == [
+        "--market",
+        "${{ matrix.market }}",
+        "--market-dir",
+        "/tmp/static-data/markets/${MARKET_LOWER}",
+        "--ledger-dir",
+        "/tmp/scoreboard-ledger",
+    ]
+    assert _market_step("Upload market artifact")["with"]["path"] == "/tmp/static-data/markets/${{ env.MARKET_LOWER }}"
+
+
+def test_static_site_workflow_never_writes_the_ledger_release() -> None:
+    # The market job runs from any branch on dispatch, so only download may appear.
+    ledger_steps = [
+        step
+        for job in _site_workflow()["jobs"].values()
+        for step in job["steps"]
+        if "scoreboard-ledger-data" in step.get("run", "") or "scoreboard_ledger" in step.get("run", "")
+    ]
+    assert [step["name"] for step in ledger_steps] == ["Download scoreboard ledger"]
+    assert "gh release download scoreboard-ledger-data" in ledger_steps[0]["run"]
+    assert "upload" not in ledger_steps[0]["run"]
+    workflow_text = SITE_WORKFLOW.read_text(encoding="utf-8")
+    for write in ("upload scoreboard-ledger-data", "create scoreboard-ledger-data", "scoreboard_ledger record"):
+        assert write not in workflow_text
+
+
 def test_every_upload_path_wakes_the_publisher() -> None:
     # The publisher has no schedule; these dispatches are its only trigger.
     jobs = _site_workflow()["jobs"]
