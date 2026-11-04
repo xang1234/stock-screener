@@ -66,6 +66,29 @@ The static frontend loads the small index with the market bundle and fetches a d
 
 This rolling release is a static-build continuity mechanism only. The live app continues to read contributor metadata from its own PostgreSQL snapshots and does not depend on GitHub Releases.
 
+## Forward-Return Scoreboard
+
+A market entry can advertise `assets.scoreboard = {"path": "markets/<m>/scoreboard.json"}`, a small file of what happened after each preset's published matches. It adds no schema bump: the path validator checks it like any other asset, and one unparseable advertised file rejects the whole market.
+
+Past matches cannot be rebuilt, because fundamentals keep no history. So the `scoreboard-ledger-data` release stores what the site published, one line per first-published date, in `scoreboard-ledger-<m>-v1.jsonl.gz` with `scoreboard-ledger-<m>-v1.previous.jsonl.gz` as the prior copy. The ledger stores symbols and a hash of each preset's `filter_expression`. It never stores returns or entry prices, because every build recomputes them from current prices.
+
+Two workflows touch the ledger:
+
+- The `record-ledger` job in `static-site-publish.yml` runs after `deploy`, with the same `if`, so it records what actually deployed. It holds `contents: write`, installs nothing and runs `backend/app/scripts/scoreboard_ledger.py`, which is stdlib only. A date at or before the ledger's end uploads nothing.
+- The `Build market scoreboard` step in `static-site.yml` downloads the ledger and runs `backend/app/scripts/build_static_scoreboard.py` as its own process, with `continue-on-error` and a 20 minute cap. This workflow never writes the release. If the step fails, `manifest.market.json` stays unchanged and the market publishes without the asset.
+
+Returns follow these rules:
+
+- **Entry and exit.** Entry is the open of the first session that opens after publication. Exit is the close of the Nth session, for N of 5, 20 and 60. Returns are in local currency, price only, with no costs.
+- **Prices.** The builder reads `stock_prices` directly, capped at the export's `as_of_date`, so it cannot see a partial bar from a session in progress and cannot reach a provider. A recent IPO still scores, because there is no 50-bar minimum.
+- **Overlap.** A repeat of a symbol inside its counted window is suppressed. The rule runs per preset across the preset's whole history, so a definition or era change does not reset it, and a symbol in two presets counts once in each.
+- **Cohorts.** Numbers are never pooled across `(preset, definition, origin)`. `origin` is `live`, `artifact` (read from a retained build artifact, whose `created_at` only approximates publication) or `artifact_pre_stage_fix` (the same, before the 2026-10-22 stage fix).
+- **Delisted stocks.** A symbol with no price counts in `skipped_missing_history`. Stocks that later delist drop out this way, which can flatter results, so the count is published beside the returns.
+
+Each horizon block has `sample_size`, `signal_dates`, `pending_windows`, `oldest_open_sessions`, `thin`, `positive_rate` (a fraction from 0 to 1), `avg_return_pct`, `median_return_pct`, `avg_excess_return_pct`, `median_excess_return_pct`, `excess_sample_size`, `skipped_missing_history` and `suppressed_overlapping`. `thin` means fewer than 20 closed events or fewer than 5 signal dates. `oldest_open_sessions` is null when no window is open. Statistics with no closed window are null.
+
+`missing_sessions` counts completed sessions between `recording_since` and `ledger_through` with no ledger line. To seed the release, recover a lost day or repair a corrupt asset, see the [scoreboard ledger runbook](runbooks/scoreboard-ledger.md).
+
 ## Maintaining Static Assets
 
 - Keep the static page tour GIF aligned with the exported static routes.
