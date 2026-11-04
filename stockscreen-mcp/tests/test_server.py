@@ -294,7 +294,7 @@ async def test_audit_stocks_near_misses_need_at_least_two_rules():
     assert ccc["near_misses"] == {"minervini": "stage short_by 1.0"}
 
 
-async def test_audit_stocks_short_by_stays_positive_when_the_gap_rounds_to_zero(use_fake_data):
+async def test_audit_stocks_short_by_stays_positive_when_the_gap_is_tiny(use_fake_data):
     scan, rows = use_fake_data.scan("US")
     next(r for r in rows if r["symbol"] == "AAA")["atr"] = 1.4999999
     scan["preset_screens"].append(preset("atr", "ATR", [condition("atr", "range", min=1.5, max=None)]))
