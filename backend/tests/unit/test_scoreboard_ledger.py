@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
+
 from app.domain.markets import SUPPORTED_MARKET_CODES
 from app.scripts import scoreboard_ledger as ledger
 from app.scripts.scoreboard_ledger import (
@@ -306,6 +307,7 @@ def test_command_line_runs_without_site_packages(tmp_path) -> None:
         cwd=BACKEND,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "US canonical: valid, 1 days, through 2026-10-05" in result.stdout
@@ -776,6 +778,7 @@ def test_extract_and_record_run_without_site_packages(tmp_path, release) -> None
             cwd=BACKEND,
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
     assert release.uploads() == [US_PREVIOUS, US]

@@ -26,7 +26,12 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models.stock import StockPrice
 from app.schemas.validation import ValidationSourceKind
-from app.scripts.scoreboard_ledger import LedgerDay, Origin, format_timestamp, load_for_build
+from app.scripts.scoreboard_ledger import (
+    LedgerDay,
+    Origin,
+    format_timestamp,
+    load_for_build,
+)
 from app.services.benchmark_registry_service import benchmark_registry
 from app.services.market_calendar_service import MarketCalendarService
 from app.services.price_row_normalization import (

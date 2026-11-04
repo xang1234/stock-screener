@@ -286,7 +286,7 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 
 def run_gh(*args: str) -> str:
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    result = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise GhError(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()[:400]}")
     return result.stdout
@@ -298,6 +298,7 @@ def release_assets() -> set[str] | None:
         ["gh", "release", "view", RELEASE_TAG, "--json", "assets"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode == 0:
         return {asset["name"] for asset in json.loads(result.stdout)["assets"]}
@@ -319,6 +320,7 @@ def upload_asset(path: Path) -> None:
             ["gh", "release", "upload", RELEASE_TAG, str(path), "--clobber"],
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode == 0:
             return
@@ -502,6 +504,7 @@ def download_artifact(artifact_id: int, path: Path) -> None:
             stdout=handle,
             stderr=subprocess.PIPE,
             text=True,
+            check=False,
         )
     if result.returncode != 0:
         raise GhError(f"gh api artifact {artifact_id} failed: {result.stderr.strip()[:400]}")

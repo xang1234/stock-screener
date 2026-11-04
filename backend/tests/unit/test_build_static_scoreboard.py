@@ -14,7 +14,12 @@ from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.models.stock import StockPrice
 from app.schemas.validation import ValidationSourceKind
 from app.scripts import build_static_scoreboard as builder
-from app.scripts.build_static_scoreboard import StockPriceTable, build_scoreboard, entry_anchor, write_scoreboard
+from app.scripts.build_static_scoreboard import (
+    StockPriceTable,
+    build_scoreboard,
+    entry_anchor,
+    write_scoreboard,
+)
 from app.scripts.scoreboard_ledger import (
     LedgerDay,
     Origin,
@@ -26,7 +31,10 @@ from app.scripts.scoreboard_ledger import (
     write_ledger,
 )
 from app.services.market_calendar_service import MarketCalendarService
-from app.services.static_advertised_paths import StaticAdvertisedPathError, validate_advertised_paths
+from app.services.static_advertised_paths import (
+    StaticAdvertisedPathError,
+    validate_advertised_paths,
+)
 from app.services.static_artifact_combiner import StaticArtifactCombiner
 from app.services.static_data_generations import relocate_into_generation
 from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
