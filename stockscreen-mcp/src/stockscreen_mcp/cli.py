@@ -175,7 +175,7 @@ def _run_screen(args: argparse.Namespace) -> int:
                 "as_of_date": result.as_of_date,
                 "status": result.status,
                 "total": result.total,
-                "rows": shown,
+                "rows": [server._pick(row, [*result.columns, "exchange"]) for row in shown],
             },
             indent=2,
         ))
