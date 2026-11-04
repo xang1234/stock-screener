@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import unicodedata
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -121,8 +120,7 @@ def _report_freshness(market: str, as_of_date: str | None, status: str) -> None:
 
 def _list_screens(market: str) -> int:
     listing = server.list_screens(market)
-    status = server._status(server.data.market(market), datetime.now(timezone.utc))
-    _report_freshness(listing["market"], listing["as_of_date"], status)
+    _report_freshness(listing["market"], listing["as_of_date"], server.market_status(market))
     width = max((len(screen["id"]) for screen in listing["screens"]), default=0)
     for screen in listing["screens"]:
         print(f"{screen['id']:<{width}}  {screen['name']}")
@@ -168,7 +166,8 @@ def _write_watchlist(result: server.ScreenResult, target: str) -> int:
 
 def _run_screen(args: argparse.Namespace) -> int:
     result = server.match_screen(args.market, args.screen)
-    _report_freshness(result.market, result.as_of_date, result.status)
+    status = server.market_status(result.market)
+    _report_freshness(result.market, result.as_of_date, status)
     if args.tradingview is not None:
         return _write_watchlist(result, args.tradingview)
     shown = result.rows[: args.limit]
@@ -178,7 +177,7 @@ def _run_screen(args: argparse.Namespace) -> int:
                 "market": result.market,
                 "screen": result.preset["id"],
                 "as_of_date": result.as_of_date,
-                "status": result.status,
+                "status": status,
                 "total": result.total,
                 "rows": [server._pick(row, [*result.columns, "exchange"]) for row in shown],
             },

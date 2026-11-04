@@ -90,7 +90,6 @@ class ScreenResult:
 
     market: str
     as_of_date: str | None
-    status: str
     preset: dict[str, Any] | None
     sort_by: str
     descending: bool
@@ -131,6 +130,11 @@ def _status(entry: dict[str, Any], now: datetime) -> str:
     if deadline is None:
         return "unknown"
     return "late" if now > deadline else "current"
+
+
+def market_status(market: str) -> str:
+    """A market's publication status: "current", "late" or "unknown"."""
+    return _status(data.market(market), datetime.now(timezone.utc))
 
 
 def _visible_presets(code: str, scan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -247,7 +251,6 @@ def match_screen(
     return ScreenResult(
         market=market.upper(),
         as_of_date=scan.get("as_of_date"),
-        status=_status(data.market(market), datetime.now(timezone.utc)),
         preset=preset,
         sort_by=sort_by,
         descending=descending,
