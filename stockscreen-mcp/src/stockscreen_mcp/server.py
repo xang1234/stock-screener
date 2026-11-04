@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from .data import StaticData
 from .screens import (
     evaluate_expression,
-    explain_condition,
+    explain_expression,
     expression_fields,
     filters_to_conditions,
     preset_requires_opportunity_state,
@@ -74,9 +74,12 @@ SNAPSHOT_FIELDS = (
     "company_name", "current_price", "price_change_1d", "rs_rating", "rs_rating_3m", "stage", "composite_score",
     "ibd_industry_group", "ibd_group_rank",
 )
-# audit_stocks symbols x screens. On the live US publish, 10 symbols over all 28 screens
-# reached 63 KB, past the MCP output budget of common clients.
-AUDIT_MAX_CELLS = 150
+# audit_stocks detail: found symbols x rules in the audited screens. Many symbols over a few one-rule
+# screens set this, because each symbol also carries a snapshot and each screen its id. The largest
+# response constructible on the 2026-11-03 US publish is 46 symbols x 3 one-rule screens, 57.2 KB of
+# client text against a budget of about 60 KB. The uncapped summary of 50 symbols over all 28 screens
+# measured 55 KB to 205 KB on that publish, rising with the symbols' near misses.
+AUDIT_DETAIL_MAX_RULES = 140
 
 
 class Filter(BaseModel):
@@ -143,7 +146,7 @@ def list_markets() -> dict[str, Any]:
     Each market returns its code (pass it as `market` to the other tools), name, as_of_date (the
     trading day the data covers), status ("current"; "late" if it is behind its latest completed
     session or its next update is over a day overdue; or "unknown"), and features: which of "scan"
-    (run_screen, get_stock, list_screens), "breadth" (market_overview breadth) and "groups"
+    (run_screen, get_stock, list_screens, audit_stocks), "breadth" (market_overview breadth) and "groups"
     (group_rankings) are published for it. unavailable_markets lists markets that failed this
     publish. Takes no arguments. Results are cached for up to 10 minutes; markets are published
     after their close by two scheduled runs, one for Asia and one for US/Europe.
@@ -173,7 +176,7 @@ def list_markets() -> dict[str, Any]:
 def list_screens(market: Market = "US") -> dict[str, Any]:
     """Preset screens (Minervini, CANSLIM, VCP, chart patterns, momentum...) with their exact rules.
 
-    Pass a screen's id to run_screen.
+    Pass a screen's id to run_screen or audit_stocks.
     """
     scan, _ = data.scan(market)
     screens = [
@@ -273,29 +276,37 @@ def audit_stocks(
     )],
     market: Market = "US",
     screens: Annotated[list[str] | None, Field(
-        description="Preset ids from list_screens to check; defaults to every screen in the market.",
+        min_length=1, description="Preset ids from list_screens to check; defaults to every screen in the market.",
     )] = None,
-    include_passing: Annotated[bool, Field(description="Also list the rules each stock meets, under `passed`.")] = False,
+    detail: Annotated[bool, Field(
+        description="Also return every failed rule per screen under failed_rules. Capped; see the docstring.",
+    )] = False,
 ) -> dict[str, Any]:
-    """Check a list of stocks against the preset screens in one call: for each symbol and screen,
-    pass/fail plus every rule it fails and by how much.
+    """Check a watchlist or holdings against the preset screens in one call: which screens each stock
+    passes and fails, and which it nearly passes.
 
-    Use it to review a watchlist or holdings, find near misses, or see what has deteriorated in a
-    position, meaning which rules it fails today. Use get_stock instead for every field on one
-    symbol, and run_screen to discover new candidates.
+    Use it to review a list of stocks, find near misses, or see what a position fails today. Use
+    get_stock for every field on one symbol, and run_screen to discover new candidates. A long list
+    over every screen returns a lot of text, so pass a `screens` list when you only need some.
 
-    short_by is the positive distance between a failed numeric rule's bound and the stock's value
-    (rs_rating 60 against a min of 70 is short_by 10); it is absent when the value is missing and
-    on non-numeric rules. `passes` matches the website and get_stock's passes_screens. failed and
-    passed cover the rules list_screens shows, and a `note` marks a failure that comes from an
-    optional rule group instead. near_misses lists the screens a stock fails on exactly one of at
-    least two rules. Symbols absent from the market's scan are listed in not_found rather than
-    raising an error. Symbols times screens may not exceed 150; past that the call raises an
-    error, so pass fewer symbols or a `screens` list.
+    Each stock returns a snapshot, `passes` and `fails` (screen ids in list_screens order, matching
+    the website and get_stock's passes_screens), near_misses, and notes when there are any.
+    near_misses maps each screen the stock fails on exactly one of at least two rules to that rule.
+    It ignores how far short the stock is, so check short_by before calling one close. short_by is
+    the positive distance between a failed numeric rule's bound and the stock's value (rs_rating 60
+    against a min of 70 is short_by 10); it is absent when the value is missing and on non-numeric
+    rules. notes maps a screen to the reason when its rules alone don't explain the result: a failing
+    optional rule group, or a disabled required group.
+
+    detail=True adds failed_rules: every failed rule for each screen in `fails`. Found symbols times
+    the total rules in the audited screens may not exceed 140; past that the call raises an error
+    that says how many symbols fit, so pass fewer symbols or a shorter `screens` list.
+
+    Symbols absent from the market's scan are listed in not_found rather than raising an error.
     """
     scan, rows = data.scan(market)
     presets = {p["id"]: p for p in _visible_presets(market, scan)}
-    wanted = {s.strip().lower() for s in screens or presets}
+    wanted = set(presets) if screens is None else {s.strip().lower() for s in screens}
     unknown = sorted(wanted - presets.keys())
     if unknown:
         raise ToolError(f"Unknown screen {', '.join(map(repr, unknown))}. Available: {', '.join(presets)}.")
@@ -303,41 +314,32 @@ def audit_stocks(
 
     by_symbol = {str(r.get("symbol", "")).upper(): r for r in rows}
     requested = list(dict.fromkeys(s.strip().upper() for s in symbols))
-    cells = len(requested) * len(audited)
-    if cells > AUDIT_MAX_CELLS:
-        raise ToolError(
-            f"{len(requested)} symbols x {len(audited)} screens = {cells} cells; the limit is {AUDIT_MAX_CELLS}. "
-            "Pass fewer symbols or a `screens` list."
-        )
+    found = [by_symbol[s] for s in requested if s in by_symbol]
+    if detail:
+        rules = sum(len(p["filter_expression"]["required"].get("conditions") or []) for p in audited)
+        if len(found) * rules > AUDIT_DETAIL_MAX_RULES:
+            fit = AUDIT_DETAIL_MAX_RULES // rules
+            recovery = f"Up to {fit} symbols fit with these screens, or" if fit else "None fit with these screens, so"
+            raise ToolError(
+                f"{len(found)} symbols x {rules} rules = {len(found) * rules} rule cells; "
+                f"the detail limit is {AUDIT_DETAIL_MAX_RULES}. {recovery} pass a shorter `screens` list."
+            )
     stocks = []
-    for symbol in requested:
-        row = by_symbol.get(symbol)
-        if row is None:
-            continue
-        results = {}
-        for preset in audited:
-            expression = preset["filter_expression"]
-            failed, passed = [], []
-            for condition in expression["required"]["conditions"]:
-                explanation = explain_condition(row, condition)
-                (passed if explanation.pop("passes") else failed).append(explanation)
-            result = {"passes": evaluate_expression(row, expression), "failed": failed}
-            if include_passing:
-                result["passed"] = passed
-            has_groups = any(g.get("enabled") is not False for g in expression.get("groups") or [])
-            if has_groups and not result["passes"] and not result["failed"]:
-                result["note"] = "fails an optional rule group"
-            results[preset["id"]] = result
-        stocks.append({
+    for row in found:
+        explained = {p["id"]: explain_expression(row, p["filter_expression"]) for p in audited}
+        stock = {
             "symbol": row["symbol"],
             "snapshot": _pick(row, SNAPSHOT_FIELDS),
-            "screens": results,
-            "near_misses": [
-                i for i, r in results.items()
-                if not r["passes"] and len(r["failed"]) == 1
-                and len(presets[i]["filter_expression"]["required"]["conditions"]) >= 2
-            ],
-        })
+            "passes": [i for i, e in explained.items() if e["passes"]],
+            "fails": [i for i, e in explained.items() if not e["passes"]],
+            "near_misses": {i: e["failed"][0] for i, e in explained.items() if e["near_miss"]},
+        }
+        notes = {i: e["note"] for i, e in explained.items() if "note" in e}
+        if notes:
+            stock["notes"] = notes
+        if detail:
+            stock["failed_rules"] = {i: e["failed"] for i, e in explained.items() if not e["passes"]}
+        stocks.append(stock)
     return {
         "market": market.upper(),
         "as_of_date": scan.get("as_of_date"),

@@ -8,6 +8,8 @@ from mcp import Client
 
 from stockscreen_mcp import server
 
+from conftest import condition, preset
+
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("use_fake_data")]
 
 
@@ -232,9 +234,13 @@ async def test_group_lookup_accepts_a_unique_partial_name():
 
 
 CCC_FAILS_STAGE = {"field": "stage", "value": 3, "needs": {"min": 2, "max": 2}, "short_by": 1.0}
+AAA_SNAPSHOT = {"company_name": "AAA Corp", "current_price": 10.0, "rs_rating": 95, "stage": 2, "composite_score": 81,
+                "ibd_industry_group": "Semiconductors", "ibd_group_rank": 3}
+CCC_SNAPSHOT = {"company_name": "CCC Corp", "current_price": 10.0, "rs_rating": 99, "stage": 3, "composite_score": 90,
+                "ibd_industry_group": "Semiconductors", "ibd_group_rank": 3}
 
 
-async def test_audit_stocks_explains_a_passing_and_a_failing_symbol():
+async def test_audit_stocks_summarises_a_passing_and_a_failing_symbol():
     result = await call("audit_stocks", symbols=["AAA", "CCC"], screens=["minervini"])
 
     assert result == {
@@ -242,51 +248,63 @@ async def test_audit_stocks_explains_a_passing_and_a_failing_symbol():
         "as_of_date": "2026-10-09",
         "screens": ["minervini"],
         "stocks": [
-            {
-                "symbol": "AAA",
-                "snapshot": {"company_name": "AAA Corp", "current_price": 10.0, "rs_rating": 95, "stage": 2,
-                             "composite_score": 81, "ibd_industry_group": "Semiconductors", "ibd_group_rank": 3},
-                "screens": {"minervini": {"passes": True, "failed": []}},
-                "near_misses": [],
-            },
-            {
-                "symbol": "CCC",
-                "snapshot": {"company_name": "CCC Corp", "current_price": 10.0, "rs_rating": 99, "stage": 3,
-                             "composite_score": 90, "ibd_industry_group": "Semiconductors", "ibd_group_rank": 3},
-                "screens": {"minervini": {"passes": False, "failed": [CCC_FAILS_STAGE]}},
-                "near_misses": ["minervini"],
-            },
+            {"symbol": "AAA", "snapshot": AAA_SNAPSHOT, "passes": ["minervini"], "fails": [], "near_misses": {}},
+            {"symbol": "CCC", "snapshot": CCC_SNAPSHOT, "passes": [], "fails": ["minervini"],
+             "near_misses": {"minervini": CCC_FAILS_STAGE}},
         ],
         "not_found": [],
     }
+
+
+async def test_audit_stocks_detail_adds_every_failed_rule_on_every_failing_screen():
+    result = await call("audit_stocks", symbols=["AAA", "CCC"], detail=True)
+
+    assert result["stocks"] == [
+        {"symbol": "AAA", "snapshot": AAA_SNAPSHOT, "passes": ["minervini", "correction_survivors", "se_cup_handle"],
+         "fails": [], "near_misses": {}, "failed_rules": {}},
+        {"symbol": "CCC", "snapshot": CCC_SNAPSHOT, "passes": [],
+         "fails": ["minervini", "correction_survivors", "se_cup_handle"],
+         "near_misses": {"minervini": CCC_FAILS_STAGE},
+         "failed_rules": {
+             "minervini": [CCC_FAILS_STAGE],
+             "correction_survivors": [{"field": "correction_survivor", "value": None, "needs": {"is": True}}],
+             "se_cup_handle": [{"field": "se_pattern_primary", "value": None, "needs": {"in": ["cup_handle"]}}],
+         }},
+    ]
 
 
 async def test_audit_stocks_near_misses_fail_exactly_one_rule(use_fake_data):
     _, rows = use_fake_data.scan("US")
     next(r for r in rows if r["symbol"] == "BBB").update(rs_rating=60, stage=3)
 
-    result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC"], screens=["minervini"])
+    result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC"], screens=["minervini"], detail=True)
 
-    assert {s["symbol"]: s["near_misses"] for s in result["stocks"]} == {"AAA": [], "BBB": [], "CCC": ["minervini"]}
-    assert result["stocks"][1]["screens"]["minervini"]["failed"] == [
+    assert {s["symbol"]: s["near_misses"] for s in result["stocks"]} == {
+        "AAA": {}, "BBB": {}, "CCC": {"minervini": CCC_FAILS_STAGE},
+    }
+    assert result["stocks"][1]["failed_rules"] == {"minervini": [
         {"field": "rs_rating", "value": 60, "needs": {"min": 70}, "short_by": 10.0},
         CCC_FAILS_STAGE,
-    ]
+    ]}
 
 
 async def test_audit_stocks_near_misses_need_at_least_two_rules():
     ccc = (await call("audit_stocks", symbols=["CCC"]))["stocks"][0]
 
-    assert ccc["screens"] == {
-        "minervini": {"passes": False, "failed": [CCC_FAILS_STAGE]},
-        "correction_survivors": {
-            "passes": False, "failed": [{"field": "correction_survivor", "value": None, "needs": {"is": True}}],
-        },
-        "se_cup_handle": {
-            "passes": False, "failed": [{"field": "se_pattern_primary", "value": None, "needs": {"in": ["cup_handle"]}}],
-        },
+    assert ccc["fails"] == ["minervini", "correction_survivors", "se_cup_handle"]
+    assert ccc["near_misses"] == {"minervini": CCC_FAILS_STAGE}
+
+
+async def test_audit_stocks_short_by_stays_positive_when_the_gap_rounds_to_zero(use_fake_data):
+    scan, rows = use_fake_data.scan("US")
+    next(r for r in rows if r["symbol"] == "AAA")["atr"] = 1.4999999
+    scan["preset_screens"].append(preset("atr", "ATR", [condition("atr", "range", min=1.5, max=None)]))
+
+    aaa = (await call("audit_stocks", symbols=["AAA"], screens=["atr"], detail=True))["stocks"][0]
+
+    assert aaa["failed_rules"] == {
+        "atr": [{"field": "atr", "value": 1.4999999, "needs": {"min": 1.5}, "short_by": 1.0000000005838672e-07}],
     }
-    assert ccc["near_misses"] == ["minervini"]
 
 
 async def test_audit_stocks_matches_any_case_dedupes_and_reports_not_found():
@@ -307,22 +325,11 @@ async def test_audit_stocks_unknown_screen_lists_the_available_ids():
     assert "Unknown screen 'correction_survivors'. Available: minervini, se_cup_handle." in message
 
 
-async def test_audit_stocks_include_passing_lists_the_rules_met():
-    result = await call("audit_stocks", symbols=["CCC"], screens=["minervini"], include_passing=True)
-
-    assert result["stocks"][0]["screens"]["minervini"] == {
-        "passes": False,
-        "failed": [CCC_FAILS_STAGE],
-        "passed": [
-            {"field": "minervini_score", "value": 95, "needs": {"min": 70}},
-            {"field": "rs_rating", "value": 99, "needs": {"min": 70}},
-            {"field": "ma_alignment", "value": True, "needs": {"is": True}},
-        ],
-    }
-
-
 async def test_audit_stocks_defaults_to_every_visible_screen_in_list_screens_order():
     assert (await call("audit_stocks", symbols=["AAA"]))["screens"] == [
+        "minervini", "correction_survivors", "se_cup_handle",
+    ]
+    assert (await call("audit_stocks", symbols=["AAA"], screens=None))["screens"] == [
         "minervini", "correction_survivors", "se_cup_handle",
     ]
     assert (await call("audit_stocks", symbols=["AAA"], market="AU"))["screens"] == ["minervini", "se_cup_handle"]
@@ -331,24 +338,38 @@ async def test_audit_stocks_defaults_to_every_visible_screen_in_list_screens_ord
     ]
 
 
+async def test_audit_stocks_rejects_an_empty_screens_list():
+    assert "screens" in await call_error("audit_stocks", symbols=["AAA"], screens=[])
+
+
+async def test_audit_stocks_default_screens_keep_a_mixed_case_preset_id(use_fake_data):
+    scan, _ = use_fake_data.scan("US")
+    scan["preset_screens"].append(preset("MixedCase", "Mixed", [condition("stage", "range", min=2, max=2)]))
+
+    aaa = (await call("audit_stocks", symbols=["AAA"]))["stocks"][0]
+
+    assert aaa["passes"] == ["minervini", "correction_survivors", "se_cup_handle", "MixedCase"]
+
+
 async def test_audit_stocks_passes_agree_with_get_stock():
     result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC", "DDD", "EEE"])
 
-    passing = {s["symbol"]: [i for i, r in s["screens"].items() if r["passes"]] for s in result["stocks"]}
+    passing = {s["symbol"]: s["passes"] for s in result["stocks"]}
     assert passing == {
         "AAA": ["minervini", "correction_survivors", "se_cup_handle"], "BBB": ["minervini"],
         "CCC": [], "DDD": [], "EEE": [],
     }
     for symbol, screens in passing.items():
         assert screens == (await call("get_stock", symbol=symbol))["passes_screens"]
+    assert result["stocks"][1]["fails"] == ["correction_survivors", "se_cup_handle"]
 
 
 async def test_audit_stocks_missing_data_fails_with_no_shortfall():
     result = await call("audit_stocks", symbols=["DDD"], screens=["minervini"])
 
-    assert result["stocks"][0]["screens"]["minervini"]["failed"] == [
-        {"field": "rs_rating", "value": None, "needs": {"min": 70}},
-    ]
+    assert result["stocks"][0]["near_misses"] == {
+        "minervini": {"field": "rs_rating", "value": None, "needs": {"min": 70}},
+    }
 
 
 async def test_audit_stocks_notes_a_failure_from_an_optional_group(use_fake_data):
@@ -361,13 +382,12 @@ async def test_audit_stocks_notes_a_failure_from_an_optional_group(use_fake_data
     ]
     scan["preset_screens"].append(grouped)
 
-    aaa, bbb = (await call("audit_stocks", symbols=["AAA", "BBB"], screens=["minervini_semis"]))["stocks"]
+    aaa, bbb = (await call("audit_stocks", symbols=["AAA", "BBB"], screens=["minervini_semis"], detail=True))["stocks"]
 
-    assert aaa["screens"]["minervini_semis"] == {"passes": True, "failed": []}
-    assert bbb["screens"]["minervini_semis"] == {
-        "passes": False, "failed": [], "note": "fails an optional rule group",
-    }
-    assert bbb["near_misses"] == []
+    assert (aaa["passes"], aaa["failed_rules"]) == (["minervini_semis"], {})
+    assert "notes" not in aaa
+    assert (bbb["fails"], bbb["near_misses"], bbb["failed_rules"]) == (["minervini_semis"], {}, {"minervini_semis": []})
+    assert bbb["notes"] == {"minervini_semis": "fails an optional rule group"}
 
 
 async def test_audit_stocks_limits_the_symbol_list():
@@ -377,25 +397,52 @@ async def test_audit_stocks_limits_the_symbol_list():
     assert "symbols" in await call_error("audit_stocks", symbols=[])
 
 
-async def test_audit_stocks_accepts_exactly_the_cell_limit():
-    listed = ["AAA", *(f"S{i}" for i in range(49))]
+FIVE_FOUND = ["AAA", "BBB", "CCC", "DDD", "EEE"]  # 5 symbols x 6 rules over the three fake screens is 30 rule cells
 
-    result = await call("audit_stocks", symbols=listed)
 
-    assert result["screens"] == ["minervini", "correction_survivors", "se_cup_handle"]
+async def test_audit_stocks_detail_refuses_more_rule_cells_than_the_limit(monkeypatch):
+    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 29)
+
+    message = await call_error("audit_stocks", symbols=FIVE_FOUND, detail=True)
+    assert message.endswith(
+        "5 symbols x 6 rules = 30 rule cells; the detail limit is 29. "
+        "Up to 4 symbols fit with these screens, or pass a shorter `screens` list."
+    )
+
+    # Both recoveries it names work, and the summary is never capped.
+    assert len((await call("audit_stocks", symbols=FIVE_FOUND[:4], detail=True))["stocks"]) == 4
+    assert len((await call("audit_stocks", symbols=FIVE_FOUND, screens=["minervini"], detail=True))["stocks"]) == 5
+    assert len((await call("audit_stocks", symbols=FIVE_FOUND))["stocks"]) == 5
+
+
+async def test_audit_stocks_detail_says_none_fit_when_one_symbol_is_over_the_limit(monkeypatch):
+    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 5)
+
+    message = await call_error("audit_stocks", symbols=["AAA"], detail=True)
+    assert message.endswith(
+        "1 symbols x 6 rules = 6 rule cells; the detail limit is 5. "
+        "None fit with these screens, so pass a shorter `screens` list."
+    )
+
+
+async def test_audit_stocks_detail_accepts_exactly_the_limit(monkeypatch):
+    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 30)
+
+    assert len((await call("audit_stocks", symbols=FIVE_FOUND, detail=True))["stocks"]) == 5
+
+
+async def test_audit_stocks_detail_limit_counts_found_symbols_only(monkeypatch):
+    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 6)
+    unknown = [f"S{i}" for i in range(48)]
+
+    result = await call("audit_stocks", symbols=["AAA", "aaa", *unknown], detail=True)
+
     assert [s["symbol"] for s in result["stocks"]] == ["AAA"]
-    assert result["not_found"] == listed[1:]
+    assert result["not_found"] == unknown
 
 
-async def test_audit_stocks_refuses_more_cells_than_the_limit(use_fake_data):
-    scan, _ = use_fake_data.scan("US")
-    scan["preset_screens"].append(copy.deepcopy(scan["preset_screens"][0]) | {"id": "fourth"})
-    listed = [f"S{i}" for i in range(50)]
+async def test_audit_stocks_docstring_states_the_detail_limit():
+    async with Client(server.mcp) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    message = await call_error("audit_stocks", symbols=listed)
-    assert "50 symbols x 4 screens = 200 cells; the limit is 150. Pass fewer symbols or a `screens` list." in message
-
-    # Duplicates don't count: 50 entries are 37 symbols, and 37 x 4 is 148 cells.
-    deduped = await call("audit_stocks", symbols=[*listed[:37], *listed[:13]])
-    assert deduped["not_found"] == listed[:37]
-    assert (await call("audit_stocks", symbols=listed, screens=["minervini"]))["not_found"] == listed
+    assert f"may not exceed {server.AUDIT_DETAIL_MAX_RULES}" in " ".join(tools["audit_stocks"].description.split())
