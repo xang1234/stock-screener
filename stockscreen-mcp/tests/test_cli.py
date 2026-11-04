@@ -1,5 +1,6 @@
 """The terminal commands, called the way the console script calls them."""
 
+import errno
 import io
 import json
 import os
@@ -28,6 +29,27 @@ def set_rows(static_data, market, rows):
     static_data.scan(market)[1][:] = rows
 
 
+def strict_json(text):
+    def reject(constant):
+        raise AssertionError(f"not valid JSON: {constant}")
+
+    return json.loads(text, parse_constant=reject)
+
+
+class ClosedPipeStdout(io.TextIOWrapper):
+    """A stdout whose reader left: the first flush fails with the errno the platform reports."""
+
+    def __init__(self, path, code):
+        super().__init__(open(path, "wb"), encoding="utf-8")
+        self.code = code
+
+    def flush(self):
+        code, self.code = self.code, None
+        if code:
+            raise OSError(code, "closed pipe")
+        super().flush()
+
+
 def test_bare_invocation_runs_the_server_without_touching_stdout(monkeypatch, capsys):
     started = []
     monkeypatch.setattr(server, "main", lambda: started.append("server"))
@@ -37,6 +59,23 @@ def test_bare_invocation_runs_the_server_without_touching_stdout(monkeypatch, ca
 
     assert started == ["server"]
     assert capsys.readouterr().out == ""
+
+
+def test_screen_alone_warns_for_a_late_market(fake_publish, capsys):
+    fake_publish.manifest["markets"]["US"]["publication"]["state"] = "stale"
+
+    assert cli.main(["screen"]) == 0
+
+    assert capsys.readouterr().err == (
+        "US data as of 2026-10-09\n"
+        "Warning: the US data is late, so 2026-10-09 may not be the latest session.\n"
+    )
+
+
+def test_market_is_stripped_on_the_command_line(capsys):
+    assert cli.main(["screen", "minervini", "--market", " us", "--tradingview", "-"]) == 0
+
+    assert capsys.readouterr().out == "NASDAQ:AAA,NYSE:BBB\n"
 
 
 def test_screen_alone_lists_ids_and_names(capsys):
@@ -66,9 +105,8 @@ def test_table_is_aligned_and_counts_what_it_shows(use_fake_data, capsys):
         "SYMBOL  NAME               PRICE  RS  STAGE      1D  GROUP\n"
         "AAA     Alpha Holdings  1,234.50  95      2  +1.50%  Semiconductors\n"
         "BRK-B   -                   9.00  95      2  -0.25%  -\n"
-        "2 of 3\n"
     )
-    assert captured.err == "US data as of 2026-10-09\n"
+    assert captured.err == "US data as of 2026-10-09\n2 of 3\n"
 
 
 def test_table_aligns_double_width_names_and_clips_long_ones(use_fake_data, capsys):
@@ -85,7 +123,17 @@ def test_table_aligns_double_width_names_and_clips_long_ones(use_fake_data, caps
         "0001.HK  華智數媒                           1.00  95      2  +1.00%  -\n"
         "0002.HK  ABCD                               1.00  95      2  +1.00%  -\n"
         f"0003.HK  {'X' * 32}   1.00  95      2  +1.00%  -\n"
-        "3 of 3\n"
+    )
+
+
+def test_a_value_of_an_unexpected_type_prints_as_itself(use_fake_data, capsys):
+    set_rows(use_fake_data, "US", [passing("AAA", current_price="n/a", price_change_1d=[1, 2], company_name="Alpha")])
+
+    assert cli.main(["screen", "minervini"]) == 0
+
+    assert capsys.readouterr().out == (
+        "SYMBOL  NAME   PRICE  RS  STAGE      1D  GROUP\n"
+        "AAA     Alpha    n/a  95      2  [1, 2]  -\n"
     )
 
 
@@ -100,16 +148,38 @@ def test_names_a_legacy_windows_stdout_cannot_encode_do_not_crash(use_fake_data,
     assert b"0001.HK  ?" in stdout.buffer.getvalue()
 
 
-def test_json_prints_limited_full_rows_with_date_and_total(capsys):
+def test_json_prints_limited_rows_with_date_and_total(capsys):
     assert cli.main(["screen", "minervini", "--json", "--limit", "1"]) == 0
 
     captured = capsys.readouterr()
-    payload = json.loads(captured.out)
+    payload = strict_json(captured.out)
     assert {k: payload[k] for k in ("market", "screen", "as_of_date", "status", "total")} == {
         "market": "US", "screen": "minervini", "as_of_date": "2026-10-09", "status": "current", "total": 2,
     }
     assert [(row["symbol"], row["exchange"]) for row in payload["rows"]] == [("AAA", "XNAS")]
     assert captured.err == "US data as of 2026-10-09\n"
+
+
+def test_json_is_strict_and_keeps_internal_fields_out(use_fake_data, capsys):
+    set_rows(use_fake_data, "US", [passing(
+        "AAA", company_name="Alpha", current_price=float("nan"), price_change_1d=float("inf"), composite_score=80.0,
+        market_rs_run_id=7, data_status="ok", screeners_run=["minervini"], secret_field="internal",
+    )])
+
+    assert cli.main(["screen", "minervini", "--json"]) == 0
+
+    assert strict_json(capsys.readouterr().out)["rows"] == [{
+        "symbol": "AAA", "company_name": "Alpha", "rs_rating": 95, "stage": 2, "composite_score": 80.0,
+        "minervini_score": 90, "ma_alignment": True, "exchange": "XNAS",
+    }]
+
+
+def test_json_reports_a_late_market(fake_publish, capsys):
+    fake_publish.manifest["markets"]["US"]["publication"]["state"] = "stale"
+
+    assert cli.main(["screen", "minervini", "--json"]) == 0
+
+    assert strict_json(capsys.readouterr().out)["status"] == "late"
 
 
 def test_a_late_market_warns_and_still_succeeds(fake_publish, capsys):
@@ -121,8 +191,8 @@ def test_a_late_market_warns_and_still_succeeds(fake_publish, capsys):
     assert captured.err == (
         "US data as of 2026-10-09\n"
         "Warning: the US data is late, so 2026-10-09 may not be the latest session.\n"
+        "1 of 2\n"
     )
-    assert captured.out.endswith("1 of 2\n")
 
 
 def test_watchlist_defaults_to_a_dated_file_with_exact_contents(tmp_path, monkeypatch, capsys):
@@ -147,6 +217,29 @@ def test_watchlist_writes_every_match_past_the_tool_cap_and_ignores_limit(use_fa
     assert len(tokens) == 150
     assert (tokens[0], tokens[-1]) == ("NASDAQ:S000", "NASDAQ:S149")
     assert capsys.readouterr().err.endswith(f"Wrote 150 of 150 matches to {target}\n")
+
+
+def test_watchlist_over_the_tradingview_cap_warns_and_still_writes_every_match(use_fake_data, tmp_path, capsys):
+    set_rows(use_fake_data, "US", [passing(f"S{i:04d}") for i in range(1001)])
+    target = tmp_path / "all.txt"
+
+    assert cli.main(["screen", "minervini", "--tradingview", str(target)]) == 0
+
+    assert len(target.read_text().split(",")) == 1001
+    assert capsys.readouterr().err == (
+        "US data as of 2026-10-09\n"
+        "Warning: 1001 symbols is over TradingView's limit of 1000 per watchlist, so they will not all fit in one list.\n"
+        f"Wrote 1001 of 1001 matches to {target}\n"
+    )
+
+
+def test_watchlist_at_the_tradingview_cap_does_not_warn(use_fake_data, tmp_path, capsys):
+    set_rows(use_fake_data, "US", [passing(f"S{i:04d}") for i in range(1000)])
+    target = tmp_path / "all.txt"
+
+    assert cli.main(["screen", "minervini", "--tradingview", str(target)]) == 0
+
+    assert capsys.readouterr().err == f"US data as of 2026-10-09\nWrote 1000 of 1000 matches to {target}\n"
 
 
 def test_watchlist_dash_writes_stdout(capsys):
@@ -187,6 +280,39 @@ def test_every_mapping_row_produces_its_tradingview_token(use_fake_data, capsys,
     assert cli.main(["screen", "minervini", "--market", market, "--tradingview", "-"]) == 0
 
     assert capsys.readouterr().out == f"{token}\n"
+
+
+@pytest.mark.parametrize(
+    ("symbol", "exchange", "fields", "token"),
+    [
+        ("DVYA", "XNYS", {"gics_industry": "Exchange Traded Fund", "ibd_industry_group": "Finance-ETF / ETN"}, "AMEX:DVYA"),
+        ("AB-C", "XNYS", {"gics_industry": "Exchange Traded Fund"}, "AMEX:AB.C"),
+        ("BRK-B", "XNYS", {"gics_industry": "Insurance - Diversified", "ibd_industry_group": "Finance-ETF / ETN"}, "NYSE:BRK.B"),
+        ("KO", "XNYS", {"gics_industry": "Beverages - Non-Alcoholic"}, "NYSE:KO"),
+        ("QQQ", "XNAS", {"gics_industry": "Exchange Traded Fund"}, "NASDAQ:QQQ"),
+        ("IMO", "XASE", {"gics_industry": "Exchange Traded Fund"}, "AMEX:IMO"),
+    ],
+)
+def test_us_prefix_follows_the_exchange_and_fund_classification(use_fake_data, capsys, symbol, exchange, fields, token):
+    set_rows(use_fake_data, "US", [passing(symbol, exchange=exchange, **fields)])
+
+    assert cli.main(["screen", "minervini", "--tradingview", "-"]) == 0
+
+    assert capsys.readouterr().out == f"{token}\n"
+
+
+def test_a_ticker_that_normalizes_to_nothing_is_skipped(use_fake_data, capsys):
+    set_rows(use_fake_data, "HK", [passing("0000.HK"), passing("0700.HK")])
+
+    assert cli.main(["screen", "minervini", "--market", "HK", "--tradingview", "-"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "HKEX:700\n"
+    assert captured.err == (
+        "HK data as of 2026-10-09\n"
+        "Skipped 1 with no TradingView symbol: 0000.HK\n"
+        "Wrote 1 of 2 matches to stdout\n"
+    )
 
 
 def test_unmappable_symbols_are_listed_and_the_rest_still_written(use_fake_data, capsys):
@@ -244,7 +370,9 @@ def test_zero_matches_exit_0_and_write_no_file(use_fake_data, tmp_path, monkeypa
     )
 
     assert cli.main(["screen", "minervini"]) == 0
-    assert capsys.readouterr().out == "SYMBOL  NAME  PRICE  RS  STAGE  1D  GROUP\n0 of 0\n"
+    captured = capsys.readouterr()
+    assert captured.out == "SYMBOL  NAME  PRICE  RS  STAGE  1D  GROUP\n"
+    assert captured.err == "US data as of 2026-10-09\n0 of 0\n"
 
 
 def test_an_unwritable_target_is_one_line_and_exits_1(tmp_path, capsys):
@@ -256,6 +384,36 @@ def test_an_unwritable_target_is_one_line_and_exits_1(tmp_path, capsys):
         "US data as of 2026-10-09\n"
         f"Could not write {target}: No such file or directory\n"
     )
+
+
+def test_an_interrupt_exits_130_without_a_traceback(monkeypatch, capsys):
+    def interrupted(*args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(server, "match_screen", interrupted)
+
+    assert cli.main(["screen", "minervini"]) == 130
+
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+@pytest.mark.parametrize("code", [errno.EPIPE, errno.EINVAL])
+def test_a_closed_pipe_is_a_departed_reader_and_reports_nothing_written(tmp_path, monkeypatch, capsys, code):
+    monkeypatch.setattr(sys, "stdout", ClosedPipeStdout(tmp_path / "out", code))
+
+    assert cli.main(["screen", "minervini", "--tradingview", "-"]) == 0
+
+    assert capsys.readouterr().err == "US data as of 2026-10-09\n"
+
+
+def test_other_stdout_failures_still_raise(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "stdout", ClosedPipeStdout(tmp_path / "out", errno.ENOSPC))
+
+    with pytest.raises(OSError) as raised:
+        cli.main(["screen", "minervini"])
+
+    assert raised.value.errno == errno.ENOSPC
 
 
 def test_unknown_screen_suggests_close_matches_and_exits_1(capsys):
@@ -310,6 +468,17 @@ def test_usage_errors_exit_2(argv, capsys):
     assert captured.err.startswith("usage: stockscreen-mcp")
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("many", "must be a whole number"), ("0", "must be at least 1")],
+)
+def test_limit_errors_say_what_is_wrong(value, message, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["screen", "minervini", "--limit", value])
+
+    assert capsys.readouterr().err.endswith(f"stockscreen-mcp screen: error: argument --limit: {message}\n")
+
+
 def _entry_point() -> str:
     path = shutil.which("stockscreen-mcp", path=str(Path(sys.executable).parent))
     assert path, "stockscreen-mcp is not installed next to this interpreter"
@@ -357,7 +526,8 @@ def test_installed_entry_point_answers_an_mcp_handshake_over_stdio():
     }
 
 
-def test_a_reader_that_leaves_early_is_not_a_traceback(tmp_path):
+@pytest.mark.parametrize("arguments", [["screen", "minervini"], ["screen", "minervini", "--tradingview", "-"]])
+def test_a_reader_that_leaves_early_is_not_a_traceback(tmp_path, arguments):
     manifest, files = publish("g/1/")
     for name, content in {"manifest.json": manifest, **files}.items():
         path = tmp_path / name
@@ -365,7 +535,7 @@ def test_a_reader_that_leaves_early_is_not_a_traceback(tmp_path):
         path.write_text(json.dumps(content), encoding="utf-8")
 
     process = subprocess.Popen(
-        [_entry_point(), "screen", "minervini"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        [_entry_point(), *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", env=_env(tmp_path.as_uri()),
     )
     process.stdout.close()
