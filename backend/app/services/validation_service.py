@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from functools import partial
 from statistics import median
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,6 @@ from app.services.market_calendar_service import (
     CalendarCoverageExpired,
     MarketCalendarService,
 )
-from app.services.price_cache_service import PriceCacheService
 from app.utils.market_hours import (
     EASTERN,
     MARKET_OPEN_TIME,
@@ -560,10 +559,16 @@ class ReplayPickValidationSource:
         ], []
 
 
+class CachedPriceSource(Protocol):
+    def get_many_cached_only(
+        self, symbols: list[str], period: str = PRICE_CACHE_PERIOD
+    ) -> dict[str, pd.DataFrame | None]: ...
+
+
 class PriceOutcomeCalculator:
     """Compute the fixed validation horizons from cached OHLCV data."""
 
-    def __init__(self, price_cache: PriceCacheService) -> None:
+    def __init__(self, price_cache: CachedPriceSource) -> None:
         self._price_cache = price_cache
 
     def evaluate_many(
@@ -738,6 +743,45 @@ def _group_order(dimension: str, value: str) -> tuple[int, float, str]:
         return (1, float(value), value)
     except ValueError:
         return (2, 0.0, value)
+
+
+def summarize_horizon(
+    events: list[EvaluatedValidationEvent],
+    *,
+    horizon_sessions: int,
+) -> ValidationHorizonSummary:
+    counted = [event for event in events if horizon_sessions not in event.suppressed]
+    outcomes = [
+        event.outcomes[horizon_sessions]
+        for event in counted
+        if horizon_sessions in event.outcomes
+    ]
+    returns = [outcome.return_pct for outcome in outcomes]
+    stopped_returns = [outcome.stopped_return_pct for outcome in outcomes]
+    excess_values = [
+        outcome.excess_return_pct
+        for outcome in outcomes
+        if outcome.excess_return_pct is not None
+    ]
+    pending = sum(horizon_sessions not in event.exits for event in counted)
+    return ValidationHorizonSummary(
+        horizon_sessions=horizon_sessions,
+        sample_size=len(outcomes),
+        positive_rate=_mean([float(value > 0) for value in returns]),
+        avg_return_pct=_mean(returns),
+        median_return_pct=_median(returns),
+        avg_mfe_pct=_mean([outcome.mfe_pct for outcome in outcomes]),
+        avg_mae_pct=_mean([outcome.mae_pct for outcome in outcomes]),
+        avg_excess_return_pct=_mean(excess_values),
+        median_excess_return_pct=_median(excess_values),
+        excess_sample_size=len(excess_values),
+        avg_stopped_return_pct=_mean(stopped_returns),
+        median_stopped_return_pct=_median(stopped_returns),
+        stopped_out_rate=_mean([float(outcome.stopped_out) for outcome in outcomes]),
+        skipped_missing_history=len(counted) - len(outcomes) - pending,
+        pending_windows=pending,
+        suppressed_overlapping=len(events) - len(counted),
+    )
 
 
 class ValidationService:
@@ -953,48 +997,9 @@ class ValidationService:
         self, events: list[EvaluatedValidationEvent]
     ) -> list[ValidationHorizonSummary]:
         return [
-            self._summarize_horizon(events, horizon_sessions=horizon_sessions)
+            summarize_horizon(events, horizon_sessions=horizon_sessions)
             for horizon_sessions in HORIZONS
         ]
-
-    def _summarize_horizon(
-        self,
-        events: list[EvaluatedValidationEvent],
-        *,
-        horizon_sessions: int,
-    ) -> ValidationHorizonSummary:
-        counted = [event for event in events if horizon_sessions not in event.suppressed]
-        outcomes = [
-            event.outcomes[horizon_sessions]
-            for event in counted
-            if horizon_sessions in event.outcomes
-        ]
-        returns = [outcome.return_pct for outcome in outcomes]
-        stopped_returns = [outcome.stopped_return_pct for outcome in outcomes]
-        excess_values = [
-            outcome.excess_return_pct
-            for outcome in outcomes
-            if outcome.excess_return_pct is not None
-        ]
-        pending = sum(horizon_sessions not in event.exits for event in counted)
-        return ValidationHorizonSummary(
-            horizon_sessions=horizon_sessions,
-            sample_size=len(outcomes),
-            positive_rate=_mean([float(value > 0) for value in returns]),
-            avg_return_pct=_mean(returns),
-            median_return_pct=_median(returns),
-            avg_mfe_pct=_mean([outcome.mfe_pct for outcome in outcomes]),
-            avg_mae_pct=_mean([outcome.mae_pct for outcome in outcomes]),
-            avg_excess_return_pct=_mean(excess_values),
-            median_excess_return_pct=_median(excess_values),
-            excess_sample_size=len(excess_values),
-            avg_stopped_return_pct=_mean(stopped_returns),
-            median_stopped_return_pct=_median(stopped_returns),
-            stopped_out_rate=_mean([float(outcome.stopped_out) for outcome in outcomes]),
-            skipped_missing_history=len(counted) - len(outcomes) - pending,
-            pending_windows=pending,
-            suppressed_overlapping=len(events) - len(counted),
-        )
 
     def _build_freshness(
         self,
