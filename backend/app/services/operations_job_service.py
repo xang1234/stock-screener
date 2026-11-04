@@ -18,7 +18,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     redis = None
 
-from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
 from app.celery_app import _MARKET_JOB_TASKS, celery_app
@@ -152,17 +151,14 @@ def held_task_ids() -> set[str] | None:
     """Ids of every task a worker is running or holding, or None when that
     cannot be known: the inspect replies are missing, the roster is unreadable
     or younger than one round of heartbeats, or a worker that beat within the
-    last round did not answer (a busy solo-pool worker answers nothing).
+    last round did not answer. A busy solo-pool worker answers nothing, so on
+    a solo pool this is usually None.
 
     A worker killed with its task stops beating, so it stops counting after
     WORKER_QUEUES_COMPLETE_AFTER.
     """
     inspect = celery_app.control.inspect(timeout=1.0)
-    try:
-        active, reserved, scheduled = inspect.active(), inspect.reserved(), inspect.scheduled()
-    except (OSError, OperationalError):
-        logger.warning("Could not inspect the workers", exc_info=True)
-        return None
+    active, reserved, scheduled = inspect.active(), inspect.reserved(), inspect.scheduled()
     if not active or reserved is None or scheduled is None:
         return None
     client = get_redis_client()

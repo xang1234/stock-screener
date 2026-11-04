@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+import redis
 
 from app.services import operations_job_service
 from app.services.operations_job_service import OperationsJobService, _JobRecord
@@ -1203,14 +1204,25 @@ class _RosterRedis:
         }
 
 
-def _held(*, active, reserved=None, scheduled=None, roster=None, roster_age_minutes=10):
+_ALL_ANSWERED = object()
+
+
+def _held(
+    *,
+    active,
+    reserved=_ALL_ANSWERED,
+    scheduled=_ALL_ANSWERED,
+    roster=None,
+    roster_age_minutes=10,
+    client=None,
+):
     now = datetime.now(timezone.utc)
     answered = {} if active is None else {worker: [] for worker in active}
     inspect = MagicMock()
     inspect.active.return_value = active
-    inspect.reserved.return_value = answered if reserved is None else reserved
-    inspect.scheduled.return_value = answered if scheduled is None else scheduled
-    client = _RosterRedis(
+    inspect.reserved.return_value = answered if reserved is _ALL_ANSWERED else reserved
+    inspect.scheduled.return_value = answered if scheduled is _ALL_ANSWERED else scheduled
+    client = client or _RosterRedis(
         since=now - timedelta(minutes=roster_age_minutes),
         roster={
             name: now - timedelta(seconds=age)
@@ -1246,3 +1258,31 @@ def test_held_task_ids_is_unknown_while_the_roster_is_young():
 
 def test_held_task_ids_is_unknown_when_no_worker_answers():
     assert _held(active=None) is None
+
+
+def test_held_task_ids_is_unknown_when_a_later_inspect_call_gets_no_reply():
+    assert _held(active={"a@1": []}, reserved=None) is None
+    assert _held(active={"a@1": []}, scheduled=None) is None
+
+
+def test_held_task_ids_is_unknown_when_a_beating_worker_skips_one_inspect_call():
+    assert _held(
+        active={"a@1": [], "b@2": []},
+        reserved={"a@1": []},
+        scheduled={"a@1": [], "b@2": []},
+        roster={"a@1": 10, "b@2": 10},
+    ) is None
+
+
+def test_held_task_ids_is_unknown_with_a_corrupt_roster_entry():
+    client = _RosterRedis(since=datetime.now(timezone.utc) - timedelta(minutes=10), roster={})
+    client.hgetall = lambda key: {b"a@1": b"not json"}
+
+    assert _held(active={"a@1": []}, client=client) is None
+
+
+def test_held_task_ids_is_unknown_when_the_roster_cannot_be_read():
+    client = _RosterRedis(since=datetime.now(timezone.utc) - timedelta(minutes=10), roster={})
+    client.hgetall = MagicMock(side_effect=redis.ConnectionError("down"))
+
+    assert _held(active={"a@1": []}, client=client) is None

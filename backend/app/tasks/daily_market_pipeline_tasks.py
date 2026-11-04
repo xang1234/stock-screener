@@ -574,8 +574,9 @@ def release_daily_market_pipeline_claim(*, market: str, token: str) -> dict:
 
 
 # Backend states that end a chain. Every state other than these, PENDING and
-# SUCCESS means a worker holds the stage: STARTED, RETRY, and custom ones such
-# as the PROGRESS a running price refresh reports through update_state.
+# SUCCESS means a worker took the stage: STARTED, RETRY, and custom ones such
+# as the PROGRESS a running price refresh reports through update_state. That
+# worker may since have died, which the heartbeat checks separately.
 _CHAIN_DEAD_STATES = frozenset({"FAILURE", "REVOKED"})
 _CHAIN_IDLE_STATES = frozenset({"PENDING", "SUCCESS"})
 
@@ -709,11 +710,13 @@ def _renew_pipeline_chain_claims(claims: Any, heartbeat: str) -> dict[str, str]:
 
     # Read before the broker: a message moving from queue to worker meanwhile
     # reads as a miss at worst, which the next heartbeat must confirm.
-    held = (
-        held_task_ids()
-        if any(verdict == "alive" for _token, _task_ids, verdict in checks.values())
-        else set()
-    )
+    held: set[str] | None = set()
+    if any(verdict == "alive" for _token, _task_ids, verdict in checks.values()):
+        try:
+            held = held_task_ids()
+        except Exception:
+            logger.warning("Could not read what the workers hold", exc_info=True)
+            held = None
 
     def is_held(task_ids: list[str]) -> bool:
         # None: the workers could not all be read, which proves nothing gone.

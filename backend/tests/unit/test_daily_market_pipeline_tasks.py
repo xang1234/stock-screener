@@ -698,6 +698,34 @@ def test_unreadable_workers_keep_a_running_stage_claim(monkeypatch):
     assert claims.holders["US"]["task_id"] == token
 
 
+def test_a_failed_worker_read_keeps_a_running_stage_and_acts_on_other_markets(monkeypatch):
+    module, claims, token, _ = _dispatched_chain(
+        monkeypatch, states={0: "SUCCESS", 1: "STARTED"}, held_ids=None
+    )
+    other_stage = "hk-stage"
+    claims.holders["HK"] = {"task_id": "hk-token", "started_at": "x"}
+    claims.task_ids["hk-token"] = [other_stage]
+    real_async_result = module.celery_app.AsyncResult
+    monkeypatch.setattr(
+        module.celery_app,
+        "AsyncResult",
+        lambda task_id: SimpleNamespace(state="FAILURE")
+        if task_id == other_stage
+        else real_async_result(task_id),
+    )
+
+    def broken():
+        raise TimeoutError("broker stalled")
+
+    monkeypatch.setattr("app.services.operations_job_service.held_task_ids", broken)
+
+    assert module.renew_daily_market_pipeline_claims.run()["claims"] == {
+        "US": "renewed",
+        "HK": "released_dead",
+    }
+    assert claims.holders["US"]["task_id"] == token
+
+
 def test_an_unreadable_broker_keeps_a_running_stage_no_worker_holds(monkeypatch):
     module, claims, token, _ = _dispatched_chain(
         monkeypatch, states={0: "SUCCESS", 1: "STARTED"}
