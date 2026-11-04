@@ -79,21 +79,23 @@ const noResultNote = (cohorts, sessions) => {
 function CohortRow({ cohort, sessions }) {
   const horizon = horizonOf(cohort, sessions);
   const toneSx = { color: horizon.thin ? 'text.secondary' : 'text.primary' };
-  const labels = [
+  const captions = [
     `${cohort.first_date} to ${cohort.last_date}`,
     cohort.retired && 'Retired',
     horizon.thin && horizon.sample_size > 0 && 'Small sample',
-  ].filter(Boolean).join(' · ');
+  ].filter(Boolean);
 
   return (
     <TableRow>
-      <TableCell sx={{ ...toneSx, minWidth: 130 }}>
+      <TableCell sx={{ ...toneSx, minWidth: 120 }}>
         <Box component="span" sx={{ display: 'block', fontWeight: 600 }}>{cohort.name}</Box>
-        <Typography variant="caption" component="span" sx={{ display: 'block', color: 'text.secondary' }}>{labels}</Typography>
+        {captions.map((caption) => (
+          <Typography key={caption} variant="caption" component="span" sx={{ display: 'block', color: 'text.secondary' }}>{caption}</Typography>
+        ))}
       </TableCell>
-      <TableCell sx={{ ...toneSx, minWidth: 150 }}>{sampleText(cohort, horizon)}</TableCell>
+      <TableCell sx={{ ...toneSx, minWidth: 180 }}>{sampleText(cohort, horizon)}</TableCell>
       {STAT_COLUMNS.map((column) => (
-        <TableCell key={column.label} align="right" sx={{ ...toneSx, fontFamily: 'monospace' }}>
+        <TableCell key={column.label} align="right" sx={{ ...toneSx, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
           {column.value(horizon)}
         </TableCell>
       ))}
@@ -108,7 +110,7 @@ function OriginSection({ section, cohorts, sessions }) {
       {note && <Alert severity="info">{note}</Alert>}
       {cohorts.length > 0 && (
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 720 }}>
+          <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Screen</TableCell>
