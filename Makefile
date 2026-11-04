@@ -9,7 +9,7 @@
 #   make all           Full CI (gate-check + identity + backend + frontend)
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 \
+.PHONY: help lock-runtime gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 \
         gate-market-parity gates gate-check frontend-lint frontend-test frontend \
         phase2-type-gate phase2-reliability golden-update \
         gate-unit-files gate-integration all
@@ -201,6 +201,12 @@ phase2-type-gate: ## Focused Phase 2 type-contract checks (touched modules)
 phase2-reliability: phase2-type-gate ## Alias for Phase 2 reliability gate bundle
 
 # ── Utilities ───────────────────────────────────────────────────────
+
+lock-runtime: ## Regenerate backend/requirements-runtime.lock with a 7-day release hold (LOCK_ARGS=--upgrade to update pins)
+	UV_CUSTOM_COMPILE_COMMAND='make lock-runtime' uv pip compile backend/requirements-runtime.txt \
+	  --universal --python-version 3.11 --generate-hashes $(LOCK_ARGS) \
+	  --exclude-newer "$$(python3 -c "from datetime import datetime, timedelta, timezone as tz; print((datetime.now(tz.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ'))")" \
+	  -o backend/requirements-runtime.lock
 
 golden-update: ## Regenerate golden snapshots for review
 	$(PYTEST) tests/unit/golden/ -v --tb=short --golden-update
