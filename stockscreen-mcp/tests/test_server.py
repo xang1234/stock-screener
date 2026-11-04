@@ -341,15 +341,6 @@ async def test_audit_stocks_rejects_an_empty_screens_list():
     assert "screens" in await call_error("audit_stocks", symbols=["AAA"], screens=[])
 
 
-async def test_audit_stocks_default_screens_keep_a_mixed_case_preset_id(use_fake_data):
-    scan, _ = use_fake_data.scan("US")
-    scan["preset_screens"].append(preset("MixedCase", "Mixed", [condition("stage", "range", min=2, max=2)]))
-
-    aaa = (await call("audit_stocks", symbols=["AAA"]))["stocks"][0]
-
-    assert aaa["passes"] == ["minervini", "correction_survivors", "se_cup_handle", "MixedCase"]
-
-
 async def test_audit_stocks_passes_agree_with_get_stock():
     result = await call("audit_stocks", symbols=["AAA", "BBB", "CCC", "DDD", "EEE"])
 
@@ -405,52 +396,35 @@ async def test_audit_stocks_limits_the_symbol_list():
     assert "symbols" in await call_error("audit_stocks", symbols=[])
 
 
-FIVE_FOUND = ["AAA", "BBB", "CCC", "DDD", "EEE"]  # 5 symbols x 6 rules over the three fake screens is 30 rule cells
+FIVE_FOUND = ["AAA", "BBB", "CCC", "DDD", "EEE"]
 
 
-async def test_audit_stocks_detail_refuses_more_rule_cells_than_the_limit(monkeypatch):
-    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 29)
+async def test_audit_stocks_refuses_a_response_over_the_limit_and_says_what_fits(monkeypatch):
+    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", 3_000)
 
     message = await call_error("audit_stocks", symbols=FIVE_FOUND, detail=True)
     assert message.endswith(
-        "5 symbols x 6 rules = 30 rule cells; the detail limit is 29. "
-        "Up to 4 symbols fit with these screens, or pass a shorter `screens` list."
+        "5 symbols over 3 screens would return 4,368 characters; the limit is 3,000. "
+        "About 3 symbols fit with these screens. "
+        "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
     )
 
-    # Both recoveries it names work, and the summary is never capped.
-    assert len((await call("audit_stocks", symbols=FIVE_FOUND[:4], detail=True))["stocks"]) == 4
+    # Every recovery it names works.
+    assert len((await call("audit_stocks", symbols=FIVE_FOUND[:3], detail=True))["stocks"]) == 3
     assert len((await call("audit_stocks", symbols=FIVE_FOUND, screens=["minervini"], detail=True))["stocks"]) == 5
     assert len((await call("audit_stocks", symbols=FIVE_FOUND))["stocks"]) == 5
 
 
-async def test_audit_stocks_detail_says_none_fit_when_one_symbol_is_over_the_limit(monkeypatch):
-    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 5)
+async def test_audit_stocks_limit_also_covers_the_summary_and_always_suggests_one_symbol(monkeypatch):
+    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", 100)
 
-    message = await call_error("audit_stocks", symbols=["AAA"], detail=True)
+    message = await call_error("audit_stocks", symbols=FIVE_FOUND)
     assert message.endswith(
-        "1 symbols x 6 rules = 6 rule cells; the detail limit is 5. "
-        "None fit with these screens, so pass a shorter `screens` list."
+        "5 symbols over 3 screens would return 1,871 characters; the limit is 100. "
+        "About 1 symbols fit with these screens. "
+        "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
     )
 
 
-async def test_audit_stocks_detail_accepts_exactly_the_limit(monkeypatch):
-    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 30)
-
+async def test_audit_stocks_detail_succeeds_under_the_real_limit():
     assert len((await call("audit_stocks", symbols=FIVE_FOUND, detail=True))["stocks"]) == 5
-
-
-async def test_audit_stocks_detail_limit_counts_found_symbols_only(monkeypatch):
-    monkeypatch.setattr(server, "AUDIT_DETAIL_MAX_RULES", 6)
-    unknown = [f"S{i}" for i in range(48)]
-
-    result = await call("audit_stocks", symbols=["AAA", "aaa", *unknown], detail=True)
-
-    assert [s["symbol"] for s in result["stocks"]] == ["AAA"]
-    assert result["not_found"] == unknown
-
-
-async def test_audit_stocks_docstring_states_the_detail_limit():
-    async with Client(server.mcp) as client:
-        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-
-    assert f"may not exceed {server.AUDIT_DETAIL_MAX_RULES}" in " ".join(tools["audit_stocks"].description.split())

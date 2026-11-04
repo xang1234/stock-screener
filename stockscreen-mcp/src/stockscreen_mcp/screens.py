@@ -166,7 +166,7 @@ def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[
         explanation = explain_condition(row, condition)
         if not explanation.pop("passes"):
             failed.append(explanation)
-    if required.get("match") == "any" and evaluate_group(row, required):
+    if evaluate_group(row, required):
         failed = []  # an unmet alternative is not a failure
     passes = evaluate_expression(row, expression)
     disabled = required.get("enabled") is False

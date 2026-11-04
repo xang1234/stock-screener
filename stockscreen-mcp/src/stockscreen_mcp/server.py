@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import math
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -74,12 +75,9 @@ SNAPSHOT_FIELDS = (
     "company_name", "current_price", "price_change_1d", "rs_rating", "rs_rating_3m", "stage", "composite_score",
     "ibd_industry_group", "ibd_group_rank",
 )
-# audit_stocks detail: found symbols x rules in the audited screens. Many symbols over a few one-rule
-# screens set this, because each symbol also carries a snapshot and each screen its id. The largest
-# response constructible on the 2026-11-03 US publish is 46 symbols x 3 one-rule screens, 52.7 KB of
-# client text against a budget of about 60 KB. The uncapped summary of 50 symbols over all 28 screens
-# measured 65.0 KB on that publish for the symbols with the most near misses.
-AUDIT_DETAIL_MAX_RULES = 140
+# The SDK sends the response as indent-2 JSON text, and common MCP clients truncate large tool results.
+# The worst 50-symbol summary measured 60 to 67 KB across markets on the 2026-11-04 publish, so only detail can hit it.
+AUDIT_MAX_CHARS = 80_000
 
 
 class Filter(BaseModel):
@@ -283,7 +281,7 @@ def audit_stocks(
         min_length=1, description="Preset ids from list_screens to check; defaults to every screen in the market.",
     )] = None,
     detail: Annotated[bool, Field(
-        description="Also return every failed rule per screen under failed_rules. Capped; see the docstring.",
+        description="Also return every failed rule per screen under failed_rules. Size-limited; see the docstring.",
     )] = False,
 ) -> dict[str, Any]:
     """Check a watchlist or holdings against the preset screens in one call: which screens each stock
@@ -300,13 +298,14 @@ def audit_stocks(
     "field short_by N", or to the field alone when short_by is absent. It ignores how far short the
     stock is, so check short_by before calling one close. short_by is the positive distance between a
     failed numeric rule's bound and the stock's value (rs_rating 60 against a min of 70 is short_by 10);
-    it is absent when the value is missing and on non-numeric rules. notes maps a screen to the reason
-    when its rules alone don't explain the result: a failing optional rule group, or a disabled
-    required group.
+    on a max rule it is how far the value is above the bound (ibd_group_rank 154 against a max of 40 is
+    short_by 114); it is absent when the value is missing and on non-numeric rules. notes maps a screen
+    to the reason when its rules alone don't explain the result: a failing optional rule group, or a
+    disabled required group.
 
-    detail=True adds failed_rules: every failed rule for each failing screen. Found symbols times
-    the total rules in the audited screens may not exceed 140; past that the call raises an error
-    that says how many symbols fit, so pass fewer symbols or a shorter `screens` list.
+    detail=True adds failed_rules: every failed rule for each failing screen. Any response over 80,000
+    characters of JSON is refused with an error that says how many symbols fit, so for detail pass fewer
+    symbols or a shorter `screens` list.
 
     Symbols absent from the market's scan are listed in not_found rather than raising an error.
     """
@@ -321,15 +320,6 @@ def audit_stocks(
     by_symbol = {str(r.get("symbol", "")).upper(): r for r in rows}
     requested = list(dict.fromkeys(s.strip().upper() for s in symbols))
     found = [by_symbol[s] for s in requested if s in by_symbol]
-    if detail:
-        rules = sum(len(p["filter_expression"]["required"].get("conditions") or []) for p in audited)
-        if len(found) * rules > AUDIT_DETAIL_MAX_RULES:
-            fit = AUDIT_DETAIL_MAX_RULES // rules
-            recovery = f"Up to {fit} symbols fit with these screens, or" if fit else "None fit with these screens, so"
-            raise ToolError(
-                f"{len(found)} symbols x {rules} rules = {len(found) * rules} rule cells; "
-                f"the detail limit is {AUDIT_DETAIL_MAX_RULES}. {recovery} pass a shorter `screens` list."
-            )
     stocks = []
     for row in found:
         explained = {p["id"]: explain_expression(row, p["filter_expression"]) for p in audited}
@@ -345,13 +335,22 @@ def audit_stocks(
         if detail:
             stock["failed_rules"] = {i: e["failed"] for i, e in explained.items() if not e["passes"]}
         stocks.append(stock)
-    return {
+    result = {
         "market": market.upper(),
         "as_of_date": scan.get("as_of_date"),
         "screens": [p["id"] for p in audited],
         "stocks": stocks,
         "not_found": [s for s in requested if s not in by_symbol],
     }
+    size = len(json.dumps(result, indent=2))
+    if size > AUDIT_MAX_CHARS:
+        fit = max(1, len(found) * AUDIT_MAX_CHARS // size)
+        raise ToolError(
+            f"{len(found)} symbols over {len(audited)} screens would return {size:,} characters; "
+            f"the limit is {AUDIT_MAX_CHARS:,}. About {fit} symbols fit with these screens. "
+            "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
+        )
+    return result
 
 
 @mcp.tool(annotations=READ_ONLY)
