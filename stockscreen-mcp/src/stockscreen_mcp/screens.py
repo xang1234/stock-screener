@@ -108,6 +108,23 @@ def evaluate_condition(row: dict[str, Any], condition: dict[str, Any]) -> bool:
     return bool(evaluator and evaluator(row, condition))
 
 
+def evaluate_group(row: dict[str, Any], group: dict[str, Any]) -> bool:
+    if group.get("enabled") is False:
+        return False
+    matches = [evaluate_condition(row, c) for c in group.get("conditions") or []]
+    return any(matches) if group.get("match") == "any" else all(matches)
+
+
+def evaluate_expression(row: dict[str, Any], expression: dict[str, Any]) -> bool:
+    if not evaluate_group(row, expression["required"]):
+        return False
+    groups = [g for g in expression.get("groups") or [] if g.get("enabled") is not False]
+    if not groups:
+        return True
+    matches = [evaluate_group(row, g) for g in groups]
+    return all(matches) if expression.get("group_join") == "all" else any(matches)
+
+
 _NEEDS = {
     "range": lambda c: {bound: c[bound] for bound in ("min", "max") if c.get(bound) is not None},
     "categorical": lambda c: {"not_in" if c.get("mode") == "exclude" else "in": c.get("values", [])},
@@ -131,30 +148,41 @@ def explain_condition(row: dict[str, Any], condition: dict[str, Any]) -> dict[st
     }
     number = _js_number(value)
     if kind == "range" and not passes and math.isfinite(number):
-        # Compares the number, not the raw value, so text bounds can't yield a negative or NaN gap.
-        # Rounded because 70 - 50.52 is 19.479999999999997, and callers repeat this number to people.
-        if _less(number, condition.get("min")):
-            explanation["short_by"] = round(_js_number(condition["min"]) - number, 6)
-        elif _less(condition.get("max"), number):
-            explanation["short_by"] = round(number - _js_number(condition["max"]), 6)
+        low, high = _js_number(condition.get("min")), _js_number(condition.get("max"))
+        gap = low - number if number < low else number - high
+        if gap > 0:
+            # Rounded because 70 - 50.52 is 19.479999999999997, and callers repeat this number to people.
+            # A gap under 5e-7 would round to 0.0, and short_by is documented as positive.
+            explanation["short_by"] = round(gap, 6) or gap
     return explanation
 
 
-def evaluate_group(row: dict[str, Any], group: dict[str, Any]) -> bool:
-    if group.get("enabled") is False:
-        return False
-    matches = [evaluate_condition(row, c) for c in group.get("conditions") or []]
-    return any(matches) if group.get("match") == "any" else all(matches)
-
-
-def evaluate_expression(row: dict[str, Any], expression: dict[str, Any]) -> bool:
-    if not evaluate_group(row, expression["required"]):
-        return False
-    groups = [g for g in expression.get("groups") or [] if g.get("enabled") is not False]
-    if not groups:
-        return True
-    matches = [evaluate_group(row, g) for g in groups]
-    return all(matches) if expression.get("group_join") == "all" else any(matches)
+def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[str, Any]:
+    """A screen's verdict for a row with its failed rules, so callers never walk the rules themselves."""
+    required = expression["required"]
+    conditions = required.get("conditions") or []
+    failed = []
+    for condition in conditions:
+        explanation = explain_condition(row, condition)
+        if not explanation.pop("passes"):
+            failed.append(explanation)
+    any_of = required.get("match") == "any"
+    if any_of and evaluate_group(row, required):
+        failed = []  # an unmet alternative is not a failure
+    passes = evaluate_expression(row, expression)
+    disabled = required.get("enabled") is False
+    groups_ok = evaluate_expression(row, {**expression, "required": {}})  # an empty required group always passes
+    result = {
+        "passes": passes,
+        "failed": failed,
+        "near_miss": not passes and groups_ok and not disabled and not any_of
+        and len(conditions) >= 2 and len(failed) == 1,
+    }
+    if disabled:
+        result["note"] = "required rule group is disabled"
+    elif not groups_ok:
+        result["note"] = "fails an optional rule group"
+    return result
 
 
 def expression_fields(expression: dict[str, Any]) -> list[str]:
