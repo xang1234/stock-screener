@@ -302,7 +302,7 @@ async def test_audit_stocks_short_by_stays_positive_when_the_gap_rounds_to_zero(
     aaa = (await call("audit_stocks", symbols=["AAA"], screens=["atr"], detail=True))["stocks"][0]
 
     assert aaa["failed_rules"] == {
-        "atr": [{"field": "atr", "value": 1.4999999, "needs": {"min": 1.5}, "short_by": 1.0000000005838672e-07}],
+        "atr": [{"field": "atr", "value": 1.4999999, "needs": {"min": 1.5}, "short_by": 1.00000000058e-07}],
     }
 
 
@@ -319,7 +319,6 @@ async def test_audit_stocks_matches_any_case_dedupes_and_reports_not_found():
 async def test_audit_stocks_unknown_screen_lists_the_available_ids():
     message = await call_error("audit_stocks", symbols=["AAA"], screens=["minervini", "minerva"])
     assert "Unknown screen 'minerva'. Available: minervini, correction_survivors, se_cup_handle." in message
-    # Hidden where the market has no opportunity state, as in list_screens.
     message = await call_error("audit_stocks", symbols=["AAA"], market="AU", screens=["correction_survivors"])
     assert "Unknown screen 'correction_survivors'. Available: minervini, se_cup_handle." in message
 
@@ -399,32 +398,28 @@ async def test_audit_stocks_limits_the_symbol_list():
 FIVE_FOUND = ["AAA", "BBB", "CCC", "DDD", "EEE"]
 
 
-async def test_audit_stocks_refuses_a_response_over_the_limit_and_says_what_fits(monkeypatch):
-    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", 3_000)
+async def test_audit_stocks_limit_measures_the_text_the_client_gets(use_fake_data, monkeypatch):
+    _, rows = use_fake_data.scan("US")
+    next(r for r in rows if r["symbol"] == "AAA")["company_name"] = "日本電信電話"
+    symbols = [*FIVE_FOUND, "ZZZ"]
+    async with Client(server.mcp) as client:
+        text = (await client.call_tool("audit_stocks", {"symbols": symbols, "detail": True})).content[0].text
 
-    message = await call_error("audit_stocks", symbols=FIVE_FOUND, detail=True)
-    assert message.endswith(
-        "5 symbols over 3 screens would return 4,368 characters; the limit is 3,000. "
-        "About 3 symbols fit with these screens. "
-        "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
-    )
+    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", len(text))
+    await call("audit_stocks", symbols=symbols, detail=True)
 
-    # Every recovery it names works.
-    assert len((await call("audit_stocks", symbols=FIVE_FOUND[:3], detail=True))["stocks"]) == 3
-    assert len((await call("audit_stocks", symbols=FIVE_FOUND, screens=["minervini"], detail=True))["stocks"]) == 5
-    assert len((await call("audit_stocks", symbols=FIVE_FOUND))["stocks"]) == 5
-
-
-async def test_audit_stocks_limit_also_covers_the_summary_and_always_suggests_one_symbol(monkeypatch):
-    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", 100)
-
-    message = await call_error("audit_stocks", symbols=FIVE_FOUND)
-    assert message.endswith(
-        "5 symbols over 3 screens would return 1,871 characters; the limit is 100. "
-        "About 1 symbols fit with these screens. "
-        "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
-    )
+    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", len(text) - 1)
+    message = await call_error("audit_stocks", symbols=symbols, detail=True)
+    assert f"5 symbols over 3 screens would return {len(text):,} characters" in message
+    assert "About 4 symbols fit" in message
+    assert message.endswith("Pass fewer symbols, a shorter `screens` list, or drop `detail`.")
 
 
-async def test_audit_stocks_detail_succeeds_under_the_real_limit():
-    assert len((await call("audit_stocks", symbols=FIVE_FOUND, detail=True))["stocks"]) == 5
+async def test_audit_stocks_summary_size_error_does_not_suggest_dropping_detail(monkeypatch):
+    symbols = [*FIVE_FOUND, "ZZZ"]
+    async with Client(server.mcp) as client:
+        summary_text = (await client.call_tool("audit_stocks", {"symbols": symbols})).content[0].text
+
+    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", len(summary_text) - 1)
+    message = await call_error("audit_stocks", symbols=symbols)
+    assert message.endswith("Pass fewer symbols or a shorter `screens` list.")

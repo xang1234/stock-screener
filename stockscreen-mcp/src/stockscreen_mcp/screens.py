@@ -134,7 +134,6 @@ _NEEDS = {
 
 
 def explain_condition(row: dict[str, Any], condition: dict[str, Any]) -> dict[str, Any]:
-    """One condition's verdict for a row: its value, the requirement, and any numeric shortfall."""
     kind = condition.get("kind")
     value = row_value(row, condition["field"])
     if isinstance(value, float) and not math.isfinite(value):
@@ -151,23 +150,20 @@ def explain_condition(row: dict[str, Any], condition: dict[str, Any]) -> dict[st
         low, high = _js_number(condition.get("min")), _js_number(condition.get("max"))
         gap = low - number if number < low else number - high
         if gap > 0:
-            # Rounded because 70 - 50.52 is 19.479999999999997, and callers repeat this number to people.
-            # A gap under 5e-7 would round to 0.0, and short_by is documented as positive.
-            explanation["short_by"] = round(gap, 6) or gap
+            explanation["short_by"] = float(f"{gap:.12g}")
     return explanation
 
 
 def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[str, Any]:
-    """A screen's verdict for a row with its failed rules, so callers never walk the rules themselves."""
     required = expression["required"]
     conditions = required.get("conditions") or []
+    required_ok = evaluate_group(row, required)
     failed = []
-    for condition in conditions:
-        explanation = explain_condition(row, condition)
-        if not explanation.pop("passes"):
-            failed.append(explanation)
-    if evaluate_group(row, required):
-        failed = []  # an unmet alternative is not a failure
+    if not required_ok:
+        for condition in conditions:
+            explanation = explain_condition(row, condition)
+            if not explanation.pop("passes"):
+                failed.append(explanation)
     passes = evaluate_expression(row, expression)
     disabled = required.get("enabled") is False
     groups_ok = evaluate_expression(row, {**expression, "required": {}})  # an empty required group always passes

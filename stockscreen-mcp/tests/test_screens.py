@@ -158,25 +158,20 @@ def test_js_coercion_and_strict_equality(row, cond, expected):
          {"field": "stage", "value": 1, "needs": {"min": 2, "max": 2}, "passes": False, "short_by": 1.0}),
         ({"rs_rating": 80}, condition("rs_rating", "range", min=70, max=None),
          {"field": "rs_rating", "value": 80, "needs": {"min": 70}, "passes": True}),
-        # 70 - 50.52 is 19.479999999999997 in floats; callers repeat this number to people.
         ({"canslim_score": 50.52}, condition("canslim_score", "range", min=70, max=None),
          {"field": "canslim_score", "value": 50.52, "needs": {"min": 70}, "passes": False, "short_by": 19.48}),
-        # A gap too small to survive rounding keeps its exact value, so short_by stays positive.
         ({"atr": 1.4999999}, condition("atr", "range", min=1.5, max=None),
-         {"field": "atr", "value": 1.4999999, "needs": {"min": 1.5}, "passes": False, "short_by": 1.0000000005838672e-07}),
+         {"field": "atr", "value": 1.4999999, "needs": {"min": 1.5}, "passes": False, "short_by": 1.00000000058e-07}),
         ({"atr": 1.5000001}, condition("atr", "range", min=None, max=1.5),
-         {"field": "atr", "value": 1.5000001, "needs": {"max": 1.5}, "passes": False, "short_by": 1.0000000005838672e-07}),
-        # Missing data fails with no distance to report.
+         {"field": "atr", "value": 1.5000001, "needs": {"max": 1.5}, "passes": False, "short_by": 1.00000000058e-07}),
         ({"rs_rating": None}, condition("rs_rating", "range", min=70, max=None),
          {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False}),
         ({}, condition("rs_rating", "range", min=70, max=None),
          {"field": "rs_rating", "value": None, "needs": {"min": 70}, "passes": False}),
-        # Same coercion as the evaluator: a numeric string is measured as a number.
         ({"rs_rating": "50"}, condition("rs_rating", "range", min=70, max=None),
          {"field": "rs_rating", "value": "50", "needs": {"min": 70}, "passes": False, "short_by": 20.0}),
         ({"current_price": 4}, condition("price", "range", min=10, max=None),
          {"field": "price", "value": 4, "needs": {"min": 10}, "passes": False, "short_by": 6.0}),
-        # inf is not valid JSON, so it reads as null without changing the verdict.
         ({"scan_mode": "listing_only"}, condition("listing_aware_volume", "range", min=100, max=None),
          {"field": "listing_aware_volume", "value": None, "needs": {"min": 100}, "passes": True}),
         ({"scan_mode": "listing_only"}, condition("listing_aware_volume", "range", min=None, max=100),
@@ -217,12 +212,10 @@ DISABLED_NOTE = "required rule group is disabled"
          {"passes": False, "failed": [RS_FAILS, EPS_FAILS], "near_miss": False}),
         ({"match": "all", "conditions": [RS_RULE]}, [], "any",
          {"passes": False, "failed": [RS_FAILS], "near_miss": False}),
-        # An unmet alternative is not a failure while another alternative holds.
         ({"match": "any", "conditions": [RS_RULE, STAGE_RULE]}, [], "any",
          {"passes": True, "failed": [], "near_miss": False}),
         ({"match": "any", "conditions": [RS_RULE, EPS_RULE]}, [], "any",
          {"passes": False, "failed": [RS_FAILS, EPS_FAILS], "near_miss": False}),
-        # A disabled required group can never pass, whatever its rules say.
         ({"enabled": False, "match": "all", "conditions": [STAGE_RULE]}, [], "any",
          {"passes": False, "failed": [], "near_miss": False, "note": DISABLED_NOTE}),
         ({"enabled": False, "match": "all", "conditions": [RS_RULE, STAGE_RULE]}, [UNMET_GROUP], "any",
@@ -232,7 +225,6 @@ DISABLED_NOTE = "required rule group is disabled"
          {"passes": False, "failed": [RS_FAILS], "near_miss": False, "note": GROUP_NOTE}),
         ({"match": "all", "conditions": [STAGE_RULE]}, [UNMET_GROUP], "any",
          {"passes": False, "failed": [], "near_miss": False, "note": GROUP_NOTE}),
-        # groups follow group_join, and a disabled group is ignored, as in evaluate_expression.
         ({"match": "all", "conditions": [RS_RULE, STAGE_RULE]}, [MET_GROUP, UNMET_GROUP], "any",
          {"passes": False, "failed": [RS_FAILS], "near_miss": True}),
         ({"match": "all", "conditions": [RS_RULE, STAGE_RULE]}, [MET_GROUP, UNMET_GROUP], "all",

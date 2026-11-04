@@ -75,8 +75,9 @@ SNAPSHOT_FIELDS = (
     "company_name", "current_price", "price_change_1d", "rs_rating", "rs_rating_3m", "stage", "composite_score",
     "ibd_industry_group", "ibd_group_rank",
 )
-# The SDK sends the response as indent-2 JSON text, and common MCP clients truncate large tool results.
-# The worst 50-symbol summary measured 60 to 67 KB across markets on the 2026-11-04 publish, so only detail can hit it.
+# The SDK sends the result as indent-2 JSON text (plus compact structuredContent). Claude Code truncates tool
+# results past 25,000 tokens by default; 80,000 characters stays under that for both response shapes, and the
+# worst 50-symbol summary measured 67 KB.
 AUDIT_MAX_CHARS = 80_000
 
 
@@ -281,7 +282,10 @@ def audit_stocks(
         min_length=1, description="Preset ids from list_screens to check; defaults to every screen in the market.",
     )] = None,
     detail: Annotated[bool, Field(
-        description="Also return every failed rule per screen under failed_rules. Size-limited; see the docstring.",
+        description=(
+            "Also return every failed rule per screen under failed_rules. "
+            "Responses over 80,000 characters are refused with a hint of how many symbols fit."
+        ),
     )] = False,
 ) -> dict[str, Any]:
     """Check a watchlist or holdings against the preset screens in one call: which screens each stock
@@ -344,11 +348,15 @@ def audit_stocks(
     }
     size = len(json.dumps(result, indent=2, ensure_ascii=False))
     if size > AUDIT_MAX_CHARS:
-        fit = max(1, len(found) * AUDIT_MAX_CHARS // size)
+        fit = len(found) * AUDIT_MAX_CHARS // size
+        recovery = (
+            "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
+            if detail
+            else "Pass fewer symbols or a shorter `screens` list."
+        )
         raise ToolError(
             f"{len(found)} symbols over {len(audited)} screens would return {size:,} characters; "
-            f"the limit is {AUDIT_MAX_CHARS:,}. About {fit} symbols fit with these screens. "
-            "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
+            f"the limit is {AUDIT_MAX_CHARS:,}. About {fit} symbols fit with these screens. {recovery}"
         )
     return result
 
