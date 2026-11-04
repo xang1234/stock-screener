@@ -59,7 +59,7 @@ Then insert the day from the earliest retained default-branch artifact for that 
 python3 -m app.scripts.scoreboard_ledger recover --market US --date 2026-11-04
 ```
 
-The day gets `origin: artifact` (`artifact_pre_stage_fix` before 2026-10-22) and `published_at` set to the artifact's `created_at`, never `live`. `recover` inserts it by date and uploads `.previous` first, as `record` does. A date the ledger already holds uploads nothing. Each candidate artifact is a download of about 30 MB.
+The day gets `origin: artifact` (`artifact_pre_stage_fix` before 2026-10-22) and `published_at` set to the artifact's `created_at`, never `live`. `recover` inserts it by date and uploads `.previous` first, as `record` does. A date the ledger already holds uploads nothing. Each candidate artifact is a separate download, about 33 MB for US.
 
 After 30 days no artifact remains. The command exits 1 and the date stays a gap, counted in `missing_sessions`.
 
