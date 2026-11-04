@@ -2,8 +2,8 @@
 """Render crawlable HTML pages from a built static site's own static-data.
 
 The demo is a hash-routed SPA, so search engines see one empty page. This writes
-plain HTML at stable URLs (stocks, curated screens, group rankings, breadth, a hub
-and a sitemap) into the built site, from the same published JSON the app reads.
+plain HTML at stable URLs (stocks, curated screens, group rankings, breadth, the
+scoreboard, a hub and a sitemap) into the built site, from the same published JSON the app reads.
 
     python3 scripts/render_seo_pages.py --dist frontend/dist \
         --site-url https://xang1234.github.io/stock-screener/
@@ -38,6 +38,13 @@ FIELD_LABELS = {
     "se_pattern_primary": "detected base pattern", "composite_score": "composite score",
     "vcp_score": "VCP score", "se_setup_score": "setup score",
 }
+SCOREBOARD_HORIZONS = (5, 20, 60)
+SCOREBOARD_SECTIONS = (
+    ("live", "Recorded live"),
+    ("artifact", "Recovered from retained build artifacts, not recorded live"),
+    ("artifact_pre_stage_fix",
+     "Recovered from retained build artifacts, not recorded live, from before the 2026-10-22 Stage calculation fix"),
+)
 CSS = """\
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px;margin:0 auto;padding:16px;color:#1b1f24;line-height:1.5}
 a{color:#1f5fbf}nav{font-size:14px;margin-bottom:8px}h1{font-size:26px;margin:8px 0}
@@ -116,6 +123,42 @@ def rule_text(condition: dict[str, Any]) -> str:
     return f"{label} ≤ {high:g}" if high is not None else label
 
 
+def plural(count: int, noun: str) -> str:
+    return f"{count:,} {noun}{'' if count == 1 else 's'}"
+
+
+def scoreboard_horizon(cohort: dict[str, Any], sessions: int) -> dict[str, Any]:
+    return next(h for h in cohort["horizons"] if h["horizon_sessions"] == sessions)
+
+
+def scoreboard_cell(cohort: dict[str, Any], sessions: int) -> str:
+    """A snippet carries no grey, so thin and empty cells say so in words instead of showing a number."""
+    if cohort["events"] == 0:
+        return "<td>no picks</td>"
+    h = scoreboard_horizon(cohort, sessions)
+    if h["sample_size"] == 0:
+        verdict = "pending"
+    elif h["thin"]:
+        verdict = "too few"
+    else:
+        verdict = f"{signed(h['median_return_pct'])} median"
+    counts = f"{h['sample_size']:,} closed · {plural(h['signal_dates'], 'date')} · {h['pending_windows']:,} pending"
+    return f"<td>{esc(verdict)}<br><span class=muted>{esc(counts)}</span></td>"
+
+
+def scoreboard_section(title: str, cohorts: list[dict[str, Any]]) -> str:
+    note = ("" if any(h["sample_size"] for c in cohorts for h in c["horizons"])
+            else "<p>No window has closed yet. Nothing here is a result.</p>")
+    rows = "".join(
+        f"<tr><td>{esc(c['name'])}<br><span class=muted>{esc(c['first_date'])} to {esc(c['last_date'])}"
+        + (" · Retired" if c["retired"] else "") + "</span></td>"
+        + "".join(scoreboard_cell(c, sessions) for sessions in SCOREBOARD_HORIZONS) + "</tr>"
+        for c in cohorts)
+    head = "".join(f"<th>{sessions} sessions</th>" for sessions in SCOREBOARD_HORIZONS)
+    table = f"<table><tr><th>Screen</th>{head}</tr>{rows}</table>" if cohorts else ""
+    return f"<h2>{esc(title)}</h2>{note}{table}"
+
+
 class Site:
     def __init__(self, dist: Path, site_url: str) -> None:
         self.dist = dist
@@ -150,10 +193,12 @@ Educational screening data, not investment advice.</footer></body></html>
 
 
 def load_market(data_root: Path, entry: dict[str, Any]) -> dict[str, Any]:
-    def read(page: str) -> Any:
-        rel = entry.get("pages", {}).get(page, {}).get("path")
+    def read_file(rel: str | None) -> Any:
         path = data_root / rel if rel else None
         return json.loads(path.read_text()) if path and path.exists() else None
+
+    def read(page: str) -> Any:
+        return read_file(entry.get("pages", {}).get(page, {}).get("path"))
 
     scan = read("scan") or {}
     rows = {r["symbol"]: r for r in scan.get("initial_rows", [])}
@@ -161,7 +206,8 @@ def load_market(data_root: Path, entry: dict[str, Any]) -> dict[str, Any]:
         for r in json.loads((data_root / chunk["path"]).read_text())["rows"]:
             rows[r["symbol"]] = r
     return {"scan": scan, "rows": list(rows.values()), "home": read("home") or {},
-            "groups": read("groups"), "breadth": read("breadth")}
+            "groups": read("groups"), "breadth": read("breadth"),
+            "scoreboard": read_file(entry.get("assets", {}).get("scoreboard", {}).get("path"))}
 
 
 def render_market(site: Site, code: str, entry: dict[str, Any], data: dict[str, Any]) -> list[str]:
@@ -292,6 +338,33 @@ def render_market(site: Site, code: str, entry: dict[str, Any], data: dict[str, 
                    f"<h2>Last 10 sessions</h2><table><tr><th>Date</th><th class=n>Up 4%+</th><th class=n>Down 4%+</th></tr>{rows_html}</table>",
                    home_crumbs)
         links.append(("Market breadth", site.href("breadth", m), "4% movers, T2108"))
+
+    scoreboard = data["scoreboard"]
+    if scoreboard:
+        cohorts = scoreboard["cohorts"]
+        board_as_of = scoreboard["as_of_date"]
+        picks = sum(c["events"] for c in cohorts)
+        at_20 = [scoreboard_horizon(c, 20) for c in cohorts]
+        sections = "".join(
+            scoreboard_section(title, members)
+            for origin, title in SCOREBOARD_SECTIONS
+            if (members := [c for c in cohorts if c["origin"] == origin]) or origin == "live")
+        rules = ("Entry is the first open after publication. Exit is the close of the Nth session.",
+                 f"Returns are price only, in local currency, with no costs. Excess is against {scoreboard['benchmark']}.",
+                 "Funds that match a screen are included.",
+                 "A stock counts once per screen until its window ends. A repeat that enters earlier is left out.",
+                 "Stocks that later delist drop out as no price, which can flatter results.")
+        site.write(("scoreboard", m), board_as_of, f"{name} scoreboard – how preset screen picks moved afterward ({board_as_of})",
+                   f"{name} preset screens tracked after publication: {plural(len({c['preset'] for c in cohorts}), 'screen')}, "
+                   f"{plural(picks, 'pick')}, {plural(sum(h['sample_size'] for h in at_20), 'window')} closed and "
+                   f"{sum(h['pending_windows'] for h in at_20):,} pending at 20 sessions, as of {board_as_of}.",
+                   f"<h1>{esc(name)} scoreboard</h1><p class=muted>As of {esc(board_as_of)} · "
+                   f"Recording since {esc(scoreboard['recording_since'])} · Ledger through {esc(scoreboard['ledger_through'])} · "
+                   f"{plural(scoreboard['missing_sessions'], 'missing session')}</p>"
+                   "<ul>" + "".join(f"<li>{esc(rule)}</li>" for rule in rules) + f"</ul>{sections}"
+                   f'<a class=cta href="{esc(f"{site.base}#/scoreboard?market={code}")}">Open the interactive scoreboard</a>',
+                   home_crumbs)
+        links.append(("Scoreboard", site.href("scoreboard", m), f"{plural(picks, 'pick')} tracked"))
 
     exposure = data["home"].get("market_health_exposure") or {}
     health = (f"<p>Market exposure {num(exposure.get('exposure_score'), 0)}/100 · {esc(exposure.get('stance'))} · "
