@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
+import zipfile
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -21,7 +28,10 @@ from pathlib import Path
 from typing import Any
 
 MARKETS = ("US", "CA", "HK", "JP", "TW", "IN", "KR", "CN", "DE", "AU", "SG", "MY")
+RELEASE_TAG = "scoreboard-ledger-data"
+RUNBOOK = "docs/runbooks/scoreboard-ledger.md"
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+UPLOAD_ATTEMPTS = 3
 _DEFINITION = re.compile(r"[0-9a-f]{16}")
 
 
@@ -63,6 +73,10 @@ class LedgerError(RuntimeError):
 
 class LedgerCorrupt(LedgerError):
     """A ledger file or input record fails strict parsing."""
+
+
+class GhError(LedgerError):
+    """A gh command failed."""
 
 
 class AssetState(Enum):
@@ -128,6 +142,13 @@ def canonical_line(day: LedgerDay) -> str:
     )
 
 
+def _preset_matches(raw: dict[str, Any]) -> dict[str, PresetMatch]:
+    return {
+        preset: PresetMatch(match["definition"], tuple(match["symbols"]))
+        for preset, match in raw.items()
+    }
+
+
 def parse_line(line: str) -> LedgerDay:
     try:
         raw = json.loads(line)
@@ -135,10 +156,7 @@ def parse_line(line: str) -> LedgerDay:
             as_of_date=date.fromisoformat(raw["as_of_date"]),
             published_at=parse_timestamp(raw["published_at"]),
             origin=Origin(raw["origin"]),
-            presets={
-                preset: PresetMatch(match["definition"], tuple(match["symbols"]))
-                for preset, match in raw["presets"].items()
-            },
+            presets=_preset_matches(raw["presets"]),
         )
         well_formed = all(
             _DEFINITION.fullmatch(match.definition)
@@ -244,10 +262,7 @@ def seed_days(records: list[dict[str, Any]], market: str) -> dict[date, LedgerDa
                     as_of_date=as_of_date,
                     published_at=parse_timestamp(record["created_at"]),
                     origin=artifact_origin(as_of_date),
-                    presets={
-                        preset: PresetMatch(match["definition"], tuple(match["symbols"]))
-                        for preset, match in record["presets"].items()
-                    },
+                    presets=_preset_matches(record["presets"]),
                 )
     except (KeyError, TypeError, ValueError) as exc:
         raise LedgerCorrupt(f"{market} seed record: {exc!r}") from exc
@@ -267,14 +282,296 @@ def cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    assets = read_assets(args.dir, args.market)
+def run_gh(*args: str) -> str:
+    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise GhError(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()[:400]}")
+    return result.stdout
+
+
+def release_assets() -> set[str] | None:
+    """Asset names in the ledger Release; None when the Release does not exist."""
+    result = subprocess.run(
+        ["gh", "release", "view", RELEASE_TAG, "--json", "assets"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return {asset["name"] for asset in json.loads(result.stdout)["assets"]}
+    if "release not found" in result.stderr:
+        return None
+    raise GhError(f"gh release view failed: {result.stderr.strip()[:400]}")
+
+
+def download_assets(listing: set[str], market: str, directory: Path) -> None:
+    for slot in Slot:
+        name = asset_name(market, slot)
+        if name in listing:
+            run_gh("release", "download", RELEASE_TAG, "--pattern", name, "--dir", str(directory), "--clobber")
+
+
+def upload_asset(path: Path) -> None:
+    for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+        result = subprocess.run(
+            ["gh", "release", "upload", RELEASE_TAG, str(path), "--clobber"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+        print(f"Upload of {path.name} failed ({attempt}/{UPLOAD_ATTEMPTS}): {result.stderr.strip()[:400]}", flush=True)
+        if attempt < UPLOAD_ATTEMPTS:
+            time.sleep(attempt * 5)
+    raise GhError(f"could not upload {path.name}")
+
+
+def advance(
+    market: str,
+    day: LedgerDay,
+    listing: set[str],
+    work: Path,
+    is_new: Callable[[date, dict[date, LedgerDay]], bool],
+) -> bool:
+    """Add ``day`` to the market's ledger in the Release; False when it is not new."""
+    download_assets(listing, market, work)
+    assets = read_assets(work, market)
+    writer = sources_for(assets).writer
+    if writer is None:
+        states = {slot.value: asset.state.value for slot, asset in assets.items()}
+        raise LedgerError(f"{market} ledger has no usable base {states}; see {RUNBOOK}")
+    base = assets[writer]
+    if not is_new(day.as_of_date, base.days):
+        print(f"{market}: {day.as_of_date} is not new, nothing to upload", flush=True)
+        return False
+
+    line = canonical_line(day)
+    position = sum(existing < day.as_of_date for existing in base.days)
+    target = work / "next" / asset_name(market)
+    target.parent.mkdir()
+    write_ledger(target, [*base.lines[:position], line, *base.lines[position:]])
+    written = read_lines(target, market)
+    parse_lines(written)
+    if [kept for kept in written if kept != line] != base.lines:
+        raise LedgerCorrupt(f"{market}: the rewrite changed an existing line")
+
+    # .previous always comes from a canonical that just parsed clean. Resuming from
+    # .previous leaves it in place, since no clean canonical exists to replace it.
+    if writer is Slot.CANONICAL:
+        snapshot = work / asset_name(market, Slot.PREVIOUS)
+        shutil.copyfile(base.path, snapshot)
+        upload_asset(snapshot)
+    upload_asset(target)
+    print(f"{market}: added {day.as_of_date} ({day.origin.value})", flush=True)
+    return True
+
+
+def read_day_file(path: Path, published_at: datetime) -> tuple[str, LedgerDay]:
+    market = path.stem
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw["market"] != market:
+            raise LedgerCorrupt(f"{path.name} holds {raw['market']} matches")
+        day = LedgerDay(
+            as_of_date=date.fromisoformat(raw["as_of_date"]),
+            published_at=published_at,
+            origin=Origin.LIVE,
+            presets=_preset_matches(raw["presets"]),
+        )
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise LedgerCorrupt(f"{path.name}: {exc!r}") from exc
+    return market, parse_line(canonical_line(day))
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    listing = release_assets()
+    if listing is None:
+        print(f"::warning::Release {RELEASE_TAG} does not exist: the ledger is not initialized yet.", flush=True)
+        return 0
+    paths = sorted(args.days_dir.glob("*.json"))
+    if not paths:
+        print(f"::error::No extracted days in {args.days_dir}.", flush=True)
+        return 1
+    published_at = datetime.now(timezone.utc)
+    failed = False
+    for path in paths:
+        try:
+            market, day = read_day_file(path, published_at)
+            with tempfile.TemporaryDirectory() as tmp:
+                advance(market, day, listing, Path(tmp), lambda as_of, days: as_of > max(days, default=date.min))
+        except LedgerError as exc:
+            print(f"::error::{path.stem}: {exc}", flush=True)
+            failed = True
+    return 1 if failed else 0
+
+
+def definition_hash(filter_expression: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(filter_expression, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def site_readers() -> tuple[Callable[..., dict[str, Any]], Callable[..., bool]]:
+    """The site's own row loader and evaluator, so matches are what the site shows."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+    from render_seo_pages import load_market
+    from stockscreen_mcp.screens import evaluate_expression
+
+    return load_market, evaluate_expression
+
+
+def match_presets(
+    scan: dict[str, Any],
+    rows: list[dict[str, Any]],
+    evaluate_expression: Callable[..., bool],
+) -> dict[str, PresetMatch]:
+    return {
+        preset["id"]: PresetMatch(
+            definition_hash(preset["filter_expression"]),
+            tuple(sorted(row["symbol"] for row in rows if evaluate_expression(row, preset["filter_expression"]))),
+        )
+        for preset in scan["preset_screens"]
+        if "filter_expression" in preset
+    }
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+    load_market, evaluate_expression = site_readers()
+    manifest = json.loads((args.site_dir / "manifest.json").read_text(encoding="utf-8"))
+    data_root = args.site_dir / (manifest.get("data_root") or "")
+    unavailable = set(manifest.get("unavailable_markets") or [])
+    args.output.mkdir(parents=True, exist_ok=True)
+    failed = False
+    for market, entry in sorted(manifest["markets"].items()):
+        if market in unavailable or "scan" not in entry.get("pages", {}):
+            continue
+        try:
+            data = load_market(data_root, entry)
+            presets = match_presets(data["scan"], data["rows"], evaluate_expression)
+            as_of_date = data["scan"]["as_of_date"]
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            print(f"::warning::{market} matches not extracted: {exc!r}", flush=True)
+            failed = True
+            continue
+        payload = {
+            "market": market,
+            "as_of_date": as_of_date,
+            "presets": {
+                preset: {"definition": match.definition, "symbols": list(match.symbols)}
+                for preset, match in presets.items()
+            },
+        }
+        (args.output / f"{market}.json").write_text(json.dumps(payload), encoding="utf-8")
+        print(f"{market}: {as_of_date}, {len(presets)} presets, {sum(len(m.symbols) for m in presets.values())} matches")
+    return 1 if failed else 0
+
+
+def default_branch_artifacts(market: str) -> list[dict[str, Any]]:
+    """Retained market artifacts from this repository's default branch, oldest first."""
+    branch = run_gh("api", "repos/{owner}/{repo}", "--jq", ".default_branch").strip()
+    pages = json.loads(
+        run_gh(
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{{owner}}/{{repo}}/actions/artifacts?name=static-market-{market}&per_page=100",
+        )
+    )
+
+    # A fork PR's head branch can also be called main; its head repository differs.
+    def trusted(run: dict[str, Any]) -> bool:
+        return (
+            run.get("head_branch") == branch
+            and run.get("repository_id") is not None
+            and run.get("head_repository_id") == run.get("repository_id")
+        )
+
+    artifacts = [
+        artifact
+        for page in pages
+        for artifact in page["artifacts"]
+        if not artifact["expired"] and trusted(artifact.get("workflow_run") or {})
+    ]
+    return sorted(artifacts, key=lambda artifact: artifact["created_at"])
+
+
+def download_artifact(artifact_id: int, path: Path) -> None:
+    with path.open("wb") as handle:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/actions/artifacts/{artifact_id}/zip"],
+            stdout=handle,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    if result.returncode != 0:
+        raise GhError(f"gh api artifact {artifact_id} failed: {result.stderr.strip()[:400]}")
+
+
+def artifact_day(zip_path: Path, market: str, created_at: str, work: Path) -> LedgerDay:
+    load_market, evaluate_expression = site_readers()
+    market_dir = work / "markets" / market.lower()
+    with zipfile.ZipFile(zip_path) as archive:
+        wanted = [name for name in archive.namelist() if name == "manifest.market.json" or name.startswith("scan/")]
+        archive.extractall(market_dir, members=wanted)
+    entry = json.loads((market_dir / "manifest.market.json").read_text(encoding="utf-8"))["entry"]
+    data = load_market(work, entry)
+    as_of_date = date.fromisoformat(data["scan"]["as_of_date"])
+    return LedgerDay(
+        as_of_date=as_of_date,
+        published_at=parse_timestamp(created_at),
+        origin=artifact_origin(as_of_date),
+        presets=match_presets(data["scan"], data["rows"], evaluate_expression),
+    )
+
+
+def find_artifact_day(market: str, target: date) -> LedgerDay:
+    for artifact in default_branch_artifacts(market):
+        # A build cannot predate the session it reports, so these need no download.
+        if artifact["created_at"][:10] < target.isoformat():
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "artifact.zip"
+            download_artifact(artifact["id"], zip_path)
+            try:
+                day = artifact_day(zip_path, market, artifact["created_at"], Path(tmp))
+            except (zipfile.BadZipFile, OSError, KeyError, TypeError, ValueError) as exc:
+                print(f"::warning::Skipping artifact {artifact['id']}: {exc!r}", flush=True)
+                continue
+        if day.as_of_date == target:
+            return day
+    raise LedgerError(
+        f"No retained default-branch {market} artifact holds {target}; "
+        "it stays a gap counted in missing_sessions."
+    )
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    listing = release_assets()
+    if listing is None:
+        raise LedgerError(f"Release {RELEASE_TAG} does not exist; see {RUNBOOK}")
+    day = find_artifact_day(args.market, args.date)
+    with tempfile.TemporaryDirectory() as tmp:
+        advance(args.market, day, listing, Path(tmp), lambda as_of, days: as_of not in days)
+    return 0
+
+
+def _report_assets(directory: Path, market: str) -> int:
+    assets = read_assets(directory, market)
     for slot, asset in assets.items():
         through = max(asset.days, default="-")
-        print(f"{args.market} {slot.value}: {asset.state.value}, {len(asset.days)} days, through {through}")
+        print(f"{market} {slot.value}: {asset.state.value}, {len(asset.days)} days, through {through}")
     writer = sources_for(assets).writer
-    print(f"{args.market} record job appends to: {writer.value if writer else 'nothing, it stops red'}")
+    print(f"{market} record job appends to: {writer.value if writer else 'nothing, it stops red'}")
     return 0 if writer is Slot.CANONICAL else 1
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    if args.dir:
+        return _report_assets(args.dir, args.market)
+    listing = release_assets()
+    if listing is None:
+        print(f"Release {RELEASE_TAG} does not exist.")
+        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        download_assets(listing, args.market, Path(tmp))
+        return _report_assets(Path(tmp), args.market)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -286,10 +583,24 @@ def build_parser() -> argparse.ArgumentParser:
     seed.add_argument("--output", required=True, type=Path)
     seed.set_defaults(run=cmd_seed)
 
-    verify = commands.add_parser("verify", help="Parse one market's ledger files strictly")
+    verify = commands.add_parser("verify", help="Parse one market's ledger assets strictly")
     verify.add_argument("--market", required=True, choices=MARKETS)
-    verify.add_argument("--dir", required=True, type=Path)
+    verify.add_argument("--dir", type=Path, help="Read local files instead of the Release")
     verify.set_defaults(run=cmd_verify)
+
+    extract = commands.add_parser("extract", help="Write what a built site publishes, one file per market")
+    extract.add_argument("--site-dir", required=True, type=Path)
+    extract.add_argument("--output", required=True, type=Path)
+    extract.set_defaults(run=cmd_extract)
+
+    record = commands.add_parser("record", help="Append extracted days the ledger has not seen")
+    record.add_argument("--days-dir", required=True, type=Path)
+    record.set_defaults(run=cmd_record)
+
+    recover = commands.add_parser("recover", help="Insert one lost day from a retained artifact")
+    recover.add_argument("--market", required=True, choices=MARKETS)
+    recover.add_argument("--date", required=True, type=date.fromisoformat)
+    recover.set_defaults(run=cmd_recover)
     return parser
 
 
