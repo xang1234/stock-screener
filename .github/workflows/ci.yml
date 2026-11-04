@@ -68,11 +68,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             backend/requirements-runtime.txt
+            backend/requirements-runtime.lock
             backend/requirements-test.txt
             backend/requirements-exposure-documents.txt
 
       - name: Install dependencies
-        run: uv pip install --system -r backend/requirements-runtime.txt -r backend/requirements-test.txt
+        run: uv pip install --system -r backend/requirements-runtime.txt -r backend/requirements-test.txt -c backend/requirements-runtime.lock
 
       - name: Check generated scan-field contracts
         run: python scripts/generate_scan_filter_contract.py --check
@@ -159,11 +160,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             backend/requirements-runtime.txt
+            backend/requirements-runtime.lock
             backend/requirements-test.txt
             backend/requirements-exposure-documents.txt
 
       - name: Install dependencies
-        run: uv pip install --system -r backend/requirements-runtime.txt -r backend/requirements-test.txt
+        run: uv pip install --system -r backend/requirements-runtime.txt -r backend/requirements-test.txt -c backend/requirements-runtime.lock
 
       - name: ${{ matrix.name }}
         run: ${{ matrix.run }}
@@ -197,11 +199,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             backend/requirements-runtime.txt
+            backend/requirements-runtime.lock
             backend/requirements-test.txt
             backend/requirements-exposure-documents.txt
 
       - name: Install dependencies
-        run: uv pip install --system -r backend/requirements-runtime.txt -r backend/requirements-test.txt
+        run: uv pip install --system -r backend/requirements-runtime.txt -r backend/requirements-test.txt -c backend/requirements-runtime.lock
 
       - name: Comprehensive backend unit suite (shard ${{ matrix.shard }}/4)
         shell: bash

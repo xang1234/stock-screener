@@ -16,9 +16,8 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-COPY backend/requirements-runtime.txt backend/requirements-theme-ml.txt backend/requirements-exposure-documents.lock ./
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements-runtime.txt && \
+COPY backend/requirements-runtime.lock backend/requirements-theme-ml.txt backend/requirements-exposure-documents.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements-runtime.lock && \
     if [ "$INSTALL_THEME_ML" = "true" ]; then pip install --no-cache-dir -r requirements-theme-ml.txt; fi && \
     if [ "$INSTALL_EXPOSURE_DOCUMENTS" = "true" ]; then pip install --no-cache-dir --require-hashes -r requirements-exposure-documents.lock; fi
 

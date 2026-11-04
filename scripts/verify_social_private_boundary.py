@@ -24,6 +24,7 @@ DEPENDENCY_NAMES = {
     "yarn.lock",
     "requirements.txt",
     "requirements-runtime.txt",
+    "requirements-runtime.lock",
     "requirements-theme-ml.txt",
     "requirements-test.txt",
     "pyproject.toml",

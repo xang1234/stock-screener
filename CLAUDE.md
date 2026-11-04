@@ -83,6 +83,8 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 - `.env.docker.example` - Docker environment template
 - `Caddyfile` - Caddy TLS configuration
 
+**Dependencies:** Images install the hash-locked `backend/requirements-runtime.lock`. After changing `backend/requirements-runtime.txt`, run `make lock-runtime`, which ignores releases from the last 7 days. Add `LOCK_ARGS=--upgrade` to update existing pins.
+
 **Note:** Backend runs as non-root user (uid 1000). After upgrade: `sudo chown -R 1000:1000 ./data`
 
 ### Running Tests
