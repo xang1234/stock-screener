@@ -342,7 +342,7 @@ def audit_stocks(
         "stocks": stocks,
         "not_found": [s for s in requested if s not in by_symbol],
     }
-    size = len(json.dumps(result, indent=2))
+    size = len(json.dumps(result, indent=2, ensure_ascii=False))
     if size > AUDIT_MAX_CHARS:
         fit = max(1, len(found) * AUDIT_MAX_CHARS // size)
         raise ToolError(
