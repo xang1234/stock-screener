@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -588,10 +589,9 @@ def cmd_recover(args: argparse.Namespace) -> int:
     if listing is None:
         raise LedgerError(f"Release {RELEASE_TAG} does not exist; see {RUNBOOK}")
     day = find_artifact_day(args.market, args.date)
-    publish: Callable[[Path], object] = upload_asset
     if args.dry_run:
         args.dry_run.mkdir(parents=True, exist_ok=True)
-        publish = lambda path: shutil.copy(path, args.dry_run)
+    publish = partial(shutil.copy, dst=args.dry_run) if args.dry_run else upload_asset
     with tempfile.TemporaryDirectory() as tmp:
         advance(args.market, day, listing, Path(tmp), lambda as_of, days: as_of not in days, publish)
     return 0
