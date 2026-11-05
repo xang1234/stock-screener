@@ -754,6 +754,34 @@ jobs:
           echo "metadata_state_published=false" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # Download only. This job also runs from branch dispatches, so it must not
+      # write the ledger; record-ledger in static-site-publish.yml owns that.
+      - name: Download scoreboard ledger
+        id: download-scoreboard-ledger
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/scoreboard-ledger
+          gh release download scoreboard-ledger-data \
+            --repo "${{ github.repository }}" \
+            --pattern "scoreboard-ledger-${MARKET_LOWER}-v1*" \
+            --dir /tmp/scoreboard-ledger
+
+      # Its own process and time cap, so neither an OOM nor a long ledger can lose
+      # the market. It advertises the asset last; a failure advertises nothing.
+      - name: Build market scoreboard
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.download-scoreboard-ledger.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          cd backend
+          python -m app.scripts.build_static_scoreboard \
+            --market "${{ matrix.market }}" \
+            --market-dir "/tmp/static-data/markets/${MARKET_LOWER}" \
+            --ledger-dir /tmp/scoreboard-ledger
+
       - name: Upload market artifact
         id: upload-market-artifact
         if: ${{ steps.export-market.outputs.has_artifact == 'true' && (steps.breadth-contributor-metadata.outputs.enabled != 'true' || steps.publish-breadth-contributor-metadata.outputs.metadata_state_published == 'true') }}

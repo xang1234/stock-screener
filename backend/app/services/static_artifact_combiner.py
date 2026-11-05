@@ -16,6 +16,7 @@ from app.services.market_session_lag import market_session_lag, publication_late
 from app.services.static_advertised_paths import (
     StaticAdvertisedPathError,
     validate_advertised_paths,
+    validate_scoreboard_asset,
 )
 from app.services.static_breadth_contributor_asset_validator import (
     StaticBreadthContributorAssetError,
@@ -277,9 +278,16 @@ class StaticArtifactCombiner:
             entry, asset_warnings = self._without_broken_breadth_contributors(
                 market=market, entry=metadata["entry"], market_dir=market_dir
             )
+            entry, scoreboard_warnings = self._without_broken_scoreboard(
+                market=market, entry=entry, market_dir=market_dir
+            )
             discovered[market] = {
                 "entry": entry,
-                "warnings": [*metadata.get("warnings", []), *asset_warnings],
+                "warnings": [
+                    *metadata.get("warnings", []),
+                    *asset_warnings,
+                    *scoreboard_warnings,
+                ],
                 "market_dir": market_dir,
                 "source_label": source_label,
             }
@@ -396,6 +404,27 @@ class StaticArtifactCombiner:
             return (
                 {**entry, "assets": kept_assets},
                 [f"{market} breadth contributor asset ignored: {exc}"],
+            )
+        return entry, []
+
+    @staticmethod
+    def _without_broken_scoreboard(
+        *, market: str, entry: dict, market_dir: Path
+    ) -> tuple[dict, list[str]]:
+        assets = entry.get("assets")
+        if not isinstance(assets, dict) or "scoreboard" not in assets:
+            return entry, []
+        try:
+            validate_scoreboard_asset(
+                market=market, market_dir=market_dir, descriptor=assets["scoreboard"]
+            )
+        except StaticAdvertisedPathError as exc:
+            kept_assets = {
+                name: asset for name, asset in assets.items() if name != "scoreboard"
+            }
+            return (
+                {**entry, "assets": kept_assets},
+                [f"{market} scoreboard asset ignored: {exc}"],
             )
         return entry, []
 
@@ -612,11 +641,16 @@ class StaticArtifactCombiner:
                 if omitted_dir.exists() or omitted_dir.is_symlink():
                     shutil.rmtree(omitted_dir)
             for market, artifact in selected.items():
-                shutil.copytree(
-                    artifact["market_dir"],
-                    stage / "markets" / market.lower(),
-                    dirs_exist_ok=True,
-                )
+                market_stage = stage / "markets" / market.lower()
+                shutil.copytree(artifact["market_dir"], market_stage, dirs_exist_ok=True)
+                # The publisher parses every JSON file it ships, so a scoreboard
+                # dropped for damage would fail the whole site if it stayed.
+                if "scoreboard" not in artifact["entry"].get("assets", {}):
+                    scoreboard = market_stage / "scoreboard.json"
+                    if scoreboard.is_dir() and not scoreboard.is_symlink():
+                        shutil.rmtree(scoreboard)
+                    else:
+                        scoreboard.unlink(missing_ok=True)
             (stage / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",

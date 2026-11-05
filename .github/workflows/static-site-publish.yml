@@ -19,6 +19,7 @@ on:
       - backend/app/services/static_advertised_paths.py
       - backend/app/scripts/export_static_site.py
       - backend/app/scripts/report_static_market_freshness.py
+      - backend/app/scripts/scoreboard_ledger.py
       - backend/app/services/static_site_export_service.py
       - backend/app/services/static_global_artifacts.py
       - backend/app/services/static_market_artifact_contract.py
@@ -33,7 +34,8 @@ concurrency:
 
 # Granted per job. build runs PR code and third-party installs, so it is
 # read-only: it can neither mint an OIDC token nor delete stored market
-# artifacts. Every write happens in the production-only deploy job.
+# artifacts. Every write happens in the production-only deploy and
+# record-ledger jobs.
 permissions: {}
 
 jobs:
@@ -159,6 +161,24 @@ jobs:
           python3 scripts/render_seo_pages.py --dist frontend/dist
           --site-url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
 
+      # Reads the built site, so the matches are literally what deploys. Never
+      # blocks the deploy; with nothing uploaded, record-ledger goes red instead.
+      - name: Extract published screen matches
+        continue-on-error: true
+        run: |
+          cd backend
+          python3 -m app.scripts.scoreboard_ledger extract \
+            --site-dir ../frontend/dist/static-data \
+            --output /tmp/scoreboard-days
+
+      - name: Upload published screen matches
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: scoreboard-days
+          path: /tmp/scoreboard-days
+          if-no-files-found: warn
+
       - name: Upload Pages artifact
         id: upload-pages-artifact
         uses: actions/upload-pages-artifact@v5
@@ -176,6 +196,8 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      deployed_at: ${{ steps.deployed-at.outputs.at }}
 
     steps:
       - name: Configure Pages
@@ -244,3 +266,39 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v5
+
+      # A rerun of a failed record-ledger keeps this value, so a late retry cannot
+      # push a pick's entry back a session.
+      - id: deployed-at
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  # Records what the site now shows, so it runs only after a real deploy. The
+  # production concurrency group serializes it with scoreboard-ledger-recover.yml,
+  # the ledger's only other writer. It holds contents:write, so it installs nothing
+  # and runs only stdlib Python and gh.
+  record-ledger:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download published screen matches
+        uses: actions/download-artifact@v4
+        with:
+          name: scoreboard-days
+          path: /tmp/scoreboard-days
+
+      - name: Record first-published days
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PUBLISHED_AT: ${{ needs.deploy.outputs.deployed_at }}
+        run: |
+          cd backend
+          python3 -m app.scripts.scoreboard_ledger record --days-dir /tmp/scoreboard-days --published-at "$PUBLISHED_AT"
