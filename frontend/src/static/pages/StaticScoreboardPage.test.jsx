@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from '@testing-library/react';
+import { configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,9 @@ import { getDesignTokens } from '../../theme';
 import { StaticMarketProvider } from '../StaticMarketContext';
 import StaticLayout from '../StaticLayout';
 import StaticScoreboardPage from './StaticScoreboardPage';
+
+// Role queries on this page take about 1000ms on a loaded machine, the default timeout.
+configure({ asyncUtilTimeout: 5000 });
 
 const ARTIFACT_TITLE = 'Recovered from retained build artifacts, not recorded live';
 const PRE_FIX_TITLE = 'Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)';
@@ -299,6 +302,33 @@ describe('StaticScoreboardPage', () => {
     expect(screen.getByRole('heading', { level: 2, name: ARTIFACT_TITLE })).toBe(toggle.closest('h2'));
   });
 
+  it.each([
+    [ARTIFACT_TITLE, 'scoreboard-US-artifact-toggle', 'scoreboard-US-artifact-panel'],
+    [PRE_FIX_TITLE, 'scoreboard-US-artifact_pre_stage_fix-toggle', 'scoreboard-US-artifact_pre_stage_fix-panel'],
+  ])('connects the toggle and panel of "%s" in both directions', async (title, toggleId, panelId) => {
+    renderRoute('/scoreboard');
+    const toggle = await screen.findByRole('button', { name: title });
+    openSection(title);
+    const panel = screen.getByRole('region', { name: title });
+
+    expect(toggle).toHaveAttribute('id', toggleId);
+    expect(toggle).toHaveAttribute('aria-controls', panelId);
+    expect(panel).toHaveAttribute('id', panelId);
+    expect(panel).toHaveAttribute('aria-labelledby', toggleId);
+    expect(toggle.closest('h2')).not.toHaveAttribute('id');
+    expect(toggle.closest('h2')).not.toHaveAttribute('aria-controls');
+  });
+
+  it('takes accordion ids from the selected market', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByRole('button', { name: ARTIFACT_TITLE });
+
+    await switchMarket('China');
+
+    await waitFor(() => expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('id', 'scoreboard-CN-artifact-toggle'));
+    expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-controls', 'scoreboard-CN-artifact-panel');
+  });
+
   it('greys thin rows with closed windows and labels them Small sample', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
@@ -348,7 +378,7 @@ describe('StaticScoreboardPage', () => {
     expect(screen.getByText('Entry is the first open after publication. Exit is the close of the Nth session.')).toBeInTheDocument();
     expect(screen.getByText('Returns are price only, in local currency, with no costs. Excess is against SPY.')).toBeInTheDocument();
     expect(screen.getByText('Funds that match a screen are included.')).toBeInTheDocument();
-    expect(screen.getByText('Stocks that later delist drop out as no price, which can flatter results.')).toBeInTheDocument();
+    expect(screen.getByText('Stocks that later delist can drop out as no price, which can flatter results.')).toBeInTheDocument();
     expect(screen.getByText(/A stock counts once per screen until its window ends/)).toBeInTheDocument();
     expect(screen.getByText("A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.")).toBeInTheDocument();
     expect(screen.getByText('Effective dates count each date by how many picks it holds, so one busy day counts as about one.')).toBeInTheDocument();
