@@ -1143,8 +1143,8 @@ def test_recover_shares_the_production_publishers_concurrency_group() -> None:
 
 
 def test_runbook_tells_an_operator_how_a_recover_and_a_publish_can_replace_each_other() -> None:
-    # A pending run replaces another in this group and nothing reschedules a
-    # replaced publish, so the runbook's three steps are the only protection.
+    # A pending run replaces another in this group, and a replaced publish waits
+    # for the next market build unless the operator follows the runbook's steps.
     assert "schedule" not in _publish_workflow()[True]
     runbook = (ROOT / "docs" / "runbooks" / "scoreboard-ledger.md").read_text(encoding="utf-8")
     assert "Dispatch a recover only when no publish is queued" in runbook

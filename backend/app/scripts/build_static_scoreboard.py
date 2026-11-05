@@ -166,6 +166,10 @@ def _scored_from(as_of_date: date) -> date:
     return as_of_date - timedelta(days=SCORED_WINDOW_DAYS)
 
 
+def _is_scored(day: date, as_of_date: date) -> bool:
+    return _scored_from(as_of_date) <= day <= as_of_date
+
+
 def build_scoreboard(
     ledger: dict[date, LedgerDay],
     *,
@@ -176,7 +180,7 @@ def build_scoreboard(
     calendar: MarketCalendarService,
     generated_at: datetime,
 ) -> dict[str, Any]:
-    days = [ledger[day] for day in sorted(ledger)]
+    days = [ledger[day] for day in sorted(ledger) if day <= as_of_date]
     first_scored = bisect_left([day.as_of_date for day in days], _scored_from(as_of_date))
     scored = days[first_scored:]
     anchors = {
@@ -287,7 +291,7 @@ def write_scoreboard(
     manifest = read_static_market_manifest(manifest_path, expected_market=market)
     entry = manifest["entry"]
     as_of_date = date.fromisoformat(entry["as_of_date"])
-    if not ledger or max(ledger) < _scored_from(as_of_date):
+    if not ledger or not any(_is_scored(day, as_of_date) for day in ledger):
         print(f"::warning::No usable {market} ledger; the scoreboard is omitted.", flush=True)
         return False
     scan = json.loads((market_dir / "scan" / "manifest.json").read_text(encoding="utf-8"))
@@ -305,7 +309,7 @@ def write_scoreboard(
     _write_atomic(target, json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n")
     entry["assets"]["scoreboard"] = {"path": f"markets/{market.lower()}/scoreboard.json"}
     _write_atomic(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    scored_days = sum(day >= _scored_from(as_of_date) for day in ledger)
+    scored_days = sum(_is_scored(day, as_of_date) for day in ledger)
     print(f"{market}: scored {scored_days} of {len(ledger)} ledger days into {len(payload['cohorts'])} cohorts", flush=True)
     return True
 

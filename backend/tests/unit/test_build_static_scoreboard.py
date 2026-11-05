@@ -535,17 +535,6 @@ def test_bars_after_the_as_of_date_are_never_read(db, calendar) -> None:
     }
 
 
-def test_a_rewound_export_keeps_later_ledger_days_pending(db, calendar) -> None:
-    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 16), close=500.0)
-    ledger = after_baseline(ledger_day(date(2026, 10, 12), "2026-10-13T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
-
-    payload = score(db, calendar, ledger, date(2026, 10, 9))
-
-    block = horizon(only_cohort(payload), 5)
-    assert payload["ledger_through"] == "2026-10-12"
-    assert (block["sample_size"], block["pending_windows"], block["oldest_open_sessions"]) == (0, 1, 0)
-
-
 def test_a_recent_ipo_with_few_bars_still_scores(db, calendar) -> None:
     add_bars(db, calendar, "IPO", date(2026, 10, 6), date(2026, 10, 12), closes={date(2026, 10, 12): 120.0})
     ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["IPO"])}))
@@ -846,6 +835,34 @@ def test_no_usable_ledger_leaves_the_manifest_unchanged(tmp_path, db, calendar, 
 
     assert (market_dir / "manifest.market.json").read_bytes() == before
     assert not (market_dir / "scoreboard.json").exists()
+    assert "::warning::No usable US ledger" in capsys.readouterr().out
+
+
+def test_a_rewound_export_ignores_ledger_days_after_its_as_of_date(db, calendar) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 30))
+    ledger = as_ledger(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, [])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "MSFT"])}),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 10, 6))
+
+    assert payload["as_of_date"] == "2026-10-06"
+    assert payload["ledger_through"] == "2026-10-06"
+    cohort = only_cohort(payload)
+    assert (cohort["last_date"], cohort["events"]) == ("2026-10-06", 1)
+
+
+def test_a_ledger_entirely_after_a_rewound_export_advertises_nothing(tmp_path, db, calendar, capsys) -> None:
+    market_dir = write_artifact(tmp_path / "artifacts", as_of="2026-11-03")
+    before = (market_dir / "manifest.market.json").read_bytes()
+    later = ledger_day(date(2026, 11, 4), "2026-11-05T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])})
+    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[later])
+
+    assert run_write(market_dir, ledger_dir, db, calendar) is False
+
+    assert (market_dir / "manifest.market.json").read_bytes() == before
     assert "::warning::No usable US ledger" in capsys.readouterr().out
 
 

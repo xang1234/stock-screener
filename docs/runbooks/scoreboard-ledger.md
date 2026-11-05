@@ -70,7 +70,7 @@ The recover and the publisher share one concurrency group, and each new pending 
 
 - Dispatch a recover only when no publish is queued, because the recover would replace it.
 - Wait for each recover to finish before dispatching the next, because a second recover replaces a first one that is still pending. This includes the "every later day, oldest first" step in [Repair a corrupt canonical](#repair-a-corrupt-canonical).
-- If a recover did replace a publish, run `gh workflow run static-site-publish.yml` after the recover finishes. The publisher has no schedule, so nothing else starts it again.
+- If a recover did replace a publish, run `gh workflow run static-site-publish.yml` after the recover finishes. The publisher has no schedule, so a replaced publish otherwise waits for the next market build to wake it.
 
 A newer pending publish can also replace a pending recover. Check that each recover ran, and dispatch it again if it was cancelled.
 
