@@ -22,7 +22,7 @@ import zipfile
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -349,6 +349,14 @@ def advance(
     is_new: Callable[[date, dict[date, LedgerDay]], bool],
 ) -> bool:
     """Add ``day`` to the market's ledger in the Release; False when it is not new."""
+    if not day.presets:
+        raise LedgerError(f"{market} {day.as_of_date} has zero presets")
+    # Asia's local date can run a day ahead of the UTC publish date, never two.
+    latest_possible = day.published_at.date() + timedelta(days=1)
+    if day.as_of_date > latest_possible:
+        raise LedgerError(
+            f"{market} as_of_date {day.as_of_date} is after the day following publication, {day.published_at.date()}"
+        )
     download_assets(listing, market, work)
     assets = read_assets(work, market)
     writer = sources_for(assets).writer

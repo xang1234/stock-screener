@@ -732,6 +732,73 @@ def test_no_extracted_days_is_red(tmp_path, release, capsys) -> None:
     assert "No extracted days" in capsys.readouterr().out
 
 
+@pytest.fixture
+def publishing_at_1103_noon(monkeypatch) -> None:
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(ledger, "datetime", Frozen)
+
+
+def test_a_day_two_days_past_the_publish_date_is_red_for_that_market_only(
+    tmp_path, release, capsys, publishing_at_1103_noon
+) -> None:
+    release.create(**{US: OLD_LINE + "\n", HK: OLD_LINE + "\n"})
+    before = (release.assets / US).read_bytes()
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-05")
+    write_day_file(days, "HK", "2026-11-03")
+
+    assert record(days) == 1
+
+    assert "::error::US: US as_of_date 2026-11-05 is after the day following publication, 2026-11-03" in capsys.readouterr().out
+    assert release.uploads() == [HK_PREVIOUS, HK]
+    assert (release.assets / US).read_bytes() == before
+
+
+def test_a_day_one_past_the_publish_date_records(tmp_path, release, publishing_at_1103_noon) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-04")
+
+    assert record(days) == 0
+
+    assert ledger.parse_line(release.asset_lines(US)[1]).as_of_date == date(2026, 11, 4)
+
+
+def test_a_day_with_zero_presets_is_red_for_that_market_only(tmp_path, release, capsys) -> None:
+    release.create(**{US: OLD_LINE + "\n", HK: OLD_LINE + "\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "HK", "2026-11-03")
+    days.joinpath("US.json").write_text(json.dumps({"market": "US", "as_of_date": "2026-11-03", "presets": {}}))
+
+    assert record(days) == 1
+
+    assert "::error::US: US 2026-11-03 has zero presets" in capsys.readouterr().out
+    assert release.uploads() == [HK_PREVIOUS, HK]
+
+
+def test_a_day_with_presets_that_match_nothing_still_records(tmp_path, release) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    days = tmp_path / "days"
+    days.mkdir()
+    days.joinpath("US.json").write_text(
+        json.dumps(
+            {
+                "market": "US",
+                "as_of_date": "2026-11-03",
+                "presets": {"minervini": {"definition": DEFINITION, "symbols": []}},
+            }
+        )
+    )
+
+    assert record(days) == 0
+
+    assert ledger.parse_line(release.asset_lines(US)[1]).presets["minervini"].symbols == ()
+
+
 def test_verify_without_a_directory_reads_the_release(release, capsys) -> None:
     release.create(**{US: "not json\n", US_PREVIOUS: OLD_LINE + "\n"})
 
