@@ -228,6 +228,13 @@ def load_market(data_root: Path, entry: dict[str, Any]) -> dict[str, Any]:
 def render_scoreboard(site: Site, code: str, name: str, scoreboard: dict[str, Any],
                       crumbs: list[tuple[str, str]]) -> tuple[str, str, str]:
     cohorts = scoreboard["cohorts"]
+    # {} and "" iterate as empty, so a broken file would otherwise publish "0 screens, 0 picks".
+    if not isinstance(cohorts, list):
+        raise TypeError(f"cohorts is {type(cohorts).__name__}, not a list")
+    # A zero-pick cohort's cell never reads its horizons, so reading them here is the only check on it.
+    for cohort in cohorts:
+        for sessions in SCOREBOARD_HORIZONS:
+            scoreboard_horizon(cohort, sessions)
     board_as_of = scoreboard["as_of_date"]
     at_20 = [scoreboard_horizon(c, 20) for c in cohorts]
     closed = sum(h["sample_size"] for h in at_20)
