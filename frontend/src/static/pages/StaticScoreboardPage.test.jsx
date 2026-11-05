@@ -375,7 +375,7 @@ describe('StaticScoreboardPage', () => {
     expect(screen.getByText('Entry is the first open after publication. Exit is the close of the Nth session.')).toBeInTheDocument();
     expect(screen.getByText('Returns are price only, in local currency, with no costs. Excess is against SPY.')).toBeInTheDocument();
     expect(screen.getByText('Funds that match a screen are included.')).toBeInTheDocument();
-    expect(screen.getByText('Stocks that later delist drop out as no price, which can flatter results.')).toBeInTheDocument();
+    expect(screen.getByText('Stocks that later delist can drop out as no price, which can flatter results.')).toBeInTheDocument();
     expect(screen.getByText(/A stock counts once per screen until its window ends/)).toBeInTheDocument();
     expect(screen.getByText("A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.")).toBeInTheDocument();
     expect(screen.getByText('Effective dates count each date by how many picks it holds, so one busy day counts as about one.')).toBeInTheDocument();

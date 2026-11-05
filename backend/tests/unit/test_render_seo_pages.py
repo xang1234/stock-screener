@@ -254,7 +254,7 @@ def test_scoreboard_page_states_its_method_and_ledger(dist):
     assert "Recording since 2026-10-05 · Ledger through 2026-11-04 · 2 missing sessions" in html
     assert "Entry is the first open after publication. Exit is the close of the Nth session." in html
     assert "Excess is against SPY." in html
-    assert "Stocks that later delist drop out as no price, which can flatter results." in html
+    assert "Stocks that later delist can drop out as no price, which can flatter results." in html
     assert "/stock-screener/#/scoreboard?market=US" in html
     assert "A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen&#x27;s definition or the Stage calculation changed, are not counted." in html
     assert "are not counted.</li><li>A stock that returns after its window ends counts again.</li>" in html
