@@ -41,7 +41,7 @@ gh release download scoreboard-ledger-data --pattern 'scoreboard-ledger-*-v1.jso
 python3 -m app.scripts.scoreboard_ledger seed --input ../.audit/scoreboard-seed --output /tmp/ledger-merged --merge-with /tmp/ledger-current
 ```
 
-Check each market with `verify --dir`, confirm that no publish is running, then upload the files with `--clobber`. For one or two lost days, [recover](#recover-a-lost-day) is simpler. `--merge-with` exits 1 if any market's current ledger is absent or corrupt.
+If the capture lacks a market, add `--allow-missing`, and that market's current ledger stays as it is. Check each market with `verify --dir`, confirm that no publish is running, then upload the files with `--clobber`. For one or two lost days, [recover](#recover-a-lost-day) is simpler. `--merge-with` exits 1 if any market's current ledger is absent or corrupt.
 
 ## Check a ledger
 
@@ -49,7 +49,7 @@ Check each market with `verify --dir`, confirm that no publish is running, then 
 python3 -m app.scripts.scoreboard_ledger verify --market US
 ```
 
-This downloads the market's assets and parses them strictly. Add `--dir <path>` to read local files instead. It exits 0 only when canonical is usable. The output has one line per asset and a last line naming what the record job would append to:
+This downloads the market's assets and parses them strictly. Add `--dir <path>` to read local files instead. It exits 0 only when canonical is usable and holds every line of a valid `.previous`. The output has one line per asset and a last line naming what the record job would append to:
 
 ```text
 US canonical: valid, 21 days, through 2026-11-03

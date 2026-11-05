@@ -289,6 +289,7 @@ def test_seed_merge_keeps_every_existing_line_and_only_fills_gaps(tmp_path) -> N
     for market in ledger.MARKETS:
         write_gz(current / asset_name(market), "")
     write_gz(current / asset_name("US"), SEEDED_LIVE_LINE + "\n")
+    write_gz(current / asset_name("HK"), SEEDED_LIVE_LINE + "\n")
     output = tmp_path / "out"
 
     assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing", "--merge-with", str(current)]) == 0
@@ -297,6 +298,7 @@ def test_seed_merge_keeps_every_existing_line_and_only_fills_gaps(tmp_path) -> N
     assert len(lines) == 2
     assert ledger.parse_line(lines[0]).presets["minervini"].symbols == ("NVDA",)
     assert lines[1] == SEEDED_LIVE_LINE
+    assert ledger.read_lines(output / asset_name("HK"), "HK") == [SEEDED_LIVE_LINE]
 
 
 @pytest.mark.parametrize("damage", ["absent", "corrupt"])
