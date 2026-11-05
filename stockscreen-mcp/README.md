@@ -39,6 +39,8 @@ uvx stockscreen-mcp screen minervini --tradingview        # save a TradingView w
 - "What are the leading industry groups this week, and which groups moved up the most?"
 - "Tell me everything the scan knows about NVDA, and which screens it passes."
 - "Find Hong Kong stocks with RS above 90, in stage 2, with quarterly EPS growth over 25%."
+- "Check my watchlist of NVDA, AMD and TSLA against the screens. Which rules does each one fail, and which are one rule away from passing?"
+- "How have stocks done 20 sessions after entering the US Minervini screen, and is the sample big enough to trust?"
 
 ## Tools
 
@@ -50,6 +52,8 @@ All tools are read-only.
 | `list_screens` | The 28 preset screens and their exact rules: Minervini, CANSLIM, VCP, cup with handle, high tight flag, momentum, IPOs and more |
 | `run_screen` | A preset and/or your own filters over every stock in a market's scan, sorted, with the match count. A preset returns exactly the stocks the website shows for it |
 | `get_stock` | One stock: RS ratings (overall, 1M, 3M, 12M), stage, screener scores, growth, group rank, setup and pattern fields, and the screens it passes |
+| `audit_stocks` | A watchlist of up to 50 symbols against the preset screens: the screens each stock passes, and near misses that fail exactly one of several rules, as the field and how far short it is (the field alone when the rule is not numeric or the value is missing). `detail` also returns every failed rule per failing screen; responses over 80,000 characters are refused with a hint of how many symbols fit |
+| `screen_track_record` | What happened after stocks newly entered each preset screen, for one holding period per call (5, 20 or 60 sessions): median return, median excess over the benchmark, positive rate and sample counts. Not every market publishes one |
 | `market_overview` | Exposure score and stance, distribution days, follow-through day, StockBee-style breadth (4% movers, 5/10-day ratios, T2108, 52-week highs/lows), key index moves, top groups |
 | `group_rankings` | IBD-style industry groups ranked by relative strength, with 1W/1M/3M/6M rank changes and weekly movers. Pass a group for its rank history and strongest stocks |
 
@@ -57,6 +61,7 @@ All tools are read-only.
 
 - **RS ratings** (`rs_rating`, `rs_rating_1m/3m/12m`) are percentiles from 1 to 99 *within the stock's own market*, where 99 is the strongest.
 - **Group rank 1** is the strongest group.
+- **Track records** have one row per screen definition and origin. Compare the rows separately and don't rank `thin` ones. Each result's `how_to_read` note explains the numbers.
 - **Every result has an `as_of_date`:** the last completed session the publish covers. This is end-of-day data with nothing intraday, and it is never fetched live from price providers.
 
 ## Setup

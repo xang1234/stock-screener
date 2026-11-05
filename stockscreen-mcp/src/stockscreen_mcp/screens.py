@@ -125,6 +125,60 @@ def evaluate_expression(row: dict[str, Any], expression: dict[str, Any]) -> bool
     return all(matches) if expression.get("group_join") == "all" else any(matches)
 
 
+_NEEDS = {
+    "range": lambda c: {bound: c[bound] for bound in ("min", "max") if c.get(bound) is not None},
+    "categorical": lambda c: {"not_in" if c.get("mode") == "exclude" else "in": c.get("values", [])},
+    "boolean": lambda c: {"is": c.get("value")},
+    "text": lambda c: {"contains": c.get("pattern", "")},
+}
+
+
+def explain_condition(row: dict[str, Any], condition: dict[str, Any]) -> dict[str, Any]:
+    kind = condition.get("kind")
+    value = row_value(row, condition["field"])
+    if isinstance(value, float) and not math.isfinite(value):
+        value = None  # inf/NaN (e.g. listing_aware_volume) are not valid JSON
+    passes = evaluate_condition(row, condition)
+    explanation = {
+        "field": condition["field"],
+        "value": value,
+        "needs": _NEEDS[kind](condition) if kind in _NEEDS else {},
+        "passes": passes,
+    }
+    number = _js_number(value)
+    if kind == "range" and not passes and math.isfinite(number):
+        low, high = _js_number(condition.get("min")), _js_number(condition.get("max"))
+        gap = low - number if number < low else number - high
+        if gap > 0 and math.isfinite(gap):
+            explanation["short_by"] = float(f"{gap:.12g}")
+    return explanation
+
+
+def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[str, Any]:
+    required = expression["required"]
+    conditions = required.get("conditions") or []
+    required_ok = evaluate_group(row, required)
+    failed = []
+    if not required_ok:
+        for condition in conditions:
+            explanation = explain_condition(row, condition)
+            if not explanation.pop("passes"):
+                failed.append(explanation)
+    passes = evaluate_expression(row, expression)
+    disabled = required.get("enabled") is False
+    groups_ok = evaluate_expression(row, {**expression, "required": {}})  # an empty required group always passes
+    result = {
+        "passes": passes,
+        "failed": failed,
+        "near_miss": not passes and groups_ok and not disabled and len(conditions) >= 2 and len(failed) == 1,
+    }
+    if disabled:
+        result["note"] = "required rule group is disabled"
+    elif not groups_ok:
+        result["note"] = "fails an optional rule group"
+    return result
+
+
 def expression_fields(expression: dict[str, Any]) -> list[str]:
     groups = [expression["required"], *(expression.get("groups") or [])]
     return [c["field"] for g in groups for c in g.get("conditions") or []]

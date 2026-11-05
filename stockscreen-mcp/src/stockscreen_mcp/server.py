@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 from .data import StaticData
 from .screens import (
     evaluate_expression,
+    explain_expression,
     expression_fields,
     filters_to_conditions,
     preset_requires_opportunity_state,
@@ -36,7 +38,10 @@ Daily stock-screening data from the open-source stock-screener project
   the stock's own market (99 = strongest). Group ranks are IBD-style industry
   groups ranked by their stocks' RS (1 = strongest).
 - Start with list_screens / run_screen for candidates, get_stock for one ticker,
-  market_overview for market health and breadth, group_rankings for leading groups.
+  audit_stocks to check a watchlist or holdings against the screens, market_overview
+  for market health and breadth, group_rankings for leading groups.
+- screen_track_record reports how stocks did after newly entering a screen, one holding
+  period per call. Follow its how_to_read note when quoting the numbers.
 - This is educational screening data, not investment advice.
 """
 
@@ -68,6 +73,61 @@ BREADTH_FIELDS = (
 GROUP_STOCK_FIELDS = (
     "symbol", "company_name", "rs_rating", "rs_rating_1m", "rs_rating_3m", "rs_rating_12m", "stage",
     "price", "price_change_1d", "eps_growth_qq", "sales_growth_qq", "composite_score",
+)
+SNAPSHOT_FIELDS = (
+    "company_name", "current_price", "price_change_1d", "rs_rating", "rs_rating_3m", "stage", "composite_score",
+    "ibd_industry_group", "ibd_group_rank",
+)
+# Claude Code truncates tool results past 25,000 tokens by default, which is about 77,500 to 82,000 characters of
+# numeric indent-2 JSON at 3.1 to 3.28 characters per token (cl100k estimates). The worst 50-symbol audit summary
+# measured 67 KB and a normal publish's 84 track record rows about 60 KB. A re-hash of every preset reaches about 78 KB.
+MAX_RESPONSE_CHARS = 80_000
+# uvx clients stay on old versions, so a client that cannot read a newer file must say so.
+SCOREBOARD_SCHEMA = "static-scoreboard-v1"
+TRACK_RECORD_HORIZONS = (5, 20, 60)
+TRACK_RECORD_STATS = (
+    "sample_size", "signal_dates", "effective_dates", "pending_windows", "oldest_open_sessions", "thin",
+    "positive_rate", "beat_benchmark_rate", "median_return_pct", "median_excess_return_pct", "excess_sample_size",
+    "skipped_missing_history", "suppressed_overlapping",
+)
+TRACK_RECORD_NOTES = (
+    "A pick is a stock entering a screen it was not in on the previous recorded day, so re-entries count. "
+    "A screen's first recorded day, a rule change and crossing the stage fix are baseline days, which produce no "
+    "picks. "
+    "Entry is the first open after publication. "
+    "Exit is the close of the Nth session, where N is horizon_sessions and the entry day is session 1. "
+    "Returns are in local currency, price only, with no costs. "
+    "Statistics are medians and rates, with no averages. "
+    "positive_rate is the share of closed windows with a return above 0, and beat_benchmark_rate the share of closed "
+    "windows with benchmark coverage that beat it. Both are fractions from 0 to 1. "
+    "median_return_pct and median_excess_return_pct are percent. "
+    "A statistic with nothing behind it is absent. "
+    "Prices run through as_of_date. "
+    "scored_since is the first recorded day inside the last 365 days, and only days from then are scored, so a "
+    "recently started record is short. "
+    "recording_since is the first recorded day and ledger_through the last. "
+    "missing_sessions counts completed sessions between recording_since and ledger_through with no record for the "
+    "whole market, including sessions older than scored_since. "
+    "Each row in cohorts is one screen definition and origin, so a screen can have several. Do not pool them. "
+    "screen is the preset id to pass back to this tool. name is the screen's display name, or its id once retired. "
+    "definition is a hash of the screen's rules, and retired marks a screen list_screens no longer has. "
+    "first_date and last_date are the first and last scored days a row spans, baseline days included. "
+    "Origin live was recorded at publication, artifact was read from a retained build whose time only approximates "
+    "publication, and artifact_pre_stage_fix is a retained build from before a stage fix. "
+    "sample_size counts closed windows and signal_dates the dates they came from. "
+    "effective_dates counts a busy day as about one date. "
+    "thin means sample_size below 20 or effective_dates below 5, so do not rank a thin row. "
+    "benchmark is what excess is measured against. "
+    "beat_benchmark_rate and median_excess_return_pct rest on excess_sample_size, which can be far smaller than "
+    "sample_size, and thin does not check it, so read it before quoting them. "
+    "They are absent with no coverage. "
+    "pending_windows counts windows still open, and oldest_open_sessions how far along the oldest is. "
+    "sample_size 0 with pending_windows above 0 is not a bad result. "
+    "All counts zero means the row has no picks. "
+    "suppressed_overlapping counts re-entries while that stock's earlier window is open, possibly in another row. "
+    "skipped_missing_history counts picks with no usable price, including stocks that later delist, which can "
+    "flatter results. "
+    "This is a record of past screens, not a forecast or investment advice."
 )
 
 
@@ -111,6 +171,10 @@ def _pick(row: dict[str, Any], fields: tuple[str, ...] | list[str]) -> dict[str,
     return picked
 
 
+def _response_chars(result: dict[str, Any]) -> int:
+    return len(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 def _parse_deadline(value: Any) -> datetime | None:
     try:
         deadline = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -137,6 +201,10 @@ def market_status(market: str) -> str:
     return _status(data.market(market), datetime.now(timezone.utc))
 
 
+def _scoreboard_asset(entry: dict[str, Any]) -> dict[str, Any] | None:
+    return entry.get("assets", {}).get("scoreboard")
+
+
 def _visible_presets(code: str, scan: dict[str, Any]) -> list[dict[str, Any]]:
     # Presets without a filter_expression use the site's legacy filter format; all current
     # publishes use expressions, so those are skipped rather than translated.
@@ -157,10 +225,10 @@ def list_markets() -> dict[str, Any]:
     Each market returns its code (pass it as `market` to the other tools), name, as_of_date (the
     trading day the data covers), status ("current"; "late" if it is behind its latest completed
     session or its next update is over a day overdue; or "unknown"), and features: which of "scan"
-    (run_screen, get_stock, list_screens), "breadth" (market_overview breadth) and "groups"
-    (group_rankings) are published for it. unavailable_markets lists markets that failed this
-    publish. Takes no arguments. Results are cached for up to 10 minutes; markets are published
-    after their close by two scheduled runs, one for Asia and one for US/Europe.
+    (run_screen, get_stock, list_screens, audit_stocks), "breadth" (market_overview breadth), "groups"
+    (group_rankings) and "track_record" (screen_track_record) are published for it. unavailable_markets
+    lists markets that failed this publish. Takes no arguments. Results are cached for up to 10 minutes;
+    markets are published after their close by two scheduled runs, one for Asia and one for US/Europe.
     """
     manifest = data.manifest()
     now = datetime.now(timezone.utc)
@@ -170,8 +238,10 @@ def list_markets() -> dict[str, Any]:
             "name": entry.get("display_name", code),
             "as_of_date": entry.get("as_of_date"),
             "status": _status(entry, now),
-            "features": sorted(k for k, on in entry.get("features", {}).items()
-                               if on and k in {"scan", "breadth", "groups"}),
+            "features": sorted(
+                [k for k, on in entry.get("features", {}).items() if on and k in {"scan", "breadth", "groups"}]
+                + (["track_record"] if _scoreboard_asset(entry) else [])
+            ),
         }
         for code, entry in sorted(manifest["markets"].items())
     ]
@@ -187,7 +257,7 @@ def list_markets() -> dict[str, Any]:
 def list_screens(market: Market = "US") -> dict[str, Any]:
     """Preset screens (Minervini, CANSLIM, VCP, chart patterns, momentum...) with their exact rules.
 
-    Pass a screen's id to run_screen.
+    Pass a screen's id to run_screen or audit_stocks.
     """
     scan, _ = data.scan(market)
     screens = [
@@ -216,7 +286,7 @@ def match_screen(
 
     preset = None
     if screen is not None:
-        presets = {p["id"]: p for p in _visible_presets(market, scan)}
+        presets = {p["id"].lower(): p for p in _visible_presets(market, scan)}
         wanted = screen.strip().lower()
         preset = presets.get(wanted)
         if preset is None:
@@ -299,6 +369,186 @@ def get_stock(
     passes = [p["id"] for p in _visible_presets(market, scan) if evaluate_expression(row, p["filter_expression"])]
     stock = {k: v for k, v in row.items() if k not in HIDDEN_STOCK_FIELDS and v is not None}
     return {**stock, "as_of_date": scan.get("as_of_date"), "passes_screens": passes}
+
+
+def _near_miss(rule: dict[str, Any]) -> str:
+    return f"{rule['field']} short_by {rule['short_by']}" if "short_by" in rule else rule["field"]
+
+
+@mcp.tool(annotations=READ_ONLY)
+def audit_stocks(
+    symbols: Annotated[list[str], Field(
+        min_length=1, max_length=50, description="Tickers to check in this market, e.g. a watchlist or holdings.",
+    )],
+    market: Market = "US",
+    screens: Annotated[list[str] | None, Field(
+        min_length=1, description="Preset ids from list_screens to check; defaults to every screen in the market.",
+    )] = None,
+    detail: Annotated[bool, Field(
+        description=(
+            "Also return every failed rule per screen under failed_rules. "
+            "Responses over 80,000 characters are refused with a hint of how many symbols fit."
+        ),
+    )] = False,
+) -> dict[str, Any]:
+    """Check a watchlist or holdings against the preset screens in one call: which screens each stock
+    passes, and which it nearly passes.
+
+    Use it to review a list of stocks, find near misses, or see what a position fails today. Use
+    get_stock for every field on one symbol, and run_screen to discover new candidates. A long list
+    over every screen returns a lot of text, so pass a `screens` list when you only need some.
+
+    Each stock returns a snapshot, `passes` (screen ids in list_screens order, matching the website
+    and get_stock's passes_screens), near_misses, and notes when there are any. The top-level `screens`
+    list minus `passes` gives the failing ids.
+    near_misses maps each screen the stock fails on exactly one of at least two rules to
+    "field short_by N", or to the field alone when short_by is absent. It ignores how far short the
+    stock is, so check short_by before calling one close. short_by is the positive distance between a
+    failed numeric rule's bound and the stock's value (rs_rating 60 against a min of 70 is short_by 10);
+    on a max rule it is how far the value is above the bound (ibd_group_rank 154 against a max of 40 is
+    short_by 114); it is absent when the value is missing and on non-numeric rules. notes maps a screen
+    to the reason when its rules alone don't explain the result: a failing optional rule group, or a
+    disabled required group.
+
+    detail=True adds failed_rules: every failed rule for each failing screen. Any response over 80,000
+    characters of JSON is refused with an error that says how many symbols fit, so for detail pass fewer
+    symbols or a shorter `screens` list.
+
+    Symbols absent from the market's scan are listed in not_found rather than raising an error.
+    """
+    scan, rows = data.scan(market)
+    presets = {p["id"].lower(): p for p in _visible_presets(market, scan)}
+    wanted = set(presets) if screens is None else {s.strip().lower() for s in screens}
+    unknown = sorted(wanted - presets.keys())
+    if unknown:
+        raise ToolError(f"Unknown screen {', '.join(map(repr, unknown))}. Available: {', '.join(presets)}.")
+    audited = [p for key, p in presets.items() if key in wanted]
+
+    by_symbol = {str(r.get("symbol", "")).upper(): r for r in rows}
+    requested = list(dict.fromkeys(s.strip().upper() for s in symbols))
+    found = [by_symbol[s] for s in requested if s in by_symbol]
+    stocks = []
+    for row in found:
+        explained = {p["id"]: explain_expression(row, p["filter_expression"]) for p in audited}
+        stock = {
+            "symbol": row["symbol"],
+            "snapshot": _pick(row, SNAPSHOT_FIELDS),
+            "passes": [i for i, e in explained.items() if e["passes"]],
+            "near_misses": {i: _near_miss(e["failed"][0]) for i, e in explained.items() if e["near_miss"]},
+        }
+        notes = {i: e["note"] for i, e in explained.items() if "note" in e}
+        if notes:
+            stock["notes"] = notes
+        if detail:
+            stock["failed_rules"] = {i: e["failed"] for i, e in explained.items() if not e["passes"]}
+        stocks.append(stock)
+    result = {
+        "market": market.upper(),
+        "as_of_date": scan.get("as_of_date"),
+        "screens": [p["id"] for p in audited],
+        "stocks": stocks,
+        "not_found": [s for s in requested if s not in by_symbol],
+    }
+    size = _response_chars(result)
+    if size > MAX_RESPONSE_CHARS:
+        fit = len(found) * MAX_RESPONSE_CHARS // size
+        recovery = (
+            "Pass fewer symbols, a shorter `screens` list, or drop `detail`."
+            if detail
+            else "Pass fewer symbols or a shorter `screens` list."
+        )
+        raise ToolError(
+            f"{len(found)} symbols over {len(audited)} screens would return {size:,} characters; "
+            f"the limit is {MAX_RESPONSE_CHARS:,}. About {fit} symbols fit with these screens. {recovery}"
+        )
+    return result
+
+
+def _track_record_row(cohort: dict[str, Any], horizon: int) -> dict[str, Any]:
+    block = {b["horizon_sessions"]: b for b in cohort["horizons"]}[horizon]
+    return {
+        "screen": cohort["preset"],
+        "name": cohort["name"],
+        "retired": cohort["retired"],
+        "definition": cohort["definition"],
+        "origin": cohort["origin"],
+        "first_date": cohort["first_date"],
+        "last_date": cohort["last_date"],
+        **_pick(block, TRACK_RECORD_STATS),
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+def screen_track_record(
+    market: Market = "US",
+    screen: Annotated[str | None, Field(
+        description=(
+            "Preset id, e.g. minervini. Retired screens that list_screens no longer has are still accepted; "
+            "defaults to every recorded screen."
+        ),
+    )] = None,
+    horizon: Annotated[int, Field(description="Sessions each pick is held: 5, 20 or 60.")] = 20,
+) -> dict[str, Any]:
+    """What happened after stocks newly entered each preset screen, at one holding period.
+
+    Use it to judge how much weight a screen's output deserves, or to see whether a screen has a
+    record yet. Use run_screen for today's matches. Each call reports one horizon; call again with
+    horizon=5 or horizon=60 for the others.
+
+    Rows in `cohorts` keep the published order, which is not a ranking. how_to_read in each result
+    defines the fields; read it before quoting a number.
+
+    Any response over 80,000 characters of JSON is refused with an error; pass `screen` for one
+    screen's rows.
+
+    A market with no published record returns an error naming the markets that have one. In list_markets
+    those markets show the track_record feature.
+    """
+    if horizon not in TRACK_RECORD_HORIZONS:
+        raise ToolError(f"horizon must be 5, 20 or 60, not {horizon}.")
+    board = data.asset(market, "scoreboard")
+    if board is None:
+        having = [code for code, entry in sorted(data.manifest()["markets"].items()) if _scoreboard_asset(entry)]
+        others = (
+            f"Markets with a track record: {', '.join(having)}." if having else "No market has one in this publish."
+        )
+        raise ToolError(
+            f"The current publish has no track record for {market.upper()}, so this says nothing about how its "
+            f"screens performed. {others}"
+        )
+    if board.get("schema_version") != SCOREBOARD_SCHEMA:
+        raise ToolError(
+            f"This track record uses schema {board.get('schema_version')!r}, which this version of "
+            "stockscreen-mcp cannot read. Update the client's command to `uvx stockscreen-mcp@latest` and restart it, "
+            "or install the latest bundle if you use one."
+        )
+    cohorts = board["cohorts"]
+    recorded = ", ".join(dict.fromkeys(c["preset"] for c in cohorts)) or "none"
+    if screen is not None:
+        wanted = screen.strip().lower()
+        matching = [c for c in cohorts if c["preset"].lower() == wanted]
+        if not matching:
+            raise ToolError(f"No track record for screen {screen!r}. Recorded: {recorded}.")
+        cohorts = matching
+    result = {
+        "market": market.upper(),
+        "as_of_date": board["as_of_date"],
+        "benchmark": board["benchmark"],
+        "recording_since": board["recording_since"],
+        "scored_since": board["scored_since"],
+        "ledger_through": board["ledger_through"],
+        "missing_sessions": board["missing_sessions"],
+        "horizon_sessions": horizon,
+        "how_to_read": TRACK_RECORD_NOTES,
+        "cohorts": [_track_record_row(c, horizon) for c in cohorts],
+    }
+    size = _response_chars(result)
+    if size > MAX_RESPONSE_CHARS:
+        raise ToolError(
+            f"{len(cohorts)} rows would return {size:,} characters; the limit is {MAX_RESPONSE_CHARS:,}. "
+            f"Pass `screen` for one screen's rows. Recorded: {recorded}."
+        )
+    return result
 
 
 @mcp.tool(annotations=READ_ONLY)

@@ -43,6 +43,10 @@ async def test_all_tools_against_the_live_publish():
             symbol = minervini["rows"][0]["symbol"]
             stock = await call(client, "get_stock", symbol=symbol, market="US")
             assert "minervini" in stock["passes_screens"]
+            audit = await call(client, "audit_stocks", symbols=[symbol], market="US", detail=True)
+            verdict = audit["stocks"][0]
+            assert verdict["passes"] == stock["passes_screens"]
+            assert set(verdict["failed_rules"]) == set(audit["screens"]) - set(verdict["passes"])
 
         overview = await call(client, "market_overview", market="US")
         assert overview["exposure"]["exposure_score"] is not None
@@ -53,3 +57,9 @@ async def test_all_tools_against_the_live_publish():
         top = groups["groups"][0]["group"]
         detail = await call(client, "group_rankings", market="US", group=top, limit=3)
         assert detail["group"]["rank"] == 1
+
+        track_record = await client.call_tool("screen_track_record", {"market": "US", "horizon": 5})
+        if track_record.is_error:
+            assert "The current publish has no track record for US" in track_record.content[0].text
+        else:
+            assert track_record.structured_content["horizon_sessions"] == 5

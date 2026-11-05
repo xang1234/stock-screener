@@ -193,6 +193,61 @@ def breadth_file():
             "payload": {"current": history[0], "history_90d": history, "benchmark_symbol": "SPY"}}
 
 
+def horizon_block(horizon_sessions, **fields):
+    """A horizon block with zero counts and no closed window; pass fields to fill it in."""
+    return {
+        "horizon_sessions": horizon_sessions, "sample_size": 0, "signal_dates": 0, "effective_dates": 0.0,
+        "pending_windows": 0, "oldest_open_sessions": None, "thin": True, "positive_rate": None,
+        "beat_benchmark_rate": None, "median_return_pct": None, "median_excess_return_pct": None,
+        "excess_sample_size": 0, "skipped_missing_history": 0, "suppressed_overlapping": 0, **fields,
+    }
+
+
+def scoreboard_cohort(preset_id, name, definition, origin, first_date, last_date, horizons, retired=False):
+    return {
+        "preset": preset_id, "name": name, "retired": retired, "definition": definition, "origin": origin,
+        "first_date": first_date, "last_date": last_date, "events": 99, "signal_dates": 98, "horizons": horizons,
+    }
+
+
+def scoreboard_file():
+    return {
+        "schema_version": "static-scoreboard-v1",
+        "market": "US",
+        "as_of_date": "2026-10-09",
+        "generated_at": "2026-10-10T02:00:00Z",
+        "benchmark": "SPY",
+        "recording_since": "2026-06-01",
+        "scored_since": "2026-06-02",
+        "ledger_through": "2026-10-09",
+        "missing_sessions": 1,
+        "cohorts": [
+            scoreboard_cohort("minervini", "Minervini", "def-old", "artifact", "2026-06-01", "2026-09-30", [
+                horizon_block(5, sample_size=120, signal_dates=30, effective_dates=24.5, thin=False,
+                              positive_rate=0.6, beat_benchmark_rate=0.55, median_return_pct=2.1,
+                              median_excess_return_pct=0.8, excess_sample_size=118, skipped_missing_history=2,
+                              suppressed_overlapping=7),
+                horizon_block(20, sample_size=80, signal_dates=22, effective_dates=18.2, thin=False,
+                              pending_windows=40, oldest_open_sessions=19, positive_rate=0.5,
+                              median_return_pct=-1.5),
+                horizon_block(60, pending_windows=120, oldest_open_sessions=59),
+            ]),
+            scoreboard_cohort("minervini", "Minervini", "def-new", "live", "2026-10-01", "2026-10-09", [
+                horizon_block(5, pending_windows=9, oldest_open_sessions=4),
+                horizon_block(20, pending_windows=12, oldest_open_sessions=6),
+                horizon_block(60, pending_windows=12, oldest_open_sessions=6),
+            ]),
+            scoreboard_cohort("se_cup_handle", "se_cup_handle", "def-cup", "artifact_pre_stage_fix", "2026-06-01", "2026-06-30", [
+                horizon_block(5),
+                horizon_block(20, sample_size=3, signal_dates=2, effective_dates=1.8, positive_rate=1.0,
+                              beat_benchmark_rate=0.0, median_return_pct=4.0, median_excess_return_pct=-0.2,
+                              excess_sample_size=3),
+                horizon_block(60),
+            ], retired=True),
+        ],
+    }
+
+
 def publish(root, codes=("US", "AU", "HK")):
     names = {"US": "United States", "AU": "Australia", "HK": "Hong Kong"}
     files = {}
@@ -207,6 +262,9 @@ def publish(root, codes=("US", "AU", "HK")):
         files[f"{root}markets/{slug}/groups.json"] = groups_file()
         if not au:
             files[f"{root}markets/{slug}/breadth.json"] = breadth_file()
+        if code == "US":
+            markets[code]["assets"] = {"scoreboard": {"path": "markets/us/scoreboard.json"}}
+            files[f"{root}markets/us/scoreboard.json"] = scoreboard_file()
     manifest = {
         "data_root": root,
         "generated_at": "2026-10-12T05:25:03Z",
