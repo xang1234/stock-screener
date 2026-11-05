@@ -14,7 +14,7 @@ import argparse
 import json
 import os
 from bisect import bisect_left, bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -55,7 +55,7 @@ from app.services.validation_service import (
 
 SCOREBOARD_HORIZONS = (5, 20, 60)
 THIN_SAMPLE_SIZE = 20
-THIN_SIGNAL_DATES = 5
+THIN_EFFECTIVE_DATES = 5
 # ponytail: a year bounds time and memory and stays inside the 730 days of bundled
 # prices. Ceiling: older picks leave the page, while their days stay in the ledger, so
 # a longer history only needs this raised alongside the bundle.
@@ -122,7 +122,8 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
     summary = summarize_horizon([event.evaluated for event in events], horizon_sessions=horizon)
     counted = [event for event in events if horizon not in event.evaluated.suppressed]
     closed = [event for event in counted if horizon in event.evaluated.outcomes]
-    signal_dates = len({event.as_of_date for event in closed})
+    picks_per_date = Counter(event.as_of_date for event in closed).values()
+    effective_dates = round(sum(picks_per_date) ** 2 / sum(n * n for n in picks_per_date), 1) if closed else 0.0
     excess = [
         event.evaluated.outcomes[horizon].excess_return_pct
         for event in closed
@@ -138,10 +139,11 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
     return {
         "horizon_sessions": horizon,
         "sample_size": summary.sample_size,
-        "signal_dates": signal_dates,
+        "signal_dates": len(picks_per_date),
+        "effective_dates": effective_dates,
         "pending_windows": summary.pending_windows,
         "oldest_open_sessions": max(open_sessions, default=None),
-        "thin": summary.sample_size < THIN_SAMPLE_SIZE or signal_dates < THIN_SIGNAL_DATES,
+        "thin": summary.sample_size < THIN_SAMPLE_SIZE or effective_dates < THIN_EFFECTIVE_DATES,
         "positive_rate": summary.positive_rate,
         "beat_benchmark_rate": round(sum(value > 0 for value in excess) / len(excess), 4) if excess else None,
         "median_return_pct": summary.median_return_pct,

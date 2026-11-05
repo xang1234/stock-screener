@@ -195,6 +195,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
     pending = {
         "sample_size": 0,
         "signal_dates": 0,
+        "effective_dates": 0.0,
         "pending_windows": 1,
         "oldest_open_sessions": 5,
         "thin": True,
@@ -228,6 +229,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
                         "horizon_sessions": 5,
                         "sample_size": 1,
                         "signal_dates": 1,
+                        "effective_dates": 1.0,
                         "pending_windows": 0,
                         "oldest_open_sessions": None,
                         "thin": True,
@@ -446,6 +448,7 @@ def test_bars_after_the_as_of_date_are_never_read(db, calendar) -> None:
         "horizon_sessions": 5,
         "sample_size": 0,
         "signal_dates": 0,
+        "effective_dates": 0.0,
         "pending_windows": 1,
         "oldest_open_sessions": 4,
         "thin": True,
@@ -584,6 +587,7 @@ def test_a_zero_match_preset_is_listed_with_null_stats(db, calendar) -> None:
         "horizon_sessions": 5,
         "sample_size": 0,
         "signal_dates": 0,
+        "effective_dates": 0.0,
         "pending_windows": 0,
         "oldest_open_sessions": None,
         "thin": True,
@@ -609,34 +613,61 @@ def test_missing_sessions_counts_recorded_range_gaps_and_ignores_weekends(db, ca
     assert (payload["recording_since"], payload["ledger_through"]) == ("2026-10-05", "2026-10-12")
 
 
-def test_thin_needs_both_twenty_closed_events_and_five_dates(db, calendar) -> None:
-    dates = [date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 8), date(2026, 10, 9)]
-    symbols = [f"S{index:02d}" for index in range(25)]
-    for symbol in symbols:
-        add_bars(db, calendar, symbol, date(2026, 10, 5), date(2026, 10, 16), close=110.0)
-    published = ["2026-10-06T02:00:00Z", "2026-10-07T02:00:00Z", "2026-10-08T02:00:00Z", "2026-10-09T02:00:00Z", "2026-10-10T02:00:00Z"]
+SCORING_DATES = [
+    (date(2026, 10, 5), "2026-10-06T02:00:00Z"),
+    (date(2026, 10, 6), "2026-10-07T02:00:00Z"),
+    (date(2026, 10, 7), "2026-10-08T02:00:00Z"),
+    (date(2026, 10, 8), "2026-10-09T02:00:00Z"),
+    (date(2026, 10, 9), "2026-10-10T02:00:00Z"),
+    (date(2026, 10, 12), "2026-10-13T02:00:00Z"),
+]
 
-    spread = after_baseline(
-        *(
-            ledger_day(day, stamp, {"minervini": (DEF_A, symbols[index * 5 : index * 5 + 5])})
-            for index, (day, stamp) in enumerate(zip(dates, published))
-        )
+
+@pytest.mark.parametrize(
+    ("picks_per_date", "sample_size", "signal_dates", "effective_dates", "thin"),
+    [
+        pytest.param([4, 4, 4, 4, 4], 20, 5, 5.0, False, id="exactly-20-and-exactly-5"),
+        pytest.param([4, 3, 3, 3, 3, 3], 19, 6, 5.9, True, id="19-events-enough-dates"),
+        pytest.param([6, 6, 5, 2, 1], 20, 5, 3.9, True, id="five-dates-but-uneven"),
+        pytest.param([5, 5, 5, 5, 4], 24, 5, 5.0, False, id="rounds-up-to-exactly-5"),
+        pytest.param([6, 5, 5, 5, 4], 25, 5, 4.9, True, id="rounds-down-below-5"),
+        pytest.param([25], 25, 1, 1.0, True, id="one-busy-day"),
+    ],
+)
+def test_thin_needs_twenty_closed_events_and_five_effective_dates(
+    db, calendar, picks_per_date, sample_size, signal_dates, effective_dates, thin
+) -> None:
+    symbols = iter(f"S{index:02d}" for index in range(sum(picks_per_date)))
+    days = []
+    seen: list[str] = []
+    for count, (day, stamp) in zip(picks_per_date, SCORING_DATES):
+        seen = [*seen, *(next(symbols) for _ in range(count))]
+        days.append(ledger_day(day, stamp, {"minervini": (DEF_A, seen)}))
+    for symbol in seen:
+        add_bars(db, calendar, symbol, date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+
+    block = horizon(only_cohort(score(db, calendar, after_baseline(*days), date(2026, 10, 23))), 5)
+
+    assert (block["sample_size"], block["signal_dates"], block["effective_dates"], block["thin"]) == (
+        sample_size,
+        signal_dates,
+        effective_dates,
+        thin,
     )
-    block = horizon(only_cohort(score(db, calendar, spread, date(2026, 10, 16))), 5)
-    assert (block["sample_size"], block["signal_dates"], block["thin"]) == (25, 5, False)
 
-    one_date = after_baseline(ledger_day(dates[0], published[0], {"minervini": (DEF_A, symbols)}))
-    block = horizon(only_cohort(score(db, calendar, one_date, date(2026, 10, 16))), 5)
-    assert (block["sample_size"], block["signal_dates"], block["thin"]) == (25, 1, True)
 
-    too_few = after_baseline(
-        *(
-            ledger_day(day, stamp, {"minervini": (DEF_A, symbols[index * 3 : index * 3 + 3])})
-            for index, (day, stamp) in enumerate(zip(dates, published))
-        )
+def test_effective_dates_count_only_closed_events(db, calendar) -> None:
+    add_bars(db, calendar, "OLDER", date(2026, 10, 5), date(2026, 10, 13))
+    add_bars(db, calendar, "OPEN", date(2026, 10, 5), date(2026, 10, 13))
+    ledger = after_baseline(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["OLDER"])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["OLDER"])}),
+        ledger_day(date(2026, 10, 12), "2026-10-13T02:00:00Z", {"minervini": (DEF_A, ["OLDER", "OPEN"])}),
     )
-    block = horizon(only_cohort(score(db, calendar, too_few, date(2026, 10, 16))), 5)
-    assert (block["sample_size"], block["signal_dates"], block["thin"]) == (15, 5, True)
+
+    block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 13))), 5)
+
+    assert (block["sample_size"], block["pending_windows"], block["effective_dates"]) == (1, 1, 1.0)
 
 
 def write_artifact(root: Path, as_of: str = "2026-10-12") -> Path:
