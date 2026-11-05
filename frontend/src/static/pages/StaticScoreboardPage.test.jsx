@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,9 @@ import { getDesignTokens } from '../../theme';
 import { StaticMarketProvider } from '../StaticMarketContext';
 import StaticLayout from '../StaticLayout';
 import StaticScoreboardPage from './StaticScoreboardPage';
+
+// Role queries on this page take about 1000ms on a loaded machine, the default timeout.
+configure({ asyncUtilTimeout: 5000 });
 
 const ARTIFACT_TITLE = 'Recovered from retained build artifacts, not recorded live';
 const PRE_FIX_TITLE = 'Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)';
@@ -109,7 +112,7 @@ describe('StaticScoreboardPage', () => {
 
   it('keeps the rows of a collapsed section hidden until it is opened', async () => {
     renderRoute('/scoreboard');
-    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE }, { timeout: 5000 });
+    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).not.toBeVisible();
 
