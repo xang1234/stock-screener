@@ -78,6 +78,23 @@ async def test_preset_screen_matches_and_sorts_like_the_site():
     assert "price_sparkline_data" not in first
 
 
+async def test_run_screen_returns_exactly_this_projection():
+    result = await call("run_screen", market="us", screen="MINERVINI", limit=1)
+
+    assert result == {
+        "market": "US",
+        "as_of_date": "2026-10-09",
+        "screen": "Minervini Trend Template",
+        "total_matches": 2,
+        "sorted_by": "minervini_score desc",
+        "rows": [{
+            "symbol": "AAA", "company_name": "AAA Corp", "current_price": 10.0, "rs_rating": 95, "stage": 2,
+            "composite_score": 81, "minervini_score": 90, "ibd_industry_group": "Semiconductors",
+            "ibd_group_rank": 3, "eps_growth_qq": 40.0, "ma_alignment": True,
+        }],
+    }
+
+
 async def test_custom_filters_combine_with_a_preset_and_show_their_fields():
     result = await call(
         "run_screen", market="US", screen="minervini",
@@ -97,7 +114,12 @@ async def test_filters_alone_use_the_market_default_sort_and_respect_limit():
 
 
 async def test_unknown_screen_and_unknown_field_are_explained():
-    assert "minervini" in await call_error("run_screen", market="US", screen="minerva")
+    assert await call_error("run_screen", market="US", screen="minerva") == (
+        "Error executing tool run_screen: Unknown screen 'minerva'. Did you mean: minervini? Available: minervini, correction_survivors, se_cup_handle."
+    )
+    assert await call_error("run_screen", market="US", screen="zzz") == (
+        "Error executing tool run_screen: Unknown screen 'zzz'. Available: minervini, correction_survivors, se_cup_handle."
+    )
     message = await call_error("run_screen", market="US", filters=[{"field": "rs_ratin", "min": 90}])
     assert "rs_ratin" in message and "rs_rating" in message
     assert "Pass a screen" in await call_error("run_screen", market="US")

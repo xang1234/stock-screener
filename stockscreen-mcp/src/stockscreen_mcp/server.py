@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import json
 import math
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -143,6 +144,23 @@ class Filter(BaseModel):
     equals: bool | str | float | None = Field(default=None, description="Exact value; overrides min/max.")
 
 
+@dataclass(frozen=True)
+class ScreenResult:
+    """Every row a screen matched, sorted, before the MCP tool or the CLI narrows them."""
+
+    market: str
+    as_of_date: str | None
+    preset: dict[str, Any] | None
+    sort_by: str
+    descending: bool
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+    @property
+    def total(self) -> int:
+        return len(self.rows)
+
+
 def _pick(row: dict[str, Any], fields: tuple[str, ...] | list[str]) -> dict[str, Any]:
     picked = {}
     for field in fields:
@@ -176,6 +194,11 @@ def _status(entry: dict[str, Any], now: datetime) -> str:
     if deadline is None:
         return "unknown"
     return "late" if now > deadline else "current"
+
+
+def market_status(market: str) -> str:
+    """A market's publication status: "current", "late" or "unknown"."""
+    return _status(data.market(market), datetime.now(timezone.utc))
 
 
 def _scoreboard_asset(entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -250,20 +273,13 @@ def list_screens(market: Market = "US") -> dict[str, Any]:
     return {"market": market.upper(), "as_of_date": scan.get("as_of_date"), "screens": screens}
 
 
-@mcp.tool(annotations=READ_ONLY)
-def run_screen(
-    market: Market = "US",
-    screen: Annotated[str | None, Field(description="Preset id from list_screens, e.g. minervini, canslim, vcp.")] = None,
-    filters: Annotated[list[Filter] | None, Field(description="Extra conditions, all of which must hold.")] = None,
-    sort_by: Annotated[str | None, Field(description="Field to sort by; defaults to the screen's own sort.")] = None,
-    descending: Annotated[bool, Field(description="Direction for sort_by; ignored without sort_by.")] = True,
-    limit: Annotated[int, Field(ge=1, le=100, description="Rows to return; total_matches counts all.")] = 25,
-) -> dict[str, Any]:
-    """Run a preset screen and/or custom filters over a market's full daily scan (every listed stock).
-
-    A preset matches exactly the stocks the project's website shows for it. Filters are
-    combined with AND, including with the preset.
-    """
+def match_screen(
+    market: str,
+    screen: str | None = None,
+    filters: list[Filter] | None = None,
+    sort_by: str | None = None,
+    descending: bool = True,
+) -> ScreenResult:
     if screen is None and not filters:
         raise ToolError("Pass a screen (see list_screens) or filters, or both.")
     scan, rows = data.scan(market)
@@ -271,9 +287,12 @@ def run_screen(
     preset = None
     if screen is not None:
         presets = {p["id"].lower(): p for p in _visible_presets(market, scan)}
-        preset = presets.get(screen.strip().lower())
+        wanted = screen.strip().lower()
+        preset = presets.get(wanted)
         if preset is None:
-            raise ToolError(f"Unknown screen {screen!r}. Available: {', '.join(presets)}.")
+            close = difflib.get_close_matches(wanted, list(presets), n=5)
+            hint = f" Did you mean: {', '.join(close)}?" if close else ""
+            raise ToolError(f"Unknown screen {screen!r}.{hint} Available: {', '.join(presets)}.")
 
     filter_dicts = [f.model_dump() for f in filters or []]
     row_fields = set().union(*(row.keys() for row in rows))
@@ -299,14 +318,39 @@ def run_screen(
 
     used = [field for e in expressions for field in expression_fields(e)]
     extra = [f for f in (*used, sort_by) if f not in ROW_FIELDS]
-    columns = [*ROW_FIELDS, *dict.fromkeys(extra)]
+    return ScreenResult(
+        market=market.upper(),
+        as_of_date=scan.get("as_of_date"),
+        preset=preset,
+        sort_by=sort_by,
+        descending=descending,
+        columns=[*ROW_FIELDS, *dict.fromkeys(extra)],
+        rows=matches,
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+def run_screen(
+    market: Market = "US",
+    screen: Annotated[str | None, Field(description="Preset id from list_screens, e.g. minervini, canslim, vcp.")] = None,
+    filters: Annotated[list[Filter] | None, Field(description="Extra conditions, all of which must hold.")] = None,
+    sort_by: Annotated[str | None, Field(description="Field to sort by; defaults to the screen's own sort.")] = None,
+    descending: Annotated[bool, Field(description="Direction for sort_by; ignored without sort_by.")] = True,
+    limit: Annotated[int, Field(ge=1, le=100, description="Rows to return; total_matches counts all.")] = 25,
+) -> dict[str, Any]:
+    """Run a preset screen and/or custom filters over a market's full daily scan (every listed stock).
+
+    A preset matches exactly the stocks the project's website shows for it. Filters are
+    combined with AND, including with the preset.
+    """
+    result = match_screen(market, screen, filters, sort_by, descending)
     return {
-        "market": market.upper(),
-        "as_of_date": scan.get("as_of_date"),
-        "screen": preset["name"] if preset else None,
-        "total_matches": len(matches),
-        "sorted_by": f"{sort_by} {'desc' if descending else 'asc'}",
-        "rows": [_pick(row, columns) for row in matches[:limit]],
+        "market": result.market,
+        "as_of_date": result.as_of_date,
+        "screen": result.preset["name"] if result.preset else None,
+        "total_matches": result.total,
+        "sorted_by": f"{result.sort_by} {'desc' if result.descending else 'asc'}",
+        "rows": [_pick(row, result.columns) for row in result.rows[:limit]],
     }
 
 

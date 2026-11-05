@@ -22,7 +22,7 @@ Issues = "https://github.com/xang1234/stock-screener/issues"
 "Live demo" = "https://xang1234.github.io/stock-screener/"
 
 [project.scripts]
-stockscreen-mcp = "stockscreen_mcp.server:main"
+stockscreen-mcp = "stockscreen_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

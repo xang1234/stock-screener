@@ -14,6 +14,23 @@ uvx stockscreen-mcp
 
 **Markets:** United States, Canada, Germany, Hong Kong, mainland China, Japan, Korea, Taiwan, India, Singapore, Malaysia and Australia.
 
+## Use it from the terminal
+
+You don't need an AI assistant to read the screens. With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed:
+
+```bash
+uvx stockscreen-mcp screen                                # list the screens
+uvx stockscreen-mcp screen minervini --market US          # today's list as a table
+uvx stockscreen-mcp screen minervini --tradingview        # save a TradingView watchlist
+```
+
+- `--tradingview` writes every match to a comma-separated file such as `minervini-US-2026-11-04.txt`, ignoring `--limit`. TradingView's watchlist import requires a comma-separated file. Pass a filename to choose the path, or `-` for stdout.
+- TradingView watchlists hold at most 1,000 symbols. A longer list is still written in full, with a warning on stderr.
+- Symbols are derived from the published listing data and not checked against TradingView, so a few may not import.
+- Malaysia and Beijing listings are skipped and listed on stderr, because they have no TradingView symbol this tool can derive.
+- `--limit` sets how many rows the table shows, and `--json` prints those rows as JSON.
+- The data date and any warnings go to stderr, as does the table's row count, so stdout stays clean for pipes. `--json` carries the count in its `total` field.
+
 ## What you can ask
 
 - "Which stocks pass the Minervini trend template in the US today, and which of them are in top-20 industry groups?"

@@ -22,6 +22,16 @@ Plain-HTML pages for every scannable stock, the main screens, group rankings and
 
 See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in static mode.
 
+## Use it from your terminal
+
+With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, `uvx` fetches the rest:
+
+```bash
+uvx stockscreen-mcp screen minervini --market US
+```
+
+Add `--tradingview` to save every match as a comma-separated file for TradingView's watchlist import, which requires that format. Malaysia and Beijing listings are skipped. See **[stockscreen-mcp](stockscreen-mcp/#use-it-from-the-terminal)** for the other commands.
+
 ## Ask your AI assistant
 
 The same daily data is available to Claude, Cursor, VS Code or any MCP client through **[stockscreen-mcp](stockscreen-mcp/)**. It needs no API keys and no server:
