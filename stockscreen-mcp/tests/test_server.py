@@ -1,6 +1,8 @@
 """Tools exercised end to end through the SDK's in-memory client."""
 
 import copy
+import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -8,7 +10,7 @@ from mcp import Client
 
 from stockscreen_mcp import server
 
-from conftest import condition, preset
+from conftest import condition, horizon_block, preset
 
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("use_fake_data")]
 
@@ -33,7 +35,7 @@ async def test_every_tool_is_listed_as_read_only():
 
     assert set(tools) == {
         "list_markets", "list_screens", "run_screen", "get_stock", "audit_stocks", "market_overview",
-        "group_rankings",
+        "group_rankings", "screen_track_record",
     }
     for tool in tools.values():
         assert tool.annotations.read_only_hint is True
@@ -49,9 +51,11 @@ async def test_list_markets_reports_dates_status_and_features():
     us = next(m for m in result["markets"] if m["code"] == "US")
     assert us == {
         "code": "US", "name": "United States", "as_of_date": "2026-10-09", "status": "current",
-        "features": ["breadth", "groups", "scan"],
+        "features": ["breadth", "groups", "scan", "track_record"],
     }
     assert result["unavailable_markets"] == ["IN"]
+    assert next(m for m in result["markets"] if m["code"] == "AU")["features"] == ["groups", "scan"]
+    assert next(m for m in result["markets"] if m["code"] == "HK")["features"] == ["breadth", "groups", "scan"]
 
 
 async def test_list_screens_hides_opportunity_presets_where_the_site_does():
@@ -417,10 +421,10 @@ async def test_audit_stocks_limit_measures_the_text_the_client_gets(use_fake_dat
     async with Client(server.mcp) as client:
         text = (await client.call_tool("audit_stocks", {"symbols": symbols, "detail": True})).content[0].text
 
-    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", len(text))
+    monkeypatch.setattr(server, "MAX_RESPONSE_CHARS", len(text))
     await call("audit_stocks", symbols=symbols, detail=True)
 
-    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", len(text) - 1)
+    monkeypatch.setattr(server, "MAX_RESPONSE_CHARS", len(text) - 1)
     message = await call_error("audit_stocks", symbols=symbols, detail=True)
     assert f"5 symbols over 3 screens would return {len(text):,} characters" in message
     assert "About 4 symbols fit" in message
@@ -432,6 +436,184 @@ async def test_audit_stocks_summary_size_error_does_not_suggest_dropping_detail(
     async with Client(server.mcp) as client:
         summary_text = (await client.call_tool("audit_stocks", {"symbols": symbols})).content[0].text
 
-    monkeypatch.setattr(server, "AUDIT_MAX_CHARS", len(summary_text) - 1)
+    monkeypatch.setattr(server, "MAX_RESPONSE_CHARS", len(summary_text) - 1)
     message = await call_error("audit_stocks", symbols=symbols)
     assert message.endswith("Pass fewer symbols or a shorter `screens` list.")
+
+
+async def test_track_record_returns_one_horizon_for_every_cohort_in_file_order():
+    result = await call("screen_track_record")
+
+    how_to_read = result.pop("how_to_read")
+    assert "not a forecast or investment advice" in how_to_read
+    assert result == {
+        "market": "US",
+        "as_of_date": "2026-10-09",
+        "benchmark": "SPY",
+        "recording_since": "2026-06-01",
+        "scored_since": "2026-06-02",
+        "ledger_through": "2026-10-09",
+        "missing_sessions": 1,
+        "horizon_sessions": 20,
+        "cohorts": [
+            {
+                "screen": "minervini", "name": "Minervini", "retired": False, "definition": "def-old",
+                "origin": "artifact", "first_date": "2026-06-01", "last_date": "2026-09-30",
+                "sample_size": 80, "signal_dates": 22, "effective_dates": 18.2, "pending_windows": 40,
+                "oldest_open_sessions": 19, "thin": False, "positive_rate": 0.5, "median_return_pct": -1.5,
+                "excess_sample_size": 0, "skipped_missing_history": 0, "suppressed_overlapping": 0,
+            },
+            {
+                "screen": "minervini", "name": "Minervini", "retired": False, "definition": "def-new",
+                "origin": "live", "first_date": "2026-10-01", "last_date": "2026-10-09",
+                "sample_size": 0, "signal_dates": 0, "effective_dates": 0.0, "pending_windows": 12,
+                "oldest_open_sessions": 6, "thin": True,
+                "excess_sample_size": 0, "skipped_missing_history": 0, "suppressed_overlapping": 0,
+            },
+            {
+                "screen": "se_cup_handle", "name": "se_cup_handle", "retired": True, "definition": "def-cup",
+                "origin": "artifact_pre_stage_fix", "first_date": "2026-06-01", "last_date": "2026-06-30",
+                "sample_size": 3, "signal_dates": 2, "effective_dates": 1.8, "pending_windows": 0, "thin": True,
+                "positive_rate": 1.0, "beat_benchmark_rate": 0.0, "median_return_pct": 4.0,
+                "median_excess_return_pct": -0.2, "excess_sample_size": 3,
+                "skipped_missing_history": 0, "suppressed_overlapping": 0,
+            },
+        ],
+    }
+
+
+async def test_track_record_horizon_picks_that_block_and_screen_ignores_case():
+    result = await call("screen_track_record", market="us", screen=" MiNeRvInI ", horizon=5)
+
+    assert result["horizon_sessions"] == 5
+    assert [(c["screen"], c["definition"], c["sample_size"], c.get("median_return_pct"))
+            for c in result["cohorts"]] == [
+        ("minervini", "def-old", 120, 2.1),
+        ("minervini", "def-new", 0, None),
+    ]
+
+
+async def test_track_record_pending_horizon_has_counts_and_no_statistics():
+    result = await call("screen_track_record", screen="minervini", horizon=60)
+
+    assert result["cohorts"][0] == {
+        "screen": "minervini", "name": "Minervini", "retired": False, "definition": "def-old",
+        "origin": "artifact", "first_date": "2026-06-01", "last_date": "2026-09-30",
+        "sample_size": 0, "signal_dates": 0, "effective_dates": 0.0, "pending_windows": 120,
+        "oldest_open_sessions": 59, "thin": True, "excess_sample_size": 0, "skipped_missing_history": 0,
+        "suppressed_overlapping": 0,
+    }
+
+
+async def test_track_record_unknown_screen_lists_recorded_ids_once():
+    message = await call_error("screen_track_record", screen="canslim")
+
+    assert message == (
+        "Error executing tool screen_track_record: "
+        "No track record for screen 'canslim'. Recorded: minervini, se_cup_handle."
+    )
+
+
+async def test_track_record_market_without_the_asset_names_the_markets_with_one():
+    message = await call_error("screen_track_record", market="au")
+
+    assert message == (
+        "Error executing tool screen_track_record: "
+        "The current publish has no track record for AU, so this says nothing about how its screens "
+        "performed. Markets with a track record: US."
+    )
+
+
+async def test_track_record_says_when_no_market_has_one(fake_publish):
+    del fake_publish.manifest["markets"]["US"]["assets"]
+
+    message = await call_error("screen_track_record")
+
+    assert message == (
+        "Error executing tool screen_track_record: "
+        "The current publish has no track record for US, so this says nothing about how its screens "
+        "performed. No market has one in this publish."
+    )
+
+
+async def test_track_record_refuses_a_schema_it_does_not_know(fake_publish):
+    fake_publish.files["g/1/markets/us/scoreboard.json"]["schema_version"] = "static-scoreboard-v2"
+
+    message = await call_error("screen_track_record")
+
+    assert message == (
+        "Error executing tool screen_track_record: "
+        "This track record uses schema 'static-scoreboard-v2', which this version of stockscreen-mcp "
+        "cannot read. Update the client's command to `uvx stockscreen-mcp@latest` and restart it, or install the latest bundle if you use one."
+    )
+
+
+async def test_track_record_rejects_a_horizon_that_is_not_published():
+    message = await call_error("screen_track_record", horizon=7)
+
+    assert message == "Error executing tool screen_track_record: horizon must be 5, 20 or 60, not 7."
+    assert (await call("screen_track_record", horizon=60))["horizon_sessions"] == 60
+
+
+async def test_track_record_input_schema_has_no_enum():
+    async with Client(server.mcp) as client:
+        tool = next(t for t in (await client.list_tools()).tools if t.name == "screen_track_record")
+
+    assert tool.input_schema["properties"]["horizon"]["type"] == "integer"
+    assert "enum" not in json.dumps(tool.input_schema)
+
+
+async def test_track_record_reports_a_republish_that_dropped_the_asset_on_the_first_call(
+    use_fake_data, fake_publish
+):
+    use_fake_data.manifest()  # caches g/1/, which advertises a scoreboard
+    fake_publish.republish("g/2/")
+    del fake_publish.manifest["markets"]["US"]["assets"]
+    del fake_publish.files["g/2/markets/us/scoreboard.json"]
+
+    message = await call_error("screen_track_record")
+
+    assert message == (
+        "Error executing tool screen_track_record: "
+        "The current publish has no track record for US, so this says nothing about how its screens "
+        "performed. No market has one in this publish."
+    )
+
+
+async def test_track_record_limit_measures_the_text_the_client_gets(monkeypatch):
+    async with Client(server.mcp) as client:
+        text = (await client.call_tool("screen_track_record", {})).content[0].text
+
+    monkeypatch.setattr(server, "MAX_RESPONSE_CHARS", len(text))
+    assert len((await call("screen_track_record"))["cohorts"]) == 3
+
+    monkeypatch.setattr(server, "MAX_RESPONSE_CHARS", len(text) - 1)
+    message = await call_error("screen_track_record")
+    assert message == (
+        "Error executing tool screen_track_record: "
+        f"3 rows would return {len(text):,} characters; the limit is {len(text) - 1:,}. "
+        "Pass `screen` for one screen's rows. Recorded: minervini, se_cup_handle."
+    )
+
+
+async def test_track_record_row_omits_block_fields_it_does_not_define(fake_publish):
+    block = fake_publish.files["g/1/markets/us/scoreboard.json"]["cohorts"][0]["horizons"][1]
+    block["avg_return_pct"] = 9.9
+
+    row = (await call("screen_track_record"))["cohorts"][0]
+
+    assert "avg_return_pct" not in row
+    assert "horizon_sessions" not in row
+    assert row["sample_size"] == 80
+
+
+async def test_track_record_note_mentions_every_field_it_returns(fake_publish):
+    filled = horizon_block(20, **dict.fromkeys(server.TRACK_RECORD_STATS, 1))
+    fake_publish.files["g/1/markets/us/scoreboard.json"]["cohorts"][0]["horizons"][1] = filled
+
+    result = await call("screen_track_record")
+
+    row = result["cohorts"][0]
+    assert set(server.TRACK_RECORD_STATS) <= row.keys()
+    words = set(re.findall(r"\w+", result["how_to_read"]))
+    assert (result.keys() - {"market", "how_to_read"}) | row.keys() <= words

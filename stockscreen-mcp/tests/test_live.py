@@ -57,3 +57,9 @@ async def test_all_tools_against_the_live_publish():
         top = groups["groups"][0]["group"]
         detail = await call(client, "group_rankings", market="US", group=top, limit=3)
         assert detail["group"]["rank"] == 1
+
+        track_record = await client.call_tool("screen_track_record", {"market": "US", "horizon": 5})
+        if track_record.is_error:
+            assert "The current publish has no track record for US" in track_record.content[0].text
+        else:
+            assert track_record.structured_content["horizon_sessions"] == 5

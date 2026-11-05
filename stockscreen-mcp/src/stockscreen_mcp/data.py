@@ -156,6 +156,15 @@ class StaticData:
         entry = self.page_entry(code, page)
         return None if entry is None else self.load(entry["path"])
 
+    def asset(self, code: str, name: str) -> Any | None:
+        """A market's optional asset, or None if the current publish has none."""
+
+        def load_asset(root: str) -> Any | None:
+            entry = self.market(code).get("assets", {}).get(name)
+            return None if entry is None else self._load(entry["path"], root)
+
+        return self._retrying(load_asset)
+
     def page_entry(self, code: str, page: str) -> dict[str, Any] | None:
         return self.market(code).get("pages", {}).get(page)
 
