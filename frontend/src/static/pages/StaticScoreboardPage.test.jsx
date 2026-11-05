@@ -54,7 +54,11 @@ const renderRoute = (entry) => renderWithProviders(
 const rowFor = (section, name) => within(section).getByText(name).closest('tr');
 const sectionFor = (title) => screen.getByText(title).closest('section');
 const scoreboardFetches = () => fetch.mock.calls.map(([url]) => url).filter((url) => url.includes('scoreboard'));
-const openSection = (title) => fireEvent.click(screen.getByRole('button', { name: title }));
+const sectionToggle = (title) => screen.getByRole('button', { name: title });
+const openSection = (title) => {
+  const toggle = sectionToggle(title);
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+};
 
 describe('StaticScoreboardPage', () => {
   beforeEach(() => {
@@ -88,17 +92,16 @@ describe('StaticScoreboardPage', () => {
     expect(row).not.toHaveTextContent('%');
   });
 
-  it('keeps artifact cohorts collapsed under their section titles until opened', async () => {
+  it('keeps the rows of a collapsed section hidden until it is opened', async () => {
     renderRoute('/scoreboard');
-    const toggle = await screen.findByRole('button', { name: ARTIFACT_TITLE });
+    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(rowFor(sectionFor(ARTIFACT_TITLE), 'Minervini')).not.toBeVisible();
-    expect(screen.getByRole('button', { name: PRE_FIX_TITLE })).toHaveAttribute('aria-expanded', 'false');
+    expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).not.toBeVisible();
 
-    openSection(ARTIFACT_TITLE);
+    openSection(PRE_FIX_TITLE);
 
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(rowFor(sectionFor(ARTIFACT_TITLE), 'Minervini')).toBeVisible();
+    expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).toBeVisible();
   });
 
   it('changes the shown number when the horizon changes', async () => {
@@ -162,15 +165,40 @@ describe('StaticScoreboardPage', () => {
     expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).not.toHaveTextContent('excess on');
   });
 
-  it('marks a row Small sample when effective dates are thin, even with 26 closed on 6 dates', async () => {
+  it('opens the recovered section first while nothing recorded live has closed', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+
+    expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'true');
+    expect(sectionToggle(PRE_FIX_TITLE)).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps the recovered section closed once a live window has closed', async () => {
+    const withLiveResults = {
+      ...scoreboardFixture,
+      cohorts: scoreboardFixture.cohorts.map((cohort) => (cohort.origin === 'live'
+        ? { ...cohort, horizons: cohort.horizons.map((horizon) => ({ ...horizon, sample_size: 30 })) }
+        : cohort)),
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url) => respondWith(
+      url.endsWith('markets/us/scoreboard.json') ? withLiveResults : STATIC_FILES[url],
+    )));
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+
+    expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('says Few dates, not Small sample, when many closed windows sit on few dates', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
     openSection(PRE_FIX_TITLE);
     const section = sectionFor(PRE_FIX_TITLE);
 
-    expect(rowFor(section, 'VCP')).toHaveTextContent('Small sample');
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
+    expect(rowFor(section, 'VCP')).toHaveTextContent('Few dates');
     expect(rowFor(section, 'VCP')).not.toHaveTextContent('Small sample');
+    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
+    expect(rowFor(section, 'VCP')).not.toHaveTextContent('Few dates');
   });
 
   it('names the horizon in the table caption and marks the pressed picker button', async () => {

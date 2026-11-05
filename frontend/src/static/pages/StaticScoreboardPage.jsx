@@ -41,6 +41,8 @@ const ORIGIN_SECTIONS = [
   },
 ];
 
+const MINIMUM_SAMPLE = 20;
+
 const formatRate = (rate) => (rate == null ? '-' : `${Math.round(rate * 100)}%`);
 
 const STAT_COLUMNS = [
@@ -87,7 +89,7 @@ function CohortRow({ cohort, sessions }) {
   const captions = [
     `${cohort.first_date} to ${cohort.last_date}`,
     cohort.retired && 'Retired',
-    horizon.thin && horizon.sample_size > 0 && 'Small sample',
+    horizon.thin && horizon.sample_size > 0 && (horizon.sample_size < MINIMUM_SAMPLE ? 'Small sample' : 'Few dates'),
   ].filter(Boolean);
 
   return (
@@ -108,7 +110,11 @@ function CohortRow({ cohort, sessions }) {
   );
 }
 
-function OriginSection({ section, cohorts, sessions }) {
+const hasLiveResult = (cohorts) => cohorts.some(
+  (cohort) => cohort.origin === 'live' && cohort.horizons.some((horizon) => horizon.sample_size > 0),
+);
+
+function OriginSection({ section, cohorts, sessions, defaultExpanded }) {
   const note = noResultNote(cohorts, sessions);
   const body = (
     <Stack spacing={1}>
@@ -146,7 +152,7 @@ function OriginSection({ section, cohorts, sessions }) {
   if (cohorts.length === 0) return null;
   return (
     <Box component="section">
-      <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
+      <Accordion defaultExpanded={defaultExpanded} disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
         <Box component="h2" sx={{ m: 0 }}>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Typography component="span" variant="subtitle1" sx={{ fontWeight: 600 }}>{section.title}</Typography>
@@ -212,6 +218,7 @@ export default function StaticScoreboardPage() {
           section={section}
           cohorts={scoreboard.cohorts.filter((cohort) => cohort.origin === section.origin)}
           sessions={sessions}
+          defaultExpanded={section.origin === 'artifact' && !hasLiveResult(scoreboard.cohorts)}
         />
       ))}
     </Stack>
