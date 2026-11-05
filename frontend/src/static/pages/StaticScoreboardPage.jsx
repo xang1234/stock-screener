@@ -222,7 +222,7 @@ export default function StaticScoreboardPage() {
           <li>Funds that match a screen are included.</li>
           <li>A stock counts once per screen until its window ends. A repeat that enters earlier is left out and shown as overlapping.</li>
           <li>Effective dates count each date by how many picks it holds, so one busy day counts as about one.</li>
-          <li>Stocks that later delist drop out as no price, which can flatter results.</li>
+          <li>Stocks that later delist can drop out as no price, which can flatter results.</li>
         </Box>
       </Paper>
       <ToggleButtonGroup

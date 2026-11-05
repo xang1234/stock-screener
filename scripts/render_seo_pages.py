@@ -253,7 +253,7 @@ def render_scoreboard(site: Site, code: str, name: str, scoreboard: dict[str, An
              "Funds that match a screen are included.",
              "A stock counts once per screen until its window ends. A repeat that enters earlier is left out.",
              "Effective dates count each date by how many picks it holds, so one busy day counts as about one.",
-             "Stocks that later delist drop out as no price, which can flatter results.")
+             "Stocks that later delist can drop out as no price, which can flatter results.")
     scored_since = scoreboard["scored_since"]
     scored = (f"Scored since {esc(scored_since)} · " if scored_since and scored_since != scoreboard["recording_since"] else "")
     site.write(("scoreboard", code.lower()), board_as_of, f"{name} scoreboard – how preset screen picks moved afterward ({board_as_of})",
