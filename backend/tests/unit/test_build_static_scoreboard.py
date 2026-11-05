@@ -143,9 +143,7 @@ def only_cohort(payload: dict, preset: str = "minervini") -> dict:
 
 EMPTY_STATS = {
     "positive_rate": None,
-    "avg_return_pct": None,
     "median_return_pct": None,
-    "avg_excess_return_pct": None,
     "median_excess_return_pct": None,
     "excess_sample_size": 0,
 }
@@ -233,9 +231,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
                         "oldest_open_sessions": None,
                         "thin": True,
                         "positive_rate": 1.0,
-                        "avg_return_pct": 10.0,
                         "median_return_pct": 10.0,
-                        "avg_excess_return_pct": 9.0,
                         "median_excess_return_pct": 9.0,
                         "excess_sample_size": 1,
                         "skipped_missing_history": 0,
