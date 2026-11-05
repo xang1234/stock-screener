@@ -20,6 +20,7 @@ from app.scripts.download_static_market_fallbacks import (
 ROOT = Path(__file__).resolve().parents[3]
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "static-site-publish.yml"
 SITE_WORKFLOW = ROOT / ".github" / "workflows" / "static-site.yml"
+RECOVER_WORKFLOW = ROOT / ".github" / "workflows" / "scoreboard-ledger-recover.yml"
 
 
 _ARTIFACT_LOOKUP_PRELUDE = """\
@@ -1126,6 +1127,63 @@ def test_static_site_workflow_never_writes_the_ledger_release() -> None:
     workflow_text = SITE_WORKFLOW.read_text(encoding="utf-8")
     for write in ("upload scoreboard-ledger-data", "create scoreboard-ledger-data", "scoreboard_ledger record"):
         assert write not in workflow_text
+
+
+def _recover_workflow() -> dict:
+    return yaml.safe_load(RECOVER_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_recover_shares_the_production_publishers_concurrency_group() -> None:
+    # record-ledger is the ledger's other writer, so the group is what makes a
+    # recover safe. A branch dispatch stays out of it, as a publisher rehearsal does.
+    concurrency = _recover_workflow()["concurrency"]
+    assert concurrency == _publish_workflow()["concurrency"]
+    assert concurrency["cancel-in-progress"] is False
+    assert "'static-site-publisher'" in concurrency["group"]
+
+
+def test_recover_is_dispatch_only_for_one_market_and_date() -> None:
+    # PyYAML reads the bare ``on`` key as True.
+    triggers = _recover_workflow()[True]
+    assert list(triggers) == ["workflow_dispatch"]
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert sorted(inputs) == ["date", "market"]
+    assert (inputs["market"]["required"], inputs["date"]["required"]) == (True, True)
+    assert inputs["market"]["type"] == "choice"
+    assert inputs["market"]["options"] == ["US", "CA", "HK", "JP", "TW", "IN", "KR", "CN", "DE", "AU", "SG", "MY"]
+
+
+def test_recover_writes_only_from_the_default_branch_with_the_least_permissions() -> None:
+    workflow = _recover_workflow()
+    job = workflow["jobs"]["recover"]
+    assert workflow["permissions"] == {}
+    assert PRODUCTION_RUN in job["if"]
+    assert job["permissions"] == {"contents": "write", "actions": "read"}
+
+
+def test_recover_installs_nothing_and_passes_inputs_through_the_environment() -> None:
+    steps = _recover_workflow()["jobs"]["recover"]["steps"]
+    assert [step["uses"].split("@")[0] for step in steps if "uses" in step] == ["actions/checkout"]
+    assert steps[0]["with"]["persist-credentials"] is False
+    runs = [step for step in steps if "run" in step]
+    assert len(runs) == 1
+    assert runs[0]["run"].split() == [
+        "cd",
+        "backend",
+        "python3",
+        "-m",
+        "app.scripts.scoreboard_ledger",
+        "recover",
+        "--market",
+        '"$MARKET"',
+        "--date",
+        '"$DATE"',
+        "--i-paused-publishing",
+    ]
+    assert runs[0]["env"]["MARKET"] == "${{ inputs.market }}"
+    assert runs[0]["env"]["DATE"] == "${{ inputs.date }}"
+    assert runs[0]["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert runs[0]["env"]["GH_REPO"] == "${{ github.repository }}"
 
 
 def test_every_upload_path_wakes_the_publisher() -> None:

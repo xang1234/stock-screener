@@ -1,0 +1,51 @@
+name: Scoreboard Ledger Recover
+
+# Inserts one lost day into a market's ledger from a retained artifact. See
+# docs/runbooks/scoreboard-ledger.md. While this run is pending, a newer pending
+# publish can replace it, so check that it ran and dispatch again if it did not.
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: Market whose ledger lost the day
+        required: true
+        type: choice
+        options: [US, CA, HK, JP, TW, IN, KR, CN, DE, AU, SG, MY]
+      date:
+        description: The lost as-of date, YYYY-MM-DD
+        required: true
+        type: string
+
+concurrency:
+  # The publisher's expression, so a default-branch dispatch serializes with
+  # record-ledger, the ledger's other writer, and a branch dispatch cannot
+  # replace a pending production publish.
+  group: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'static-site-publisher' || format('static-site-publisher-{0}', github.ref) }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # Holds contents:write, so it installs nothing and runs only stdlib Python and gh.
+  recover:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The concurrency group above is the pause the flag asks for.
+      - name: Recover the day
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MARKET: ${{ inputs.market }}
+          DATE: ${{ inputs.date }}
+        run: |
+          cd backend
+          python3 -m app.scripts.scoreboard_ledger recover --market "$MARKET" --date "$DATE" --i-paused-publishing

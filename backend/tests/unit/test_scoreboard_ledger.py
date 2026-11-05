@@ -850,7 +850,7 @@ ROWS_INITIAL = [{"symbol": "ZZZ", **PASSING}, {"symbol": "FAIL", **PASSING, "sta
 ROWS_CHUNK = [{"symbol": "AAA", **PASSING}, {"symbol": "ZZZ", **PASSING, "minervini_score": 95}]
 
 
-def write_scan(market_dir: Path, market: str, as_of: str) -> None:
+def write_scan(market_dir: Path, market: str, as_of: str, presets: list[dict] = PRESETS) -> None:
     prefix = f"markets/{market.lower()}"
     (market_dir / "scan" / "chunks").mkdir(parents=True)
     (market_dir / "scan" / "chunks" / "chunk-0001.json").write_text(json.dumps({"rows": ROWS_CHUNK}))
@@ -858,7 +858,7 @@ def write_scan(market_dir: Path, market: str, as_of: str) -> None:
         json.dumps(
             {
                 "as_of_date": as_of,
-                "preset_screens": PRESETS,
+                "preset_screens": presets,
                 "initial_rows": ROWS_INITIAL,
                 "chunks": [{"path": f"{prefix}/scan/chunks/chunk-0001.json"}],
             }
@@ -1012,9 +1012,11 @@ def test_extract_and_record_run_without_site_packages(tmp_path, release) -> None
     assert release.uploads() == [US_PREVIOUS, US]
 
 
-def write_artifact(release: FakeRelease, tmp_path: Path, artifact_id: int, as_of: str) -> None:
+def write_artifact(
+    release: FakeRelease, tmp_path: Path, artifact_id: int, as_of: str, presets: list[dict] = PRESETS
+) -> None:
     built = tmp_path / f"artifact-{artifact_id}"
-    write_scan(built, "US", as_of)
+    write_scan(built, "US", as_of, presets)
     (built / "manifest.market.json").write_text(json.dumps({"entry": market_entry("US", as_of)}))
     (built / "breadth.json").write_text("{}")
     with zipfile.ZipFile(release.state / f"{artifact_id}.zip", "w") as archive:
@@ -1057,7 +1059,7 @@ def test_recover_inserts_the_earliest_default_branch_artifact_by_date_as_artifac
     ]
     (release.state / "artifacts.json").write_text(json.dumps([{"artifacts": listing}]))
 
-    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23"]) == 0
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23", "--i-paused-publishing"]) == 0
 
     assert release.uploads() == [US_PREVIOUS, US]
     lines = release.asset_lines(US)
@@ -1077,7 +1079,7 @@ def test_recover_labels_a_day_before_the_stage_fix(tmp_path, release) -> None:
         json.dumps([{"artifacts": artifact_listing([(10, "2026-10-21T01:00:00Z", "main")])}])
     )
 
-    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-20"]) == 0
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-20", "--i-paused-publishing"]) == 0
 
     assert ledger.parse_line(release.asset_lines(US)[0]).origin is Origin.ARTIFACT_PRE_STAGE_FIX
 
@@ -1089,7 +1091,7 @@ def test_recover_labels_a_day_built_after_the_stage_fix_merge_whatever_its_sessi
         json.dumps([{"artifacts": artifact_listing([(10, "2026-10-22T00:46:39Z", "main")])}])
     )
 
-    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-21"]) == 0
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-21", "--i-paused-publishing"]) == 0
 
     assert ledger.parse_line(release.asset_lines(US)[0]).origin is Origin.ARTIFACT
 
@@ -1101,7 +1103,7 @@ def test_recover_leaves_a_date_the_ledger_holds_alone(tmp_path, release, capsys)
         json.dumps([{"artifacts": artifact_listing([(10, "2026-11-03T02:00:00Z", "main")])}])
     )
 
-    assert ledger.main(["recover", "--market", "US", "--date", "2026-11-02"]) == 0
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-11-02", "--i-paused-publishing"]) == 0
 
     assert "US: 2026-11-02 is not new" in capsys.readouterr().out
     assert release.uploads() == []
@@ -1114,7 +1116,7 @@ def test_recover_with_no_retained_artifact_reports_the_gap(tmp_path, release, ca
         json.dumps([{"artifacts": artifact_listing([(10, "2026-10-30T02:00:00Z", "main")])}])
     )
 
-    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-28"]) == 1
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-28", "--i-paused-publishing"]) == 1
 
     assert "No retained default-branch US artifact holds 2026-10-28" in capsys.readouterr().out
     assert release.uploads() == []
@@ -1136,9 +1138,58 @@ def test_recover_skips_a_damaged_artifact_and_uses_the_next(tmp_path, release, c
         )
     )
 
-    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23"]) == 0
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23", "--i-paused-publishing"]) == 0
 
     assert "::warning::Skipping artifact 10" in capsys.readouterr().out
     assert ledger.parse_line(release.asset_lines(US)[0]).published_at == datetime(
         2026, 10, 24, 5, tzinfo=timezone.utc
     )
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [[], ["--dry-run", "/tmp/out", "--i-paused-publishing"]],
+    ids=["neither", "both"],
+)
+def test_recover_needs_exactly_one_of_dry_run_and_paused_publishing(release, capsys, flags) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+
+    with pytest.raises(SystemExit) as refusal:
+        ledger.main(["recover", "--market", "US", "--date", "2026-10-23", *flags])
+
+    assert refusal.value.code == 2
+    assert "--dry-run" in capsys.readouterr().err
+    assert (release.state / "calls.log").read_text() == ""
+
+
+def test_recover_dry_run_writes_what_it_would_upload_and_uploads_nothing(tmp_path, release) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    before = (release.assets / US).read_bytes()
+    write_artifact(release, tmp_path, 10, "2026-10-23")
+    (release.state / "artifacts.json").write_text(
+        json.dumps([{"artifacts": artifact_listing([(10, "2026-10-24T01:00:00Z", "main")])}])
+    )
+    output = tmp_path / "dry"
+
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23", "--dry-run", str(output)]) == 0
+
+    assert release.uploads() == []
+    assert (release.assets / US).read_bytes() == before
+    assert sorted(path.name for path in output.iterdir()) == [US, US_PREVIOUS]
+    assert ledger.read_lines(output / US_PREVIOUS, "US") == [OLD_LINE]
+    written = ledger.load_ledger(output / US, "US")
+    assert list(written) == [date(2026, 10, 23), date(2026, 11, 2)]
+    assert written[date(2026, 10, 23)].origin is Origin.ARTIFACT
+
+
+def test_recover_goes_red_on_an_artifact_with_zero_presets(tmp_path, release, capsys) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    write_artifact(release, tmp_path, 10, "2026-10-23", presets=[])
+    (release.state / "artifacts.json").write_text(
+        json.dumps([{"artifacts": artifact_listing([(10, "2026-10-24T01:00:00Z", "main")])}])
+    )
+
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23", "--i-paused-publishing"]) == 1
+
+    assert "US 2026-10-23 has zero presets" in capsys.readouterr().out
+    assert release.uploads() == []

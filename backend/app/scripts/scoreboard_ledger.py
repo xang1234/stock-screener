@@ -347,6 +347,7 @@ def advance(
     listing: set[str],
     work: Path,
     is_new: Callable[[date, dict[date, LedgerDay]], bool],
+    publish: Callable[[Path], object] = upload_asset,
 ) -> bool:
     """Add ``day`` to the market's ledger in the Release; False when it is not new."""
     if not day.presets:
@@ -387,8 +388,8 @@ def advance(
     if writer is Slot.CANONICAL:
         snapshot = work / asset_name(market, Slot.PREVIOUS)
         shutil.copyfile(base.path, snapshot)
-        upload_asset(snapshot)
-    upload_asset(target)
+        publish(snapshot)
+    publish(target)
     print(f"{market}: added {day.as_of_date} ({day.origin.value})", flush=True)
     return True
 
@@ -580,8 +581,12 @@ def cmd_recover(args: argparse.Namespace) -> int:
     if listing is None:
         raise LedgerError(f"Release {RELEASE_TAG} does not exist; see {RUNBOOK}")
     day = find_artifact_day(args.market, args.date)
+    publish: Callable[[Path], object] = upload_asset
+    if args.dry_run:
+        args.dry_run.mkdir(parents=True, exist_ok=True)
+        publish = lambda path: shutil.copy(path, args.dry_run)
     with tempfile.TemporaryDirectory() as tmp:
-        advance(args.market, day, listing, Path(tmp), lambda as_of, days: as_of not in days)
+        advance(args.market, day, listing, Path(tmp), lambda as_of, days: as_of not in days, publish)
     return 0
 
 
@@ -637,6 +642,14 @@ def build_parser() -> argparse.ArgumentParser:
     recover = commands.add_parser("recover", help="Insert one lost day from a retained artifact")
     recover.add_argument("--market", required=True, choices=MARKETS)
     recover.add_argument("--date", required=True, type=date.fromisoformat)
+    # record-ledger also writes the Release, so a local write can overwrite its line.
+    target = recover.add_mutually_exclusive_group(required=True)
+    target.add_argument("--dry-run", type=Path, metavar="DIR", help="Write the files here instead of uploading them")
+    target.add_argument(
+        "--i-paused-publishing",
+        action="store_true",
+        help="Upload to the Release. Prefer the Scoreboard Ledger Recover workflow, which queues with publishing",
+    )
     recover.set_defaults(run=cmd_recover)
     return parser
 
