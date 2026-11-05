@@ -15,6 +15,7 @@ import {
 
 const StaticOptionsPage = lazy(() => import('./pages/StaticOptionsPage'));
 const StaticOptionsSymbolPage = lazy(() => import('./pages/StaticOptionsSymbolPage'));
+const StaticScoreboardPage = lazy(() => import('./pages/StaticScoreboardPage'));
 
 function StaticAppContent() {
   const manifestQuery = useStaticManifest();
@@ -37,6 +38,7 @@ function StaticAppContent() {
             <Route path="/groups" element={<StaticGroupsPage />} />
             <Route path="/options" element={<StaticOptionsPage />} />
             <Route path="/options/:symbol" element={<StaticOptionsSymbolPage />} />
+            <Route path="/scoreboard" element={<StaticScoreboardPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
