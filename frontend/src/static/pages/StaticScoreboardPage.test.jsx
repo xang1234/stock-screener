@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -297,6 +297,33 @@ describe('StaticScoreboardPage', () => {
     expect(toggle.closest('h2')).toHaveTextContent(ARTIFACT_TITLE);
     expect(toggle.querySelector('h2')).toBeNull();
     expect(screen.getByRole('heading', { level: 2, name: ARTIFACT_TITLE })).toBe(toggle.closest('h2'));
+  });
+
+  it.each([
+    [ARTIFACT_TITLE, 'scoreboard-US-artifact-toggle', 'scoreboard-US-artifact-panel'],
+    [PRE_FIX_TITLE, 'scoreboard-US-artifact_pre_stage_fix-toggle', 'scoreboard-US-artifact_pre_stage_fix-panel'],
+  ])('connects the toggle and panel of "%s" in both directions', async (title, toggleId, panelId) => {
+    renderRoute('/scoreboard');
+    const toggle = await screen.findByRole('button', { name: title });
+    openSection(title);
+    const panel = screen.getByRole('region', { name: title });
+
+    expect(toggle).toHaveAttribute('id', toggleId);
+    expect(toggle).toHaveAttribute('aria-controls', panelId);
+    expect(panel).toHaveAttribute('id', panelId);
+    expect(panel).toHaveAttribute('aria-labelledby', toggleId);
+    expect(toggle.closest('h2')).not.toHaveAttribute('id');
+    expect(toggle.closest('h2')).not.toHaveAttribute('aria-controls');
+  });
+
+  it('takes accordion ids from the selected market', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByRole('button', { name: ARTIFACT_TITLE });
+
+    await switchMarket('China');
+
+    await waitFor(() => expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('id', 'scoreboard-CN-artifact-toggle'));
+    expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-controls', 'scoreboard-CN-artifact-panel');
   });
 
   it('greys thin rows with closed windows and labels them Small sample', async () => {
