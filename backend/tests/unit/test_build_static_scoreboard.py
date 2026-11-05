@@ -919,6 +919,10 @@ def test_a_broken_scoreboard_loses_its_entry_and_the_market_stays(tmp_path, cont
     assert len(result.warnings) == 1
     assert result.warnings[0].startswith("US scoreboard asset ignored: ")
     assert reason in result.warnings[0]
+    # The publisher scans every JSON file it ships, so the dropped file cannot stay.
+    assert not (tmp_path / "combined" / "markets" / "us" / "scoreboard.json").exists()
+    relocate_into_generation(tmp_path / "combined")
+    assert_live_only_static_isolation(tmp_path / "combined")
 
 
 @pytest.mark.parametrize(
@@ -940,6 +944,24 @@ def test_a_broken_scoreboard_descriptor_loses_its_entry_and_the_market_stays(tmp
 
     assert result.manifest["markets"]["US"]["assets"] == {}
     assert [warning.split(":")[0] for warning in result.warnings] == ["US scoreboard asset ignored"]
+
+
+def test_an_unadvertised_scoreboard_file_is_not_shipped(tmp_path) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    (market_dir / "scoreboard.json").write_text(json.dumps(GOOD_SHAPE))
+    output = tmp_path / "combined"
+    (output / "markets" / "us").mkdir(parents=True)
+    (output / "markets" / "us" / "scoreboard.json").write_text("{left over from an earlier publish")
+
+    StaticArtifactCombiner(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        supported_markets=("US",),
+        default_market="US",
+    ).combine(artifacts_dir=artifacts, fallback_artifacts_dir=None, output_dir=output, clean=False)
+
+    assert not (output / "markets" / "us" / "scoreboard.json").exists()
+    assert (output / "markets" / "us" / "scan" / "manifest.json").is_file()
 
 
 def test_a_fallback_artifact_with_a_broken_scoreboard_still_serves_the_market(tmp_path) -> None:

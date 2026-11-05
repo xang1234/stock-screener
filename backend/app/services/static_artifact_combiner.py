@@ -641,11 +641,12 @@ class StaticArtifactCombiner:
                 if omitted_dir.exists() or omitted_dir.is_symlink():
                     shutil.rmtree(omitted_dir)
             for market, artifact in selected.items():
-                shutil.copytree(
-                    artifact["market_dir"],
-                    stage / "markets" / market.lower(),
-                    dirs_exist_ok=True,
-                )
+                market_stage = stage / "markets" / market.lower()
+                shutil.copytree(artifact["market_dir"], market_stage, dirs_exist_ok=True)
+                # The publisher parses every JSON file it ships, so a scoreboard
+                # dropped for damage would fail the whole site if it stayed.
+                if "scoreboard" not in artifact["entry"].get("assets", {}):
+                    (market_stage / "scoreboard.json").unlink(missing_ok=True)
             (stage / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
