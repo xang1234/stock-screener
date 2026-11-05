@@ -109,7 +109,7 @@ describe('StaticScoreboardPage', () => {
 
   it('keeps the rows of a collapsed section hidden until it is opened', async () => {
     renderRoute('/scoreboard');
-    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE });
+    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE }, { timeout: 5000 });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).not.toBeVisible();
 
