@@ -41,6 +41,7 @@ from app.services.price_row_normalization import (
 )
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
+    STATIC_SCOREBOARD_HORIZONS,
     STATIC_SCOREBOARD_SCHEMA_VERSION,
     read_static_market_manifest,
 )
@@ -53,7 +54,6 @@ from app.services.validation_service import (
     summarize_horizon,
 )
 
-SCOREBOARD_HORIZONS = (5, 20, 60)
 THIN_SAMPLE_SIZE = 20
 THIN_EFFECTIVE_DATES = 5
 # ponytail: a year bounds time and memory and stays inside the 730 days of bundled
@@ -250,7 +250,7 @@ def build_scoreboard(
                     "last_date": cohort_dates[key][-1].isoformat(),
                     "events": len(events[key]),
                     "signal_dates": len({event.as_of_date for event in events[key]}),
-                    "horizons": [_horizon_block(events[key], horizon, sessions) for horizon in SCOREBOARD_HORIZONS],
+                    "horizons": [_horizon_block(events[key], horizon, sessions) for horizon in STATIC_SCOREBOARD_HORIZONS],
                 }
             )
 

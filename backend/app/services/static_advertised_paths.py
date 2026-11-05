@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from app.services.static_market_artifact_contract import STATIC_SCOREBOARD_SCHEMA_VERSION
+from app.services.static_market_artifact_contract import (
+    STATIC_SCOREBOARD_HORIZONS,
+    STATIC_SCOREBOARD_SCHEMA_VERSION,
+)
 
 # Root-level files a market entry may advertise but that ship as their own
 # artifacts (static-options-US) and are validated by their own selectors.
@@ -111,21 +116,103 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
             _load_json(market=market, market_dir=market_dir, advertised=ref.get("path"))
 
 
+Check = Callable[[object], bool]
+
+
+def _is_text(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def _is_flag(value: object) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_count(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _is_finite_number(value: object) -> bool:
+    # Comparing, not math.isfinite: a huge JSON integer would overflow there, and only
+    # StaticAdvertisedPathError keeps a bad scoreboard from costing the market.
+    return type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max
+
+
+def _or_null(check: Check) -> Check:
+    return lambda value: value is None or check(value)
+
+
+def _record(fields: dict[str, Check]) -> Check:
+    return lambda value: isinstance(value, dict) and all(
+        name in value and check(value[name]) for name, check in fields.items()
+    )
+
+
+def _list_of(check: Check) -> Check:
+    return lambda value: isinstance(value, list) and all(check(item) for item in value)
+
+
+_is_horizon = _record(
+    {
+        "horizon_sessions": _is_count,
+        "sample_size": _is_count,
+        "signal_dates": _is_count,
+        "effective_dates": _is_finite_number,
+        "pending_windows": _is_count,
+        "oldest_open_sessions": _or_null(_is_count),
+        "thin": _is_flag,
+        "positive_rate": _or_null(_is_finite_number),
+        "beat_benchmark_rate": _or_null(_is_finite_number),
+        "median_return_pct": _or_null(_is_finite_number),
+        "median_excess_return_pct": _or_null(_is_finite_number),
+        "excess_sample_size": _is_count,
+        "skipped_missing_history": _is_count,
+        "suppressed_overlapping": _is_count,
+    }
+)
+
+
+def _holds_each_horizon_once(value: object) -> bool:
+    return _list_of(_is_horizon)(value) and sorted(
+        block["horizon_sessions"] for block in value
+    ) == sorted(STATIC_SCOREBOARD_HORIZONS)
+
+
+# The fields the static page and the MCP tool screen_track_record read without a guard.
+_is_scoreboard = _record(
+    {
+        "schema_version": lambda value: value == STATIC_SCOREBOARD_SCHEMA_VERSION,
+        "market": _is_text,
+        "as_of_date": _is_text,
+        "benchmark": _or_null(_is_text),
+        "recording_since": _or_null(_is_text),
+        "scored_since": _or_null(_is_text),
+        "ledger_through": _or_null(_is_text),
+        "missing_sessions": _is_count,
+        "cohorts": _list_of(
+            _record(
+                {
+                    "preset": _is_text,
+                    "name": _is_text,
+                    "retired": _is_flag,
+                    "definition": _is_text,
+                    "origin": lambda value: value in ("live", "artifact", "artifact_pre_stage_fix"),
+                    "first_date": _is_text,
+                    "last_date": _is_text,
+                    "events": _is_count,
+                    "horizons": _holds_each_horizon_once,
+                }
+            )
+        ),
+    }
+)
+
+
 def validate_scoreboard_asset(*, market: str, market_dir: Path, descriptor: object) -> None:
-    """Raise unless ``descriptor`` names a scoreboard file for ``market`` the page can read."""
+    """Raise unless ``descriptor`` names a scoreboard file for ``market`` its readers can use."""
     if not isinstance(descriptor, dict) or "path" not in descriptor:
         raise StaticAdvertisedPathError("descriptor must be an object with a path")
     payload = _load_json(market=market, market_dir=market_dir, advertised=descriptor["path"])
-    cohorts = payload.get("cohorts") if isinstance(payload, dict) else None
-    if (
-        not isinstance(cohorts, list)
-        or payload.get("schema_version") != STATIC_SCOREBOARD_SCHEMA_VERSION
-        or payload.get("market") != market
-        or not all(
-            isinstance(cohort, dict) and isinstance(cohort.get("horizons"), list)
-            for cohort in cohorts
-        )
-    ):
+    if not _is_scoreboard(payload) or payload["market"] != market:
         raise StaticAdvertisedPathError(
             f"advertised file {descriptor['path']!r} is not a "
             f"{STATIC_SCOREBOARD_SCHEMA_VERSION} file for {market}"

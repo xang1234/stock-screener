@@ -975,7 +975,11 @@ def test_the_asset_survives_validation_combine_and_generation_relocation(tmp_pat
     assert_live_only_static_isolation(combined)
 
 
-GOOD_SHAPE = {"schema_version": "static-scoreboard-v1", "market": "US", "cohorts": [{"horizons": []}]}
+def closed_window_board(db, calendar) -> dict:
+    """What the builder writes for a pick whose 5-session window closed."""
+    for symbol in ("AAPL", "SPY"):
+        add_bars(db, calendar, symbol, date(2026, 10, 5), date(2026, 10, 30), closes={date(2026, 10, 12): 110.0})
+    return json.loads(json.dumps(score(db, calendar, as_ledger(DAY_1002, DAY_1005), date(2026, 10, 30)), allow_nan=False))
 
 
 def combine_one_market(artifacts: Path, output: Path, *, as_fallback: bool = False):
@@ -1006,11 +1010,6 @@ def advertise_scoreboard(market_dir: Path, descriptor: object) -> None:
         pytest.param(None, "advertised file is absent", id="absent"),
         pytest.param("[]", "is not a static-scoreboard-v1 file for US", id="not-an-object"),
         pytest.param("{}", "is not a static-scoreboard-v1 file for US", id="empty-object"),
-        pytest.param(json.dumps({**GOOD_SHAPE, "schema_version": "static-scoreboard-v0"}), "is not a static-scoreboard-v1 file for US", id="wrong-schema"),
-        pytest.param(json.dumps({**GOOD_SHAPE, "market": "HK"}), "is not a static-scoreboard-v1 file for US", id="another-market"),
-        pytest.param(json.dumps({**GOOD_SHAPE, "cohorts": {}}), "is not a static-scoreboard-v1 file for US", id="cohorts-not-a-list"),
-        pytest.param(json.dumps({**GOOD_SHAPE, "cohorts": [1]}), "is not a static-scoreboard-v1 file for US", id="cohort-not-an-object"),
-        pytest.param(json.dumps({**GOOD_SHAPE, "cohorts": [{}]}), "is not a static-scoreboard-v1 file for US", id="cohort-without-horizons"),
     ],
 )
 def test_a_broken_scoreboard_loses_its_entry_and_the_market_stays(tmp_path, content, reason) -> None:
@@ -1032,6 +1031,142 @@ def test_a_broken_scoreboard_loses_its_entry_and_the_market_stays(tmp_path, cont
     assert not (tmp_path / "combined" / "markets" / "us" / "scoreboard.json").exists()
     relocate_into_generation(tmp_path / "combined")
     assert_live_only_static_isolation(tmp_path / "combined")
+
+
+MISSING = object()
+FIRST_COHORT = ("cohorts", 0)
+FIRST_HORIZON = (*FIRST_COHORT, "horizons", 0)
+HORIZON_FIELDS = (
+    "horizon_sessions", "sample_size", "signal_dates", "effective_dates", "pending_windows", "oldest_open_sessions",
+    "thin", "positive_rate", "beat_benchmark_rate", "median_return_pct", "median_excess_return_pct",
+    "excess_sample_size", "skipped_missing_history", "suppressed_overlapping",
+)
+COHORT_FIELDS = ("preset", "name", "retired", "definition", "origin", "first_date", "last_date", "events", "horizons")
+BOARD_FIELDS = (
+    "schema_version", "market", "as_of_date", "benchmark", "recording_since", "scored_since", "ledger_through",
+    "missing_sessions", "cohorts",
+)
+COUNTS = ("sample_size", "signal_dates", "pending_windows", "excess_sample_size", "skipped_missing_history", "suppressed_overlapping")
+STATISTICS = ("positive_rate", "beat_benchmark_rate", "median_return_pct", "median_excess_return_pct", "effective_dates")
+
+
+def change(path: tuple, value: object, name: str) -> object:
+    return pytest.param(path, value, id=name)
+
+
+MALFORMED = [
+    change(("schema_version",), "static-scoreboard-v0", "wrong-schema"),
+    change(("market",), "HK", "another-market"),
+    change(("market",), ["US"], "market-not-text"),
+    change(("as_of_date",), 20261012, "as-of-date-not-text"),
+    change(("benchmark",), 5, "benchmark-not-text"),
+    change(("recording_since",), 5, "recording-since-not-text"),
+    change(("missing_sessions",), None, "missing-sessions-null"),
+    change(("missing_sessions",), True, "missing-sessions-boolean"),
+    change(("missing_sessions",), 1.5, "missing-sessions-fractional"),
+    change(("missing_sessions",), -1, "missing-sessions-negative"),
+    change(("cohorts",), {}, "cohorts-not-a-list"),
+    change(FIRST_COHORT, 1, "cohort-not-an-object"),
+    change(FIRST_COHORT, {}, "cohort-empty"),
+    change((*FIRST_COHORT, "preset"), None, "preset-null"),
+    change((*FIRST_COHORT, "retired"), "no", "retired-not-a-boolean"),
+    change((*FIRST_COHORT, "origin"), "imagined", "origin-unknown"),
+    change((*FIRST_COHORT, "origin"), [], "origin-unhashable"),
+    change((*FIRST_COHORT, "events"), True, "events-boolean"),
+    change((*FIRST_COHORT, "horizons"), {}, "horizons-not-a-list"),
+    change((*FIRST_COHORT, "horizons"), [], "horizons-empty"),
+    change((*FIRST_COHORT, "horizons", 2), MISSING, "horizon-60-absent"),
+    change(FIRST_HORIZON, 1, "horizon-not-an-object"),
+    change((*FIRST_HORIZON, "horizon_sessions"), 20, "horizon-repeated"),
+    change((*FIRST_HORIZON, "horizon_sessions"), 10, "horizon-unknown"),
+    change((*FIRST_HORIZON, "horizon_sessions"), "5", "horizon-not-a-number"),
+    change((*FIRST_HORIZON, "horizon_sessions"), 5.0, "horizon-a-float"),
+    change((*FIRST_HORIZON, "thin"), 1, "thin-not-a-boolean"),
+    change((*FIRST_HORIZON, "oldest_open_sessions"), True, "oldest-open-boolean"),
+    change((*FIRST_HORIZON, "oldest_open_sessions"), 1.5, "oldest-open-fractional"),
+    change((*FIRST_HORIZON, "effective_dates"), None, "effective-dates-null"),
+    change((*FIRST_HORIZON, "median_return_pct"), 10**400, "median-beyond-a-double"),
+    *[change((name,), MISSING, f"without-{name}") for name in BOARD_FIELDS],
+    *[change((*FIRST_COHORT, name), MISSING, f"cohort-without-{name}") for name in COHORT_FIELDS],
+    *[change((*FIRST_HORIZON, name), MISSING, f"horizon-without-{name}") for name in HORIZON_FIELDS],
+    *[change((*FIRST_HORIZON, name), None, f"{name}-null") for name in COUNTS],
+    *[change((*FIRST_HORIZON, name), True, f"{name}-boolean") for name in COUNTS],
+    *[change((*FIRST_HORIZON, name), 1.5, f"{name}-fractional") for name in COUNTS],
+    *[change((*FIRST_HORIZON, name), "12", f"{name}-text") for name in STATISTICS],
+    *[change((*FIRST_HORIZON, name), True, f"{name}-boolean") for name in STATISTICS],
+    *[change((*FIRST_HORIZON, name), float("nan"), f"{name}-nan") for name in STATISTICS],
+    *[change((*FIRST_HORIZON, name), float("inf"), f"{name}-infinite") for name in STATISTICS],
+]
+
+
+@pytest.mark.parametrize(("path", "value"), MALFORMED)
+def test_a_malformed_real_scoreboard_loses_its_entry_and_the_market_stays(tmp_path, db, calendar, path, value) -> None:
+    board = closed_window_board(db, calendar)
+    target = board
+    for key in path[:-1]:
+        target = target[key]
+    if value is MISSING:
+        del target[path[-1]]
+    else:
+        target[path[-1]] = value
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").write_text(json.dumps(board))
+
+    result = combine_one_market(artifacts, tmp_path / "combined")
+
+    assert result.manifest["markets"]["US"]["assets"] == {}
+    assert result.manifest["markets"]["US"]["pages"] == {"scan": {"path": "markets/us/scan/manifest.json"}}
+    assert result.manifest.get("unavailable_markets", []) == []
+    assert result.warnings == (
+        "US scoreboard asset ignored: advertised file 'markets/us/scoreboard.json' "
+        "is not a static-scoreboard-v1 file for US",
+    )
+    assert not (tmp_path / "combined" / "markets" / "us" / "scoreboard.json").exists()
+
+
+def combined_scoreboard(tmp_path: Path, board: dict) -> dict:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").write_text(json.dumps(board, allow_nan=False))
+    result = combine_one_market(artifacts, tmp_path / "combined")
+    assert result.warnings == ()
+    return result.manifest["markets"]["US"]["assets"]
+
+
+def test_real_output_with_closed_and_open_windows_keeps_its_entry(tmp_path, db, calendar) -> None:
+    board = closed_window_board(db, calendar)
+    closed, open_ = horizon(board["cohorts"][0], 5), horizon(board["cohorts"][0], 20)
+
+    assert (closed["sample_size"], closed["median_return_pct"], closed["median_excess_return_pct"]) == (1, 10.0, 0.0)
+    assert (closed["oldest_open_sessions"], open_["sample_size"], open_["median_return_pct"]) == (None, 0, None)
+    assert combined_scoreboard(tmp_path, board) == {"scoreboard": {"path": "markets/us/scoreboard.json"}}
+
+
+def test_real_output_of_a_first_day_with_no_picks_keeps_its_entry(tmp_path, db, calendar) -> None:
+    board = json.loads(json.dumps(score(db, calendar, as_ledger(DAY_1005), date(2026, 10, 12))))
+
+    assert (board["benchmark"], board["cohorts"][0]["events"], horizon(board["cohorts"][0], 5)["positive_rate"]) == (None, 0, None)
+    assert combined_scoreboard(tmp_path, board) == {"scoreboard": {"path": "markets/us/scoreboard.json"}}
+
+
+@pytest.mark.parametrize("origin", list(Origin))
+def test_real_output_of_every_origin_keeps_its_entry(tmp_path, db, calendar, origin) -> None:
+    day = ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, origin)
+    board = json.loads(json.dumps(score(db, calendar, as_ledger(day), date(2026, 10, 12))))
+
+    assert board["cohorts"][0]["origin"] == origin.value
+    assert combined_scoreboard(tmp_path, board) == {"scoreboard": {"path": "markets/us/scoreboard.json"}}
+
+
+def test_horizons_in_another_order_keep_their_entry(tmp_path, db, calendar) -> None:
+    board = closed_window_board(db, calendar)
+    board["cohorts"][0]["horizons"].reverse()
+
+    assert [block["horizon_sessions"] for block in board["cohorts"][0]["horizons"]] == [60, 20, 5]
+    assert combined_scoreboard(tmp_path, board) == {"scoreboard": {"path": "markets/us/scoreboard.json"}}
 
 
 @pytest.mark.parametrize(
@@ -1071,10 +1206,10 @@ def test_a_directory_at_the_scoreboard_path_loses_only_the_asset(tmp_path, adver
     assert not (tmp_path / "combined" / "markets" / "us" / "scoreboard.json").exists()
 
 
-def test_an_unadvertised_scoreboard_file_is_not_shipped(tmp_path) -> None:
+def test_an_unadvertised_scoreboard_file_is_not_shipped(tmp_path, db, calendar) -> None:
     artifacts = tmp_path / "artifacts"
     market_dir = write_artifact(artifacts)
-    (market_dir / "scoreboard.json").write_text(json.dumps(GOOD_SHAPE))
+    (market_dir / "scoreboard.json").write_text(json.dumps(closed_window_board(db, calendar)))
     output = tmp_path / "combined"
     (output / "markets" / "us").mkdir(parents=True)
     (output / "markets" / "us" / "scoreboard.json").write_text("{left over from an earlier publish")
@@ -1106,11 +1241,11 @@ def test_a_fallback_artifact_with_a_broken_scoreboard_still_serves_the_market(tm
     assert result.manifest["markets"]["US"]["as_of_date"] == "2026-10-12"
 
 
-def test_a_good_scoreboard_keeps_its_entry_and_every_other_broken_asset_still_rejects(tmp_path) -> None:
+def test_a_good_scoreboard_keeps_its_entry_and_every_other_broken_asset_still_rejects(tmp_path, db, calendar) -> None:
     artifacts = tmp_path / "artifacts"
     market_dir = write_artifact(artifacts)
     advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
-    (market_dir / "scoreboard.json").write_text(json.dumps(GOOD_SHAPE))
+    (market_dir / "scoreboard.json").write_text(json.dumps(closed_window_board(db, calendar)))
 
     result = combine_one_market(artifacts, tmp_path / "combined")
 
