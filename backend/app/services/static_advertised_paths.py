@@ -58,7 +58,7 @@ def _load_json(*, market: str, market_dir: Path, advertised: object) -> object:
     path = _resolve(market=market, market_dir=market_dir, advertised=advertised)
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise StaticAdvertisedPathError(
             f"advertised file {advertised!r} does not parse: {exc}"
         ) from exc

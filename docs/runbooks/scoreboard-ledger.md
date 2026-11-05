@@ -127,7 +127,7 @@ If `.previous` is also corrupt or absent, the market's scoreboard stays omitted 
 
 If a valid `.previous` holds a line canonical no longer holds byte for byte, something rewrote history, and canonical is treated as corrupt even though it parses. `record-ledger` goes red for that market and uploads nothing, because rotating would overwrite the only copy that shows the loss. Market builds warn and score `.previous`, so a day only canonical holds leaves the scoreboard until the repair. `verify` reports `canonical lost N line(s)` and exits 1.
 
-Find out what changed before fixing it. If `.previous` is right, follow the [repair steps](#repair-a-corrupt-canonical) from step 2. If the rewrite was deliberate, such as a plain re-seed before you read [the warning](#re-seeding-after-live-days-exist), upload `.previous` again from a copy of the file you now trust so the two agree.
+Find out what changed before fixing it. If `.previous` is right, keep a copy of canonical, then follow the [repair steps](#repair-a-corrupt-canonical) from step 2. A day only canonical holds comes back through `recover` as `artifact`, never `live`, and only while its artifact is retained. If the rewrite was deliberate, such as a plain re-seed before you read [the warning](#re-seeding-after-live-days-exist), upload `.previous` again from a copy of the file you now trust so the two agree.
 
 ## What each state does
 

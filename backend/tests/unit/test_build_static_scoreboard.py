@@ -1076,6 +1076,15 @@ MALFORMED = [
     change((*FIRST_COHORT, "horizons"), {}, "horizons-not-a-list"),
     change((*FIRST_COHORT, "horizons"), [], "horizons-empty"),
     change((*FIRST_COHORT, "horizons", 2), MISSING, "horizon-60-absent"),
+    change((*FIRST_COHORT, "horizons", 2, "sample_size"), "x", "last-horizon-count-not-a-number"),
+    change((*FIRST_COHORT, "preset"), 5, "preset-not-text"),
+    change((*FIRST_COHORT, "name"), {}, "name-not-text"),
+    change((*FIRST_COHORT, "definition"), 5, "definition-not-text"),
+    change((*FIRST_COHORT, "first_date"), None, "first-date-null"),
+    change((*FIRST_COHORT, "last_date"), 5, "last-date-not-text"),
+    change((*FIRST_COHORT, "events"), "x", "events-not-a-number"),
+    change(("scored_since",), 5, "scored-since-not-text"),
+    change(("ledger_through",), 5, "ledger-through-not-text"),
     change(FIRST_HORIZON, 1, "horizon-not-an-object"),
     change((*FIRST_HORIZON, "horizon_sessions"), 20, "horizon-repeated"),
     change((*FIRST_HORIZON, "horizon_sessions"), 10, "horizon-unknown"),
@@ -1097,6 +1106,42 @@ MALFORMED = [
     *[change((*FIRST_HORIZON, name), float("nan"), f"{name}-nan") for name in STATISTICS],
     *[change((*FIRST_HORIZON, name), float("inf"), f"{name}-infinite") for name in STATISTICS],
 ]
+
+
+def _combined_assets_with_second_cohort(tmp_path, board: dict, second_cohort: object) -> dict:
+    board["cohorts"].append(second_cohort)
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").write_text(json.dumps(board))
+    return combine_one_market(artifacts, tmp_path / "combined").manifest["markets"]["US"]["assets"]
+
+
+def test_a_second_valid_cohort_keeps_the_entry(tmp_path, db, calendar) -> None:
+    board = closed_window_board(db, calendar)
+
+    assets = _combined_assets_with_second_cohort(tmp_path, board, json.loads(json.dumps(board["cohorts"][0])))
+
+    assert assets == {"scoreboard": {"path": "markets/us/scoreboard.json"}}
+
+
+def test_a_malformed_second_cohort_loses_the_entry(tmp_path, db, calendar) -> None:
+    board = closed_window_board(db, calendar)
+    second = {**board["cohorts"][0], "name": {}}
+
+    assert _combined_assets_with_second_cohort(tmp_path, board, second) == {}
+
+
+def test_a_deeply_nested_scoreboard_loses_its_entry_and_the_market_stays(tmp_path) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").write_text("[" * 200000)
+
+    result = combine_one_market(artifacts, tmp_path / "combined")
+
+    assert result.manifest["markets"]["US"]["assets"] == {}
+    assert result.manifest.get("unavailable_markets", []) == []
 
 
 @pytest.mark.parametrize(("path", "value"), MALFORMED)
