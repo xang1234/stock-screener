@@ -160,6 +160,8 @@ EMPTY_STATS = {
         pytest.param("US", "2026-11-05T15:00:00Z", date(2026, 11, 4), date(2026, 11, 6), id="us-mid-session"),
         pytest.param("AU", "2026-11-05T03:00:00Z", date(2026, 11, 4), date(2026, 11, 6), id="au-late-publish"),
         pytest.param("AU", "2026-11-04T20:00:00Z", date(2026, 11, 4), date(2026, 11, 5), id="au-before-local-open"),
+        pytest.param("AU", "2026-11-02T23:30:00Z", date(2026, 11, 2), date(2026, 11, 4), id="au-after-the-open-while-utc-is-a-day-behind"),
+        pytest.param("AU", "2026-11-02T22:59:59Z", date(2026, 11, 2), date(2026, 11, 3), id="au-second-before-the-open"),
         pytest.param("US", "2026-11-26T18:00:00Z", date(2026, 11, 25), date(2026, 11, 27), id="us-holiday"),
         pytest.param("US", "2026-11-07T15:00:00Z", date(2026, 11, 6), date(2026, 11, 9), id="us-saturday"),
         pytest.param("US", "2026-11-09T12:00:00Z", date(2026, 11, 6), date(2026, 11, 9), id="us-monday-pre-open"),
@@ -815,6 +817,19 @@ def test_a_scoring_failure_leaves_the_manifest_unchanged(tmp_path, calendar) -> 
 
     with pytest.raises(OperationalError):
         run_write(market_dir, ledger_dir, no_price_table, calendar)
+
+    assert (market_dir / "manifest.market.json").read_bytes() == before
+    assert not (market_dir / "scoreboard.json").exists()
+
+
+def test_a_nan_in_the_payload_fails_and_advertises_nothing(tmp_path, db, calendar, monkeypatch) -> None:
+    market_dir = write_artifact(tmp_path / "artifacts")
+    before = (market_dir / "manifest.market.json").read_bytes()
+    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[DAY_1005])
+    monkeypatch.setattr(builder, "build_scoreboard", lambda *_args, **_kwargs: {"cohorts": [float("nan")]})
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        run_write(market_dir, ledger_dir, db, calendar)
 
     assert (market_dir / "manifest.market.json").read_bytes() == before
     assert not (market_dir / "scoreboard.json").exists()
