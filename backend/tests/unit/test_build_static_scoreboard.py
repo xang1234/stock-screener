@@ -143,6 +143,7 @@ def only_cohort(payload: dict, preset: str = "minervini") -> dict:
 
 EMPTY_STATS = {
     "positive_rate": None,
+    "beat_benchmark_rate": None,
     "median_return_pct": None,
     "median_excess_return_pct": None,
     "excess_sample_size": 0,
@@ -231,6 +232,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
                         "oldest_open_sessions": None,
                         "thin": True,
                         "positive_rate": 1.0,
+                        "beat_benchmark_rate": 1.0,
                         "median_return_pct": 10.0,
                         "median_excess_return_pct": 9.0,
                         "excess_sample_size": 1,
@@ -524,6 +526,51 @@ def test_cohorts_segment_by_definition_and_origin_live_first_in_manifest_order(d
         ("canslim", "CANSLIM", False, DEF_A, "artifact_pre_stage_fix", "2026-10-05", "2026-10-05", 0),
         ("old_screen", "old_screen", True, DEF_A, "artifact_pre_stage_fix", "2026-10-05", "2026-10-05", 0),
     ]
+
+
+def test_beat_benchmark_counts_only_excess_above_zero(db, calendar) -> None:
+    exit_day = date(2026, 10, 12)
+    add_bars(db, calendar, "SPY", date(2026, 10, 5), exit_day, open_=400.0, close=401.0, closes={exit_day: 404.0})
+    add_bars(db, calendar, "BEATS", date(2026, 10, 5), exit_day, closes={exit_day: 110.0})
+    add_bars(db, calendar, "TIES", date(2026, 10, 5), exit_day, closes={exit_day: 101.0})
+    add_bars(db, calendar, "UP_BUT_BEHIND", date(2026, 10, 5), exit_day, closes={exit_day: 100.5})
+    add_bars(db, calendar, "FALLS", date(2026, 10, 5), exit_day, closes={exit_day: 95.0})
+    ledger = after_baseline(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["BEATS", "TIES", "UP_BUT_BEHIND", "FALLS"])})
+    )
+
+    block = horizon(only_cohort(score(db, calendar, ledger, exit_day)), 5)
+
+    assert block["sample_size"] == 4
+    assert block["positive_rate"] == 0.75
+    assert block["beat_benchmark_rate"] == 0.25
+    assert block["excess_sample_size"] == 4
+
+
+def test_beat_benchmark_leaves_out_events_the_benchmark_does_not_cover(db, calendar) -> None:
+    add_bars(db, calendar, "SPY", date(2026, 10, 5), date(2026, 10, 12), open_=400.0, close=404.0)
+    add_bars(db, calendar, "BEATS", date(2026, 10, 5), date(2026, 10, 13), close=110.0)
+    add_bars(db, calendar, "FALLS", date(2026, 10, 5), date(2026, 10, 13), close=50.0)
+    ledger = after_baseline(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["BEATS"])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["BEATS", "FALLS"])}),
+    )
+
+    block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 13))), 5)
+
+    assert (block["sample_size"], block["excess_sample_size"]) == (2, 1)
+    assert block["beat_benchmark_rate"] == 1.0
+
+
+def test_beat_benchmark_is_null_when_no_closed_event_has_a_benchmark(db, calendar) -> None:
+    add_bars(db, calendar, "BHP.AX", date(2026, 10, 5), date(2026, 10, 16), market="AU", close=110.0)
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-05T22:00:00Z", {"minervini": (DEF_A, ["BHP.AX"])}))
+
+    block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 16), market="AU")), 5)
+
+    assert block["sample_size"] == 1
+    assert block["positive_rate"] == 1.0
+    assert block["beat_benchmark_rate"] is None
 
 
 def test_a_zero_match_preset_is_listed_with_null_stats(db, calendar) -> None:

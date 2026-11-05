@@ -121,7 +121,13 @@ class CohortEvent:
 def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]) -> dict[str, Any]:
     summary = summarize_horizon([event.evaluated for event in events], horizon_sessions=horizon)
     counted = [event for event in events if horizon not in event.evaluated.suppressed]
-    signal_dates = len({event.as_of_date for event in counted if horizon in event.evaluated.outcomes})
+    closed = [event for event in counted if horizon in event.evaluated.outcomes]
+    signal_dates = len({event.as_of_date for event in closed})
+    excess = [
+        event.evaluated.outcomes[horizon].excess_return_pct
+        for event in closed
+        if event.evaluated.outcomes[horizon].excess_return_pct is not None
+    ]
     # A symbol whose refresh lags one session stays pending with every session elapsed;
     # its window is still short of the last bar.
     open_sessions = [
@@ -137,6 +143,7 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
         "oldest_open_sessions": max(open_sessions, default=None),
         "thin": summary.sample_size < THIN_SAMPLE_SIZE or signal_dates < THIN_SIGNAL_DATES,
         "positive_rate": summary.positive_rate,
+        "beat_benchmark_rate": round(sum(value > 0 for value in excess) / len(excess), 4) if excess else None,
         "median_return_pct": summary.median_return_pct,
         "median_excess_return_pct": summary.median_excess_return_pct,
         "excess_sample_size": summary.excess_sample_size,
