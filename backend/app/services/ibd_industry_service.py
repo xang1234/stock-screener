@@ -18,15 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 def _market_taxonomy_service():
-    from .market_taxonomy_service import MarketTaxonomyService
+    """Return the process-wide taxonomy service.
 
-    global _TAXONOMY_SINGLETON
-    if _TAXONOMY_SINGLETON is None:
-        _TAXONOMY_SINGLETON = MarketTaxonomyService()
-    return _TAXONOMY_SINGLETON
+    A second instance here would retry on its own deadline and parse every CSV
+    a second time, so both the retry state and the loaded data must be shared.
+    """
+    from .market_taxonomy_service import get_market_taxonomy_service
 
-
-_TAXONOMY_SINGLETON = None
+    return get_market_taxonomy_service()
 
 
 def _market_has_curated_taxonomy(market: str) -> bool:
