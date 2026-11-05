@@ -596,6 +596,81 @@ def test_a_canonical_upload_failure_leaves_previous_saved_and_is_red(tmp_path, r
     assert release.asset_lines(US_PREVIOUS) == [OLD_LINE]
 
 
+OLDER_LINE = day_line("2026-10-30", published_at="2026-10-31T01:00:00Z")
+TAMPERED_LINE = day_line("2026-10-30", published_at="2026-10-31T09:00:00Z")
+
+
+@pytest.mark.parametrize(
+    "canonical",
+    [
+        pytest.param(f"{OLD_LINE}\n", id="line-dropped"),
+        pytest.param(f"{TAMPERED_LINE}\n{OLD_LINE}\n", id="line-rewritten"),
+    ],
+)
+def test_a_canonical_missing_a_previous_line_is_red_and_uploads_nothing_for_that_market(
+    tmp_path, release, capsys, canonical
+) -> None:
+    release.create(**{US: canonical, US_PREVIOUS: f"{OLDER_LINE}\n", HK: f"{OLD_LINE}\n"})
+    before = {name: (release.assets / name).read_bytes() for name in (US, US_PREVIOUS)}
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-03")
+    write_day_file(days, "HK", "2026-11-03")
+
+    assert record(days) == 1
+
+    assert "::error::US: US canonical lost 1 line(s) that .previous holds" in capsys.readouterr().out
+    assert release.uploads() == [HK_PREVIOUS, HK]
+    assert {name: (release.assets / name).read_bytes() for name in (US, US_PREVIOUS)} == before
+
+
+def test_a_canonical_holding_every_previous_line_rotates(tmp_path, release) -> None:
+    release.create(**{US: f"{OLDER_LINE}\n{OLD_LINE}\n", US_PREVIOUS: f"{OLDER_LINE}\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-03")
+
+    assert record(days) == 0
+
+    assert release.uploads() == [US_PREVIOUS, US]
+    assert release.asset_lines(US_PREVIOUS) == [OLDER_LINE, OLD_LINE]
+    assert release.asset_lines(US)[:2] == [OLDER_LINE, OLD_LINE]
+
+
+def test_a_corrupt_previous_is_not_a_reason_to_stop(tmp_path, release) -> None:
+    release.create(**{US: f"{OLD_LINE}\n", US_PREVIOUS: "not json\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-03")
+
+    assert record(days) == 0
+
+    assert release.asset_lines(US_PREVIOUS) == [OLD_LINE]
+
+
+def test_a_rewrite_that_changes_an_old_line_uploads_nothing(tmp_path, release, capsys, monkeypatch) -> None:
+    release.create(**{US: f"{OLDER_LINE}\n{OLD_LINE}\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-03")
+    real_write = ledger.write_ledger
+    monkeypatch.setattr(
+        ledger,
+        "write_ledger",
+        lambda path, lines: real_write(path, [TAMPERED_LINE if line == OLDER_LINE else line for line in lines]),
+    )
+
+    assert record(days) == 1
+
+    assert "US: the rewrite changed an existing line" in capsys.readouterr().out
+    assert release.uploads() == []
+
+
+def test_verify_reports_a_canonical_that_lost_a_previous_line(tmp_path, capsys) -> None:
+    write_gz(tmp_path / asset_name("US"), f"{OLD_LINE}\n")
+    write_gz(tmp_path / asset_name("US", Slot.PREVIOUS), f"{OLDER_LINE}\n")
+
+    assert ledger.main(["verify", "--market", "US", "--dir", str(tmp_path)]) == 1
+
+    assert "US canonical lost 1 line(s) that .previous holds" in capsys.readouterr().out
+
+
 def test_a_download_failure_is_red_not_an_absent_asset(tmp_path, release, capsys) -> None:
     release.create(**{US: OLD_LINE + "\n"})
     release.set_faults(download=[US])
