@@ -140,6 +140,18 @@ describe('StaticScoreboardPage', () => {
     expect(document.body).not.toHaveTextContent(/average/i);
   });
 
+  it('keeps the screen name beside the numbers when a narrow table scrolls sideways', async () => {
+    renderRoute('/scoreboard');
+    const live = (await screen.findByText('Recorded live')).closest('section');
+
+    const header = within(live).getByRole('columnheader', { name: 'Screen' });
+    const name = within(rowFor(live, 'Minervini')).getAllByRole('cell')[0];
+    const sample = within(rowFor(live, 'Minervini')).getAllByRole('cell')[1];
+    expect(header).toHaveStyle({ position: 'sticky', left: '0px' });
+    expect(name).toHaveStyle({ position: 'sticky', left: '0px' });
+    expect(sample).not.toHaveStyle({ position: 'sticky' });
+  });
+
   it('omits the excess count when the benchmark covers every closed window', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');

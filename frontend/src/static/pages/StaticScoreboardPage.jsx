@@ -50,6 +50,8 @@ const STAT_COLUMNS = [
   { label: 'Median excess', value: (horizon) => formatPercent(horizon.median_excess_return_pct) },
 ];
 
+const STICKY_SCREEN_SX = { position: 'sticky', left: 0, zIndex: 1, bgcolor: 'background.paper' };
+
 const count = (value) => value.toLocaleString('en-US');
 const plural = (value, noun) => `${count(value)} ${noun}${value === 1 ? '' : 's'}`;
 
@@ -90,7 +92,7 @@ function CohortRow({ cohort, sessions }) {
 
   return (
     <TableRow>
-      <TableCell sx={{ ...toneSx, minWidth: 120 }}>
+      <TableCell sx={{ ...toneSx, ...STICKY_SCREEN_SX, minWidth: 120 }}>
         <Box component="span" sx={{ display: 'block', fontWeight: 600 }}>{cohort.name}</Box>
         {captions.map((caption) => (
           <Typography key={caption} variant="caption" component="span" sx={{ display: 'block', color: 'text.secondary' }}>{caption}</Typography>
@@ -117,7 +119,7 @@ function OriginSection({ section, cohorts, sessions }) {
             <caption>{`${sessions}-session windows`}</caption>
             <TableHead>
               <TableRow>
-                <TableCell>Screen</TableCell>
+                <TableCell sx={STICKY_SCREEN_SX}>Screen</TableCell>
                 <TableCell>Sample</TableCell>
                 {STAT_COLUMNS.map((column) => <TableCell key={column.label} align="right">{column.label}</TableCell>)}
               </TableRow>
