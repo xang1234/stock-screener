@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   allPendingScoreboardFixture,
+  liveClosedAtFiveScoreboardFixture,
   nullBenchmarkScoreboardFixture,
+  pendingArtifactScoreboardFixture,
+  preFixOnlyScoreboardFixture,
   scoreboardFixture,
 } from '../../test/fixtures/scoreboardFixtures';
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -22,13 +25,16 @@ const manifest = {
   default_market: 'US',
   generation: 'g1',
   data_root: 'g/g1/',
-  supported_markets: ['US', 'HK', 'JP', 'AU'],
+  supported_markets: ['US', 'HK', 'JP', 'AU', 'TW', 'CN', 'DE'],
   unavailable_markets: [],
   markets: {
     US: { display_name: 'United States', assets: { scoreboard: { path: 'markets/us/scoreboard.json' } } },
     HK: { display_name: 'Hong Kong', assets: { scoreboard: { path: 'markets/hk/scoreboard.json' } } },
     JP: { display_name: 'Japan', assets: {} },
     AU: { display_name: 'Australia', assets: { scoreboard: { path: 'markets/au/scoreboard.json' } } },
+    TW: { display_name: 'Taiwan', assets: { scoreboard: { path: 'markets/tw/scoreboard.json' } } },
+    CN: { display_name: 'China', assets: { scoreboard: { path: 'markets/cn/scoreboard.json' } } },
+    DE: { display_name: 'Germany', assets: { scoreboard: { path: 'markets/de/scoreboard.json' } } },
   },
 };
 
@@ -37,6 +43,9 @@ const STATIC_FILES = {
   '/static-data/g/g1/markets/us/scoreboard.json': scoreboardFixture,
   '/static-data/g/g1/markets/hk/scoreboard.json': allPendingScoreboardFixture,
   '/static-data/g/g1/markets/au/scoreboard.json': nullBenchmarkScoreboardFixture,
+  '/static-data/g/g1/markets/tw/scoreboard.json': preFixOnlyScoreboardFixture,
+  '/static-data/g/g1/markets/cn/scoreboard.json': pendingArtifactScoreboardFixture,
+  '/static-data/g/g1/markets/de/scoreboard.json': liveClosedAtFiveScoreboardFixture,
 };
 
 const respondWith = (body) => (body
@@ -59,6 +68,12 @@ const openSection = (title) => {
   const toggle = sectionToggle(title);
   if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
 };
+const pressedHorizon = () => within(screen.getByRole('group', { name: 'Horizon' }))
+  .getByRole('button', { pressed: true }).textContent;
+const switchMarket = async (name) => {
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Static market selector' }));
+  fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
+};
 
 describe('StaticScoreboardPage', () => {
   beforeEach(() => {
@@ -75,7 +90,7 @@ describe('StaticScoreboardPage', () => {
     const live = (await screen.findByText('Recorded live')).closest('section');
 
     const row = rowFor(live, 'Minervini');
-    expect(row).toHaveTextContent('0 closed · 0 dates · 357 pending · oldest 2 of 20 sessions');
+    expect(row).toHaveTextContent('0 closed · 0 dates · 357 pending · oldest 2 of 5 sessions');
     expect(row).not.toHaveTextContent('%');
     expect(within(row).getAllByText('-')).toHaveLength(4);
     expect(row).not.toHaveTextContent('Small sample');
@@ -110,21 +125,20 @@ describe('StaticScoreboardPage', () => {
     openSection(PRE_FIX_TITLE);
     const section = sectionFor(PRE_FIX_TITLE);
 
-    expect(rowFor(section, 'VCP')).toHaveTextContent('26 closed · 6 dates, effective 4.8 · 300 pending · 294 overlapping');
-    expect(rowFor(section, 'VCP')).toHaveTextContent('-2.3%');
-
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
-
     expect(rowFor(section, 'VCP')).toHaveTextContent('540 closed · 13 dates, effective 9.0 · 0 pending · 80 overlapping');
     expect(rowFor(section, 'VCP')).toHaveTextContent('+0.4%');
-    expect(rowFor(section, 'VCP')).not.toHaveTextContent('-2.3%');
+
+    fireEvent.click(screen.getByRole('button', { name: '20 sessions' }));
+
+    expect(rowFor(section, 'VCP')).toHaveTextContent('26 closed · 6 dates, effective 4.8 · 300 pending · 294 overlapping');
+    expect(rowFor(section, 'VCP')).toHaveTextContent('-2.3%');
+    expect(rowFor(section, 'VCP')).not.toHaveTextContent('+0.4%');
   });
 
   it('renders the sample cell and the median, positive, beat and excess numbers at 5 sessions', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
     openSection(ARTIFACT_TITLE);
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
 
     const row = rowFor(sectionFor(ARTIFACT_TITLE), 'Minervini');
     expect(within(row).getAllByRole('cell')[1].textContent)
@@ -159,34 +173,94 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
     openSection(PRE_FIX_TITLE);
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
 
     expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).toHaveTextContent('540 closed');
     expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).not.toHaveTextContent('excess on');
   });
 
-  it('opens the recovered section first while nothing recorded live has closed', async () => {
+  it('opens the artifact section at 5 sessions when that is the only horizon it has closed', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
 
     expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'true');
     expect(sectionToggle(PRE_FIX_TITLE)).toHaveAttribute('aria-expanded', 'false');
+    expect(pressedHorizon()).toBe('5 sessions');
+    const row = rowFor(sectionFor(ARTIFACT_TITLE), 'Minervini');
+    expect(row).toBeVisible();
+    expect(within(row).getAllByRole('cell').slice(2).map((cell) => cell.textContent))
+      .toEqual(['+0.9%', '57%', '48%', '+0.1%']);
+    expect(within(sectionFor(ARTIFACT_TITLE)).queryByText(/Nothing here is a result/)).not.toBeInTheDocument();
   });
 
-  it('keeps the recovered section closed once a live window has closed', async () => {
-    const withLiveResults = {
-      ...scoreboardFixture,
-      cohorts: scoreboardFixture.cohorts.map((cohort) => (cohort.origin === 'live'
-        ? { ...cohort, horizons: cohort.horizons.map((horizon) => ({ ...horizon, sample_size: 30 })) }
-        : cohort)),
-    };
-    vi.stubGlobal('fetch', vi.fn(async (url) => respondWith(
-      url.endsWith('markets/us/scoreboard.json') ? withLiveResults : STATIC_FILES[url],
-    )));
-    renderRoute('/scoreboard');
-    await screen.findByText('Recorded live');
+  it('opens the pre-fix section of a market with only pre-fix days, at 20 sessions when one closed', async () => {
+    renderRoute('/scoreboard?market=TW');
+    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE });
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(pressedHorizon()).toBe('20 sessions');
+    const row = rowFor(sectionFor(PRE_FIX_TITLE), 'VCP');
+    expect(row).toBeVisible();
+    expect(row).toHaveTextContent('26 closed · 6 dates, effective 4.8 · 300 pending · 294 overlapping');
+  });
+
+  it('passes over an artifact section with nothing closed and opens the pre-fix section at 5 sessions', async () => {
+    renderRoute('/scoreboard?market=CN');
+    const toggle = await screen.findByRole('button', { name: PRE_FIX_TITLE });
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'false');
+    expect(pressedHorizon()).toBe('5 sessions');
+    expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).toHaveTextContent('90 closed · 4 dates, effective 3.6 · 0 pending');
+  });
+
+  it('opens nothing and shows 5 sessions when live has closed only at 5', async () => {
+    renderRoute('/scoreboard?market=DE');
+    const live = (await screen.findByText('Recorded live')).closest('section');
 
     expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'false');
+    expect(sectionToggle(PRE_FIX_TITLE)).toHaveAttribute('aria-expanded', 'false');
+    expect(pressedHorizon()).toBe('5 sessions');
+    expect(rowFor(live, 'Minervini')).toHaveTextContent('42 closed · 6 dates, effective 5.2 · 18 pending');
+    expect(within(live).queryByText(/Nothing here is a result/)).not.toBeInTheDocument();
+  });
+
+  it('keeps 20 sessions and the note when every window is pending', async () => {
+    renderRoute('/scoreboard?market=HK');
+    const live = (await screen.findByText('Recorded live')).closest('section');
+
+    expect(pressedHorizon()).toBe('20 sessions');
+    expect(within(live).getByRole('table', { name: '20-session windows' })).toBeInTheDocument();
+    expect(within(live).getByText(ALL_PENDING)).toBeInTheDocument();
+  });
+
+  it('keeps a picked horizon across a market change', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+    fireEvent.click(screen.getByRole('button', { name: '60 sessions' }));
+    expect(pressedHorizon()).toBe('60 sessions');
+
+    await switchMarket('Taiwan');
+    await screen.findByRole('button', { name: PRE_FIX_TITLE });
+
+    expect(pressedHorizon()).toBe('60 sessions');
+    expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).toHaveTextContent('0 closed · 0 dates · 326 pending · oldest 22 of 60 sessions');
+  });
+
+  it('works out the default again when a market changes, including back to one already loaded', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+    expect(pressedHorizon()).toBe('5 sessions');
+
+    await switchMarket('Taiwan');
+    const preFix = await screen.findByRole('button', { name: PRE_FIX_TITLE });
+    expect(preFix).toHaveAttribute('aria-expanded', 'true');
+    expect(pressedHorizon()).toBe('20 sessions');
+
+    await switchMarket('United States');
+    await screen.findByRole('button', { name: ARTIFACT_TITLE });
+    expect(pressedHorizon()).toBe('5 sessions');
+    expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'true');
+    expect(sectionToggle(PRE_FIX_TITLE)).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('says Few dates, not Small sample, when many closed windows sit on few dates', async () => {
@@ -195,10 +269,10 @@ describe('StaticScoreboardPage', () => {
     openSection(PRE_FIX_TITLE);
     const section = sectionFor(PRE_FIX_TITLE);
 
+    expect(rowFor(section, 'VCP')).not.toHaveTextContent('Few dates');
+    fireEvent.click(screen.getByRole('button', { name: '20 sessions' }));
     expect(rowFor(section, 'VCP')).toHaveTextContent('Few dates');
     expect(rowFor(section, 'VCP')).not.toHaveTextContent('Small sample');
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
-    expect(rowFor(section, 'VCP')).not.toHaveTextContent('Few dates');
   });
 
   it('names the horizon in the table caption and marks the pressed picker button', async () => {
@@ -206,14 +280,14 @@ describe('StaticScoreboardPage', () => {
     const live = (await screen.findByText('Recorded live')).closest('section');
     const picker = screen.getByRole('group', { name: 'Horizon' });
 
-    expect(within(live).getByRole('table', { name: '20-session windows' })).toBeInTheDocument();
-    expect(within(picker).getByRole('button', { name: '20 sessions' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(live).getByRole('table', { name: '5-session windows' })).toBeInTheDocument();
+    expect(within(picker).getByRole('button', { name: '5 sessions' })).toHaveAttribute('aria-pressed', 'true');
 
     fireEvent.click(within(picker).getByRole('button', { name: '60 sessions' }));
 
     expect(within(live).getByRole('table', { name: '60-session windows' })).toBeInTheDocument();
     expect(within(picker).getByRole('button', { name: '60 sessions' })).toHaveAttribute('aria-pressed', 'true');
-    expect(within(picker).getByRole('button', { name: '20 sessions' })).toHaveAttribute('aria-pressed', 'false');
+    expect(within(picker).getByRole('button', { name: '5 sessions' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('puts the section heading around the accordion button, not inside it', async () => {
@@ -229,7 +303,6 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
     openSection(ARTIFACT_TITLE);
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
     const section = sectionFor(ARTIFACT_TITLE);
 
     const thin = rowFor(section, 'CANSLIM');
@@ -251,7 +324,6 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
     openSection(ARTIFACT_TITLE);
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
 
     const names = within(sectionFor(ARTIFACT_TITLE)).getAllByRole('row').slice(1)
       .map((row) => within(row).getAllByRole('cell')[0].textContent);
@@ -262,10 +334,10 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
 
+    expect(within(sectionFor(ARTIFACT_TITLE)).queryByText(/Nothing here is a result/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '20 sessions' }));
     expect(within(sectionFor(ARTIFACT_TITLE)).getByText('No 20-session window has closed yet. Nothing here is a result.'))
       .toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
-    expect(within(sectionFor(ARTIFACT_TITLE)).queryByText(/Nothing here is a result/)).not.toBeInTheDocument();
   });
 
   it('states the method, ledger range and missing sessions in the header', async () => {
@@ -299,7 +371,6 @@ describe('StaticScoreboardPage', () => {
 
     expect(screen.getByText('Returns are price only, in local currency, with no costs.')).toBeInTheDocument();
     const row = rowFor(live, 'CANSLIM');
-    fireEvent.click(screen.getByRole('button', { name: '5 sessions' }));
     expect(within(row).getAllByRole('cell')[1].textContent)
       .toBe('64 closed · 11 dates, effective 7.3 · 0 pending · excess on 0');
     expect(within(row).getAllByRole('cell').slice(2).map((cell) => cell.textContent))

@@ -25,8 +25,6 @@ import { useStaticMarket } from '../StaticMarketContext';
 import { resolveStaticMarketEntry, useStaticManifest, useStaticScoreboard } from '../dataClient';
 
 const HORIZONS = [5, 20, 60];
-const DEFAULT_HORIZON = 20;
-
 const ORIGIN_SECTIONS = [
   { origin: 'live', title: 'Recorded live', collapsed: false },
   {
@@ -110,9 +108,17 @@ function CohortRow({ cohort, sessions }) {
   );
 }
 
-const hasLiveResult = (cohorts) => cohorts.some(
-  (cohort) => cohort.origin === 'live' && cohort.horizons.some((horizon) => horizon.sample_size > 0),
-);
+const hasClosedWindow = (cohort) => cohort.horizons.some((horizon) => horizon.sample_size > 0);
+
+const defaultView = (cohorts) => {
+  const closedIn = (origin) => cohorts.some((cohort) => cohort.origin === origin && hasClosedWindow(cohort));
+  const openOrigin = closedIn('live')
+    ? null
+    : ORIGIN_SECTIONS.find((section) => section.collapsed && closedIn(section.origin))?.origin;
+  const visible = cohorts.filter((cohort) => cohort.origin === 'live' || cohort.origin === openOrigin);
+  const onlyShorterClosed = visible.some(hasClosedWindow) && !visible.some((cohort) => horizonOf(cohort, 20).sample_size > 0);
+  return { openOrigin, sessions: onlyShorterClosed ? 5 : 20 };
+};
 
 function OriginSection({ section, cohorts, sessions, defaultExpanded }) {
   const note = noResultNote(cohorts, sessions);
@@ -169,7 +175,7 @@ export default function StaticScoreboardPage() {
   const { selectedMarket } = useStaticMarket();
   const marketEntry = resolveStaticMarketEntry(manifestQuery.data, selectedMarket);
   const scoreboardQuery = useStaticScoreboard(marketEntry);
-  const [sessions, setSessions] = useState(DEFAULT_HORIZON);
+  const [pickedSessions, setPickedSessions] = useState(null);
   const scoreboard = scoreboardQuery.data;
 
   if (manifestQuery.isLoading || scoreboardQuery.isLoading) {
@@ -178,6 +184,9 @@ export default function StaticScoreboardPage() {
   if (scoreboardQuery.isError || !scoreboard) {
     return <Alert severity="info">The scoreboard is not available for {marketEntry.market} in this snapshot.</Alert>;
   }
+
+  const { openOrigin, sessions: defaultSessions } = defaultView(scoreboard.cohorts);
+  const sessions = pickedSessions ?? defaultSessions;
 
   return (
     <Stack spacing={1.5}>
@@ -208,18 +217,19 @@ export default function StaticScoreboardPage() {
         exclusive
         size="small"
         value={sessions}
-        onChange={(_, next) => next && setSessions(next)}
+        onChange={(_, next) => next && setPickedSessions(next)}
         aria-label="Horizon"
       >
         {HORIZONS.map((horizon) => <ToggleButton key={horizon} value={horizon}>{horizon} sessions</ToggleButton>)}
       </ToggleButtonGroup>
       {ORIGIN_SECTIONS.map((section) => (
         <OriginSection
-          key={section.origin}
+          // A market already loaded skips the spinner, and an Accordion reads defaultExpanded only on mount.
+          key={`${marketEntry.market}-${section.origin}`}
           section={section}
           cohorts={scoreboard.cohorts.filter((cohort) => cohort.origin === section.origin)}
           sessions={sessions}
-          defaultExpanded={section.origin === 'artifact' && !hasLiveResult(scoreboard.cohorts)}
+          defaultExpanded={section.origin === openOrigin}
         />
       ))}
     </Stack>

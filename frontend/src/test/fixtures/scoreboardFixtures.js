@@ -157,6 +157,57 @@ export const scoreboardFixture = {
   ],
 };
 
+const liveClosedAtFiveCohort = {
+  ...liveAllPendingCohort,
+  events: 60,
+  signal_dates: 8,
+  horizons: [
+    horizon(5, closed(42, 6, 5.2, 0.6, 0.55, 1.2, 0.3, pending(18, 3))),
+    horizon(20, pending(60, 12)),
+    horizon(60, pending(60, 12)),
+  ],
+};
+
+const artifactAllPendingCohort = {
+  ...artifactClosedCohort,
+  events: 70,
+  signal_dates: 3,
+  horizons: [
+    horizon(5, pending(70, 3)),
+    horizon(20, pending(70, 3)),
+    horizon(60, pending(70, 3)),
+  ],
+};
+
+const preStageFixClosedAtFiveCohort = {
+  ...preStageFixCohort,
+  horizons: [
+    horizon(5, closed(90, 4, 3.6, 0.5, 0.45, 0.7, 0.1)),
+    horizon(20, pending(90, 18)),
+    horizon(60, pending(90, 18)),
+  ],
+};
+
+export const preFixOnlyScoreboardFixture = {
+  ...scoreboardFixture,
+  market: 'TW',
+  benchmark: '0050.TW',
+  recording_since: '2026-10-05',
+  ledger_through: '2026-10-08',
+  cohorts: [preStageFixCohort],
+};
+
+export const pendingArtifactScoreboardFixture = {
+  ...scoreboardFixture,
+  market: 'CN',
+  cohorts: [artifactAllPendingCohort, preStageFixClosedAtFiveCohort],
+};
+
+export const liveClosedAtFiveScoreboardFixture = {
+  ...scoreboardFixture,
+  cohorts: [liveClosedAtFiveCohort, artifactClosedCohort, preStageFixCohort],
+};
+
 export const allPendingScoreboardFixture = {
   ...scoreboardFixture,
   market: 'HK',
