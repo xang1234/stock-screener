@@ -81,8 +81,11 @@ def tradingview_symbol(row: dict[str, Any], market: str) -> str | None:
 
 
 def _display_width(text: str) -> int:
-    # JP, CN and KR company names are double-width in a terminal.
-    return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
+    # JP, CN and KR company names are double-width in a terminal; combining marks take no column.
+    return sum(
+        0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in "WF" else 1
+        for char in text
+    )
 
 
 def _cell(row: dict[str, Any], field: str, template: str) -> str:
@@ -91,6 +94,8 @@ def _cell(row: dict[str, Any], field: str, template: str) -> str:
         text = "-" if value is None else template.format(value)
     except (TypeError, ValueError):
         text = str(value)
+    # Category C, not str.isprintable: names can hold an ideographic space, which isprintable rejects.
+    text = "".join(" " if unicodedata.category(char).startswith("C") else char for char in text)
     while _display_width(text) > MAX_CELL_WIDTH:
         text = text[:-1]
     return text

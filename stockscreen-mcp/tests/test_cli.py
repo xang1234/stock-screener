@@ -142,6 +142,36 @@ def test_a_value_of_an_unexpected_type_prints_as_itself(use_fake_data, capsys):
     )
 
 
+def test_control_characters_in_a_name_cannot_reach_the_terminal(use_fake_data, capsys):
+    set_rows(use_fake_data, "US", [passing("AAA", company_name="Al\x1b[31mpha\nCo", current_price=1.0, price_change_1d=1.0)])
+
+    assert cli.main(["screen", "minervini"]) == 0
+
+    assert capsys.readouterr().out == (
+        "SYMBOL  NAME           PRICE  RS  STAGE      1D  GROUP\n"
+        "AAA     Al [31mpha Co   1.00  95      2  +1.00%  -\n"
+    )
+
+
+def test_an_ideographic_space_stays_in_a_name(use_fake_data, capsys):
+    set_rows(use_fake_data, "HK", [passing("0001.HK", company_name="A\u3000B", current_price=1.0, price_change_1d=1.0)])
+
+    assert cli.main(["screen", "minervini", "--market", "HK"]) == 0
+
+    assert "A\u3000B" in capsys.readouterr().out
+
+
+def test_combining_marks_take_no_column(use_fake_data, capsys):
+    set_rows(use_fake_data, "US", [passing("AAA", company_name="Cafe\u0301", current_price=1.0, price_change_1d=1.0)])
+
+    assert cli.main(["screen", "minervini"]) == 0
+
+    assert capsys.readouterr().out == (
+        "SYMBOL  NAME  PRICE  RS  STAGE      1D  GROUP\n"
+        "AAA     Cafe\u0301   1.00  95      2  +1.00%  -\n"
+    )
+
+
 def test_names_a_legacy_windows_stdout_cannot_encode_do_not_crash(use_fake_data, monkeypatch):
     set_rows(use_fake_data, "HK", [passing("0001.HK", company_name="華", current_price=1.0, price_change_1d=1.0)])
     stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
@@ -544,8 +574,14 @@ def test_a_reader_that_leaves_early_is_not_a_traceback(tmp_path, arguments):
         text=True, encoding="utf-8", env=_env(tmp_path.as_uri()),
     )
     process.stdout.close()
-    stderr = process.stderr.read()
-    process.stderr.close()
+    watchdog = threading.Timer(60, process.kill)
+    watchdog.start()
+    try:
+        stderr = process.stderr.read()
+        process.stderr.close()
+        returncode = process.wait()
+    finally:
+        watchdog.cancel()
 
-    assert process.wait(timeout=60) == 0
+    assert returncode == 0
     assert stderr == "US data as of 2026-10-09\n"

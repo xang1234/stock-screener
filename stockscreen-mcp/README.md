@@ -29,7 +29,7 @@ uvx stockscreen-mcp screen minervini --tradingview        # save a TradingView w
 - Symbols are derived from the published listing data and not checked against TradingView, so a few may not import.
 - Malaysia and Beijing listings are skipped and listed on stderr, because they have no TradingView symbol this tool can derive.
 - `--limit` sets how many rows the table shows, and `--json` prints those rows as JSON.
-- The data date, the row count and any warnings go to stderr, so stdout stays clean for pipes.
+- The data date and any warnings go to stderr, as does the table's row count, so stdout stays clean for pipes. `--json` carries the count in its `total` field.
 
 ## What you can ask
 
