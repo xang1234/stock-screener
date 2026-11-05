@@ -43,7 +43,7 @@ SCOREBOARD_SECTIONS = (
     ("live", "Recorded live"),
     ("artifact", "Recovered from retained build artifacts, not recorded live"),
     ("artifact_pre_stage_fix",
-     "Recovered from retained build artifacts, not recorded live, from before the 2026-10-22 Stage calculation fix"),
+     "Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)"),
 )
 CSS = """\
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px;margin:0 auto;padding:16px;color:#1b1f24;line-height:1.5}
@@ -128,7 +128,7 @@ def plural(count: int, noun: str) -> str:
 
 
 def scoreboard_horizon(cohort: dict[str, Any], sessions: int) -> dict[str, Any]:
-    return next(h for h in cohort["horizons"] if h["horizon_sessions"] == sessions)
+    return {h["horizon_sessions"]: h for h in cohort["horizons"]}[sessions]
 
 
 def scoreboard_cell(cohort: dict[str, Any], sessions: int) -> str:
@@ -137,12 +137,19 @@ def scoreboard_cell(cohort: dict[str, Any], sessions: int) -> str:
         return "<td>no picks</td>"
     h = scoreboard_horizon(cohort, sessions)
     if h["sample_size"] == 0:
-        verdict = "pending"
+        verdict = "pending" if h["pending_windows"] else "no closed windows"
     elif h["thin"]:
         verdict = "too few"
     else:
         verdict = f"{signed(h['median_return_pct'])} median"
-    counts = f"{h['sample_size']:,} closed · {plural(h['signal_dates'], 'date')} · {h['pending_windows']:,} pending"
+    dates = plural(h["signal_dates"], "date")
+    counts = " · ".join(filter(None, (
+        f"{h['sample_size']:,} closed",
+        f"{dates}, effective {h['effective_dates']:.1f}" if h["sample_size"] else dates,
+        f"{h['pending_windows']:,} pending",
+        h["skipped_missing_history"] and f"{h['skipped_missing_history']:,} no price",
+        h["suppressed_overlapping"] and f"{h['suppressed_overlapping']:,} overlapping",
+    )))
     return f"<td>{esc(verdict)}<br><span class=muted>{esc(counts)}</span></td>"
 
 
@@ -200,6 +207,14 @@ def load_market(data_root: Path, entry: dict[str, Any]) -> dict[str, Any]:
     def read(page: str) -> Any:
         return read_file(entry.get("pages", {}).get(page, {}).get("path"))
 
+    def read_scoreboard() -> Any:
+        rel = entry.get("assets", {}).get("scoreboard", {}).get("path")
+        try:
+            return read_file(rel)
+        except ValueError as exc:
+            print(f"::warning::{rel} cannot be parsed, skipping its page: {exc!r}")
+            return None
+
     scan = read("scan") or {}
     rows = {r["symbol"]: r for r in scan.get("initial_rows", [])}
     for chunk in scan.get("chunks", []):
@@ -207,7 +222,42 @@ def load_market(data_root: Path, entry: dict[str, Any]) -> dict[str, Any]:
             rows[r["symbol"]] = r
     return {"scan": scan, "rows": list(rows.values()), "home": read("home") or {},
             "groups": read("groups"), "breadth": read("breadth"),
-            "scoreboard": read_file(entry.get("assets", {}).get("scoreboard", {}).get("path"))}
+            "scoreboard": read_scoreboard()}
+
+
+def render_scoreboard(site: Site, code: str, name: str, scoreboard: dict[str, Any],
+                      crumbs: list[tuple[str, str]]) -> tuple[str, str, str]:
+    cohorts = scoreboard["cohorts"]
+    board_as_of = scoreboard["as_of_date"]
+    at_20 = [scoreboard_horizon(c, 20) for c in cohorts]
+    closed = sum(h["sample_size"] for h in at_20)
+    pending = sum(h["pending_windows"] for h in at_20)
+    picks = plural(closed + pending, "pick")
+    sections = "".join(
+        scoreboard_section(title, members)
+        for origin, title in SCOREBOARD_SECTIONS
+        if (members := [c for c in cohorts if c["origin"] == origin]) or origin == "live")
+    benchmark = scoreboard["benchmark"]
+    rules = ("Entry is the first open after publication. Exit is the close of the Nth session.",
+             "A pick is a stock newly entering the screen. Stocks already on the list on the first recorded day are not counted.",
+             "Returns are price only, in local currency, with no costs." + (f" Excess is against {benchmark}." if benchmark else ""),
+             "Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.",
+             "Funds that match a screen are included.",
+             "A stock counts once per screen until its window ends. A repeat that enters earlier is left out.",
+             "Effective dates count each date by how many picks it holds, so one busy day counts as about one.",
+             "Stocks that later delist drop out as no price, which can flatter results.")
+    scored_since = scoreboard["scored_since"]
+    scored = (f"Scored since {esc(scored_since)} · " if scored_since and scored_since != scoreboard["recording_since"] else "")
+    site.write(("scoreboard", code.lower()), board_as_of, f"{name} scoreboard – how preset screen picks moved afterward ({board_as_of})",
+               f"{name} preset screens tracked after publication: {plural(len({c['preset'] for c in cohorts}), 'screen')}, "
+               f"{picks}, {plural(closed, 'window')} closed and {pending:,} pending at 20 sessions, as of {board_as_of}.",
+               f"<h1>{esc(name)} scoreboard</h1><p class=muted>As of {esc(board_as_of)} · "
+               f"Recording since {esc(scoreboard['recording_since'])} · {scored}Ledger through {esc(scoreboard['ledger_through'])} · "
+               f"{plural(scoreboard['missing_sessions'], 'missing session')}</p>"
+               "<ul>" + "".join(f"<li>{esc(rule)}</li>" for rule in rules) + f"</ul>{sections}"
+               f'<a class=cta href="{esc(f"{site.base}#/scoreboard?market={code}")}">Open the interactive scoreboard</a>',
+               crumbs)
+    return "Scoreboard", site.href("scoreboard", code.lower()), f"{picks} tracked"
 
 
 def render_market(site: Site, code: str, entry: dict[str, Any], data: dict[str, Any]) -> list[str]:
@@ -339,32 +389,11 @@ def render_market(site: Site, code: str, entry: dict[str, Any], data: dict[str, 
                    home_crumbs)
         links.append(("Market breadth", site.href("breadth", m), "4% movers, T2108"))
 
-    scoreboard = data["scoreboard"]
-    if scoreboard:
-        cohorts = scoreboard["cohorts"]
-        board_as_of = scoreboard["as_of_date"]
-        picks = sum(c["events"] for c in cohorts)
-        at_20 = [scoreboard_horizon(c, 20) for c in cohorts]
-        sections = "".join(
-            scoreboard_section(title, members)
-            for origin, title in SCOREBOARD_SECTIONS
-            if (members := [c for c in cohorts if c["origin"] == origin]) or origin == "live")
-        rules = ("Entry is the first open after publication. Exit is the close of the Nth session.",
-                 f"Returns are price only, in local currency, with no costs. Excess is against {scoreboard['benchmark']}.",
-                 "Funds that match a screen are included.",
-                 "A stock counts once per screen until its window ends. A repeat that enters earlier is left out.",
-                 "Stocks that later delist drop out as no price, which can flatter results.")
-        site.write(("scoreboard", m), board_as_of, f"{name} scoreboard – how preset screen picks moved afterward ({board_as_of})",
-                   f"{name} preset screens tracked after publication: {plural(len({c['preset'] for c in cohorts}), 'screen')}, "
-                   f"{plural(picks, 'pick')}, {plural(sum(h['sample_size'] for h in at_20), 'window')} closed and "
-                   f"{sum(h['pending_windows'] for h in at_20):,} pending at 20 sessions, as of {board_as_of}.",
-                   f"<h1>{esc(name)} scoreboard</h1><p class=muted>As of {esc(board_as_of)} · "
-                   f"Recording since {esc(scoreboard['recording_since'])} · Ledger through {esc(scoreboard['ledger_through'])} · "
-                   f"{plural(scoreboard['missing_sessions'], 'missing session')}</p>"
-                   "<ul>" + "".join(f"<li>{esc(rule)}</li>" for rule in rules) + f"</ul>{sections}"
-                   f'<a class=cta href="{esc(f"{site.base}#/scoreboard?market={code}")}">Open the interactive scoreboard</a>',
-                   home_crumbs)
-        links.append(("Scoreboard", site.href("scoreboard", m), f"{plural(picks, 'pick')} tracked"))
+    if data["scoreboard"] is not None:
+        try:
+            links.append(render_scoreboard(site, code, name, data["scoreboard"], home_crumbs))
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"::warning::{code} scoreboard.json has the wrong shape, skipping its page: {exc!r}")
 
     exposure = data["home"].get("market_health_exposure") or {}
     health = (f"<p>Market exposure {num(exposure.get('exposure_score'), 0)}/100 · {esc(exposure.get('stance'))} · "

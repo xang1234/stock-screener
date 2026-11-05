@@ -54,9 +54,9 @@ CUP = {
 
 def horizon(sessions, **fields):
     base = {
-        "horizon_sessions": sessions, "sample_size": 0, "signal_dates": 0, "pending_windows": 0,
-        "oldest_open_sessions": None, "thin": True, "positive_rate": None, "avg_return_pct": None,
-        "median_return_pct": None, "avg_excess_return_pct": None, "median_excess_return_pct": None,
+        "horizon_sessions": sessions, "sample_size": 0, "signal_dates": 0, "effective_dates": 0.0, "pending_windows": 0,
+        "oldest_open_sessions": None, "thin": True, "positive_rate": None, "beat_benchmark_rate": None,
+        "median_return_pct": None, "median_excess_return_pct": None,
         "excess_sample_size": 0, "skipped_missing_history": 0, "suppressed_overlapping": 0,
     }
     base.update(fields)
@@ -72,22 +72,28 @@ def cohort(preset, name, origin, events, horizons, retired=False):
 SCOREBOARD = {
     "schema_version": "static-scoreboard-v1", "market": "US", "as_of_date": "2026-11-04",
     "generated_at": "2026-11-05T02:15:22Z", "benchmark": "SPY", "recording_since": "2026-10-05",
-    "ledger_through": "2026-11-04", "missing_sessions": 2,
+    "scored_since": "2026-10-05", "ledger_through": "2026-11-04", "missing_sessions": 2,
     "cohorts": [
         cohort("minervini", "Minervini", "live", 357,
                [horizon(5, pending_windows=357), horizon(20, pending_windows=357), horizon(60, pending_windows=357)]),
         cohort("new_highs", "<New> Highs", "live", 0, [horizon(5), horizon(20), horizon(60)]),
+        cohort("vcp", "VCP", "live", 9, [
+            horizon(5, skipped_missing_history=3, suppressed_overlapping=6), horizon(20), horizon(60)]),
         cohort("minervini", "Minervini", "artifact", 1441, [
-            horizon(5, sample_size=1298, signal_dates=6, pending_windows=40, thin=False, positive_rate=0.57,
-                    avg_return_pct=1.42, median_return_pct=0.86, median_excess_return_pct=0.12),
+            horizon(5, sample_size=1298, signal_dates=6, effective_dates=5.4, pending_windows=40, thin=False,
+                    positive_rate=0.57, beat_benchmark_rate=0.48, median_return_pct=0.86, median_excess_return_pct=0.12,
+                    excess_sample_size=1298, suppressed_overlapping=100),
             horizon(20, pending_windows=1341), horizon(60, pending_windows=1341)]),
         cohort("canslim", "CANSLIM", "artifact", 14, [
-            horizon(5, sample_size=12, signal_dates=2, pending_windows=2, positive_rate=0.5,
-                    avg_return_pct=-0.74, median_return_pct=-0.31, median_excess_return_pct=-0.95),
+            horizon(5, sample_size=12, signal_dates=2, effective_dates=1.9, pending_windows=2, positive_rate=0.5,
+                    beat_benchmark_rate=0.25, median_return_pct=-0.31, median_excess_return_pct=-0.95,
+                    excess_sample_size=12),
             horizon(20, pending_windows=14), horizon(60, pending_windows=14)]),
         cohort("old_breakout", "Old Breakout", "artifact_pre_stage_fix", 8, [
-            horizon(5, sample_size=8, signal_dates=2, positive_rate=0.6, avg_return_pct=2.05, median_return_pct=1.5),
-            horizon(20, pending_windows=8), horizon(60, pending_windows=8)], retired=True),
+            horizon(5, sample_size=8, signal_dates=2, effective_dates=2.0, positive_rate=0.6, median_return_pct=1.5),
+            horizon(20, sample_size=3, signal_dates=1, effective_dates=1.0, pending_windows=5, positive_rate=0.6,
+                    median_return_pct=1.5),
+            horizon(60, pending_windows=8)], retired=True),
     ],
 }
 
@@ -213,7 +219,7 @@ def test_scoreboard_cells_say_too_few_pending_and_none_rather_than_a_number(dist
     html = page(dist, "scoreboard/us")
     live = "Recorded live"
     artifact = "Recovered from retained build artifacts, not recorded live"
-    pre_fix = f"{artifact}, from before the 2026-10-22 Stage calculation fix"
+    pre_fix = f"{artifact}, from before the Stage calculation fix (#671)"
 
     pending_row = scoreboard_row(html, live, "Minervini")
     assert "pending" in pending_row and "357 pending" in pending_row and "%" not in pending_row
@@ -223,13 +229,23 @@ def test_scoreboard_cells_say_too_few_pending_and_none_rather_than_a_number(dist
     assert "no picks" in zero_match_row and "pending" not in zero_match_row and "%" not in zero_match_row
 
     closed_row = scoreboard_row(html, artifact, "Minervini")
-    assert "+0.9% median" in closed_row and "1,298 closed · 6 dates · 40 pending" in closed_row
+    assert "+0.9% median" in closed_row
+    assert "1,298 closed · 6 dates, effective 5.4 · 40 pending · 100 overlapping" in closed_row
 
     thin_row = scoreboard_row(html, artifact, "CANSLIM")
-    assert "too few" in thin_row and "12 closed · 2 dates · 2 pending" in thin_row and "%" not in thin_row
+    assert "too few" in thin_row and "12 closed · 2 dates, effective 1.9 · 2 pending" in thin_row and "%" not in thin_row
 
     retired_row = scoreboard_row(html, pre_fix, "Old Breakout")
     assert "Retired" in retired_row and "too few" in retired_row
+
+
+def test_scoreboard_zero_sample_with_nothing_pending_is_not_called_pending(dist):
+    render(dist)
+    cells = scoreboard_row(page(dist, "scoreboard/us"), "Recorded live", "VCP").split("</td>")
+    no_closed_cell = cells[1]
+
+    assert no_closed_cell == ("<td>no closed windows<br><span class=muted>0 closed · 0 dates · 0 pending · "
+                              "3 no price · 6 overlapping</span>")
 
 
 def test_scoreboard_page_states_its_method_and_ledger(dist):
@@ -240,17 +256,69 @@ def test_scoreboard_page_states_its_method_and_ledger(dist):
     assert "Excess is against SPY." in html
     assert "Stocks that later delist drop out as no price, which can flatter results." in html
     assert "/stock-screener/#/scoreboard?market=US" in html
+    assert "A pick is a stock newly entering the screen. Stocks already on the list on the first recorded day are not counted." in html
+    assert "Effective dates count each date by how many picks it holds, so one busy day counts as about one." in html
+    assert "Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect." in html
+    assert "Scored since" not in html
 
 
 def test_scoreboard_meta_description_holds_counts_never_returns(dist):
     render(dist)
     html = page(dist, "scoreboard/us")
     description = html.split('<meta name="description" content="', 1)[1].split('"', 1)[0]
-    assert description == ("United States preset screens tracked after publication: 4 screens, 1,820 picks, "
-                           "0 windows closed and 1,720 pending at 20 sessions, as of 2026-11-04.")
+    assert description == ("United States preset screens tracked after publication: 5 screens, 1,720 picks, "
+                           "3 windows closed and 1,717 pending at 20 sessions, as of 2026-11-04.")
     title = html.split("<title>", 1)[1].split("</title>", 1)[0]
     for text in (description, title):
         assert "%" not in text and "+" not in text
+
+
+def test_scoreboard_picks_tracked_count_closed_plus_pending(dist):
+    render(dist)
+    assert "1,720 picks tracked" in page(dist, "markets/us")
+
+
+def advertise_au_scoreboard(dist, content):
+    manifest_path = dist / "static-data/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["markets"]["AU"]["assets"] = {"scoreboard": {"path": "markets/au/scoreboard.json"}}
+    manifest_path.write_text(json.dumps(manifest))
+    write(dist, "g/1/markets/au/scoreboard.json", content)
+
+
+def test_scoreboard_with_no_benchmark_prints_no_benchmark_sentence(dist):
+    advertise_au_scoreboard(dist, {**SCOREBOARD, "market": "AU", "benchmark": None})
+    render(dist)
+    html = page(dist, "scoreboard/au")
+
+    assert "<li>Returns are price only, in local currency, with no costs.</li>" in html
+    assert "against" not in html and "None" not in html and "null" not in html
+
+
+def test_scoreboard_shows_scored_since_when_it_differs_from_recording_since(dist):
+    advertise_au_scoreboard(dist, {**SCOREBOARD, "recording_since": "2025-06-02", "scored_since": "2025-11-04"})
+    render(dist)
+
+    assert "Recording since 2025-06-02 · Scored since 2025-11-04 · Ledger through 2026-11-04" in page(dist, "scoreboard/au")
+
+
+@pytest.mark.parametrize("content", [
+    '{"cohorts": "not a list"}',
+    "[]",
+    "{}",
+    "{not json",
+    json.dumps({**SCOREBOARD, "cohorts": [{**SCOREBOARD["cohorts"][0], "horizons": []}]}),
+], ids=["cohorts-string", "list", "empty-object", "unparseable", "no-horizons"])
+def test_broken_scoreboard_skips_only_that_page_with_a_warning(dist, capsys, content):
+    (dist / "static-data/g/1/markets/us/scoreboard.json").write_text(content)
+    advertise_au_scoreboard(dist, {**SCOREBOARD, "market": "AU"})
+    render(dist)
+
+    assert not (dist / "scoreboard/us").exists()
+    assert "/stock-screener/scoreboard/us/" not in page(dist, "markets/us")
+    assert (dist / "stocks/us/AAA/index.html").exists()
+    assert "1,720 picks tracked" in page(dist, "markets/au")
+    assert "::warning::" in capsys.readouterr().out
 
 
 def test_market_without_scoreboard_asset_has_no_page_or_link(dist):
