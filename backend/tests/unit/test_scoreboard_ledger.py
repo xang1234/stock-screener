@@ -268,6 +268,53 @@ def test_seed_refuses_an_input_directory_with_no_market_files(tmp_path, capsys, 
     assert not output.exists()
 
 
+SEEDED_LIVE_LINE = (
+    '{"as_of_date":"2026-11-02","published_at":"2026-11-03T01:00:00Z","origin":"live",'
+    '"presets":{"minervini":{"definition":"241a0f65f493c25e","symbols":["AAPL"]}}}'
+)
+
+
+def test_seed_merge_keeps_every_existing_line_and_only_fills_gaps(tmp_path) -> None:
+    source = tmp_path / "input"
+    write_seed_input(
+        source,
+        "US",
+        [
+            seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["NVDA"]),
+            seed_record("2026-11-02", "2026-11-03T02:00:00Z", ["CAPTURED_LATER"]),
+        ],
+    )
+    current = tmp_path / "current"
+    current.mkdir()
+    for market in ledger.MARKETS:
+        write_gz(current / asset_name(market), "")
+    write_gz(current / asset_name("US"), SEEDED_LIVE_LINE + "\n")
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing", "--merge-with", str(current)]) == 0
+
+    lines = ledger.read_lines(output / asset_name("US"), "US")
+    assert len(lines) == 2
+    assert ledger.parse_line(lines[0]).presets["minervini"].symbols == ("NVDA",)
+    assert lines[1] == SEEDED_LIVE_LINE
+
+
+@pytest.mark.parametrize("damage", ["absent", "corrupt"])
+def test_seed_merge_refuses_a_ledger_it_cannot_read_rather_than_clobber_it(tmp_path, capsys, damage) -> None:
+    source = tmp_path / "input"
+    write_seed_input(source, "US", [seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["NVDA"])])
+    current = tmp_path / "current"
+    current.mkdir()
+    if damage == "corrupt":
+        write_gz(current / asset_name("US"), "not json\n")
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing", "--merge-with", str(current)]) == 1
+
+    assert f"US --merge-with ledger is {damage}" in capsys.readouterr().out
+    assert not (output / asset_name("US")).exists()
+
+
 def test_seed_refuses_a_record_from_another_market(tmp_path, capsys) -> None:
     source = tmp_path / "input"
     write_seed_input(source, "US", [seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["0700.HK"], market="HK")])

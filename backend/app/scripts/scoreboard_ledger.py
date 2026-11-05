@@ -288,9 +288,16 @@ def cmd_seed(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     for market, source in sources.items():
         records = read_jsonl_gz(source) if source.exists() else []
-        days = seed_days(records, market)
+        lines = {as_of: canonical_line(day) for as_of, day in seed_days(records, market).items()}
+        if args.merge_with:
+            current = read_asset(args.merge_with / asset_name(market), market)
+            if current.state is not AssetState.VALID:
+                raise LedgerError(f"{market} --merge-with ledger is {current.state.value}")
+            # An existing line wins, so a re-seed can only fill gaps and the
+            # .previous check still passes.
+            lines.update(zip(current.days, current.lines))
         target = args.output / asset_name(market)
-        write_ledger(target, [canonical_line(days[day]) for day in sorted(days)])
+        write_ledger(target, [lines[as_of] for as_of in sorted(lines)])
         written = load_ledger(target, market)
         print(f"{market}: {len(written)} days from {len(records)} records, {target.stat().st_size} bytes")
     return 0
@@ -623,6 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     seed.add_argument("--input", required=True, type=Path)
     seed.add_argument("--output", required=True, type=Path)
     seed.add_argument("--allow-missing", action="store_true", help="Start a market with no input file empty")
+    seed.add_argument("--merge-with", type=Path, help="Keep every line of the ledgers in this directory")
     seed.set_defaults(run=cmd_seed)
 
     verify = commands.add_parser("verify", help="Parse one market's ledger assets strictly")
