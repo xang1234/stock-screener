@@ -145,9 +145,17 @@ def test_another_markets_file_is_corrupt(tmp_path) -> None:
     assert list(ledger.load_ledger(path, "HK")) == [date(2026, 10, 5)]
 
 
-def test_the_stage_fix_date_splits_artifact_origins() -> None:
-    assert ledger.artifact_origin(date(2026, 10, 21)) is Origin.ARTIFACT_PRE_STAGE_FIX
-    assert ledger.artifact_origin(date(2026, 10, 22)) is Origin.ARTIFACT
+@pytest.mark.parametrize(
+    ("created_at", "expected"),
+    [
+        pytest.param("2026-10-21T15:50:00Z", Origin.ARTIFACT_PRE_STAGE_FIX, id="asian-10-21-before-the-merge"),
+        pytest.param("2026-10-21T23:05:11Z", Origin.ARTIFACT_PRE_STAGE_FIX, id="second-before-the-merge"),
+        pytest.param("2026-10-21T23:05:12Z", Origin.ARTIFACT, id="at-the-merge"),
+        pytest.param("2026-10-22T00:46:39Z", Origin.ARTIFACT, id="us-10-21-after-the-merge"),
+    ],
+)
+def test_the_stage_fix_merge_time_splits_artifact_origins(created_at, expected) -> None:
+    assert ledger.artifact_origin(ledger.parse_timestamp(created_at)) is expected
 
 
 def seed_record(as_of: str, created_at: str, symbols: list[str], *, market: str = "US") -> dict:
@@ -198,6 +206,21 @@ def test_seed_keeps_the_first_artifact_per_date_and_stamps_origin_and_publicatio
         },
     )
     assert days[date(2026, 10, 22)].origin is Origin.ARTIFACT
+
+
+def test_seed_dates_the_same_session_by_when_each_market_built_it(tmp_path) -> None:
+    source = tmp_path / "input"
+    write_seed_input(source, "US", [seed_record("2026-10-21", "2026-10-22T00:46:39Z", ["NVDA"])])
+    write_seed_input(source, "JP", [seed_record("2026-10-21", "2026-10-21T15:50:00Z", ["7203.T"], market="JP")])
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output)]) == 0
+
+    assert ledger.load_ledger(output / asset_name("US"), "US")[date(2026, 10, 21)].origin is Origin.ARTIFACT
+    assert (
+        ledger.load_ledger(output / asset_name("JP"), "JP")[date(2026, 10, 21)].origin
+        is Origin.ARTIFACT_PRE_STAGE_FIX
+    )
 
 
 def test_seed_writes_an_empty_ledger_for_a_market_with_no_records(tmp_path) -> None:
@@ -852,6 +875,18 @@ def test_recover_labels_a_day_before_the_stage_fix(tmp_path, release) -> None:
     assert ledger.main(["recover", "--market", "US", "--date", "2026-10-20"]) == 0
 
     assert ledger.parse_line(release.asset_lines(US)[0]).origin is Origin.ARTIFACT_PRE_STAGE_FIX
+
+
+def test_recover_labels_a_day_built_after_the_stage_fix_merge_whatever_its_session(tmp_path, release) -> None:
+    release.create(**{US: ""})
+    write_artifact(release, tmp_path, 10, "2026-10-21")
+    (release.state / "artifacts.json").write_text(
+        json.dumps([{"artifacts": artifact_listing([(10, "2026-10-22T00:46:39Z", "main")])}])
+    )
+
+    assert ledger.main(["recover", "--market", "US", "--date", "2026-10-21"]) == 0
+
+    assert ledger.parse_line(release.asset_lines(US)[0]).origin is Origin.ARTIFACT
 
 
 def test_recover_leaves_a_date_the_ledger_holds_alone(tmp_path, release, capsys) -> None:

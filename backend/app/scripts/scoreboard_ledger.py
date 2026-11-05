@@ -41,16 +41,15 @@ class Origin(str, Enum):
     ARTIFACT_PRE_STAGE_FIX = "artifact_pre_stage_fix"
 
 
-# Newest era first. A retained artifact's created_at only approximates publication,
-# so a day read from one is never live. The first row at or before the date wins.
-ARTIFACT_ERAS = (
-    (date(2026, 10, 22), Origin.ARTIFACT),  # stage fix, #671
-    (date.min, Origin.ARTIFACT_PRE_STAGE_FIX),
-)
+STAGE_FIX_MERGED_AT = datetime(2026, 10, 21, 23, 5, 12, tzinfo=timezone.utc)  # #671
 
 
-def artifact_origin(as_of_date: date) -> Origin:
-    return next(origin for start, origin in ARTIFACT_ERAS if as_of_date >= start)
+def artifact_origin(created_at: datetime) -> Origin:
+    """A retained artifact's created_at only approximates publication, so a day read
+    from one is never live. The era follows the build, not the session: US 10-21 was
+    built after the merge and Asian markets' 10-21 before it.
+    """
+    return Origin.ARTIFACT if created_at >= STAGE_FIX_MERGED_AT else Origin.ARTIFACT_PRE_STAGE_FIX
 
 
 @dataclass(frozen=True)
@@ -258,10 +257,11 @@ def seed_days(records: list[dict[str, Any]], market: str) -> dict[date, LedgerDa
                 raise LedgerCorrupt(f"{market} input holds a {record['market']} record")
             as_of_date = date.fromisoformat(record["as_of_date"])
             if as_of_date not in days:
+                created_at = parse_timestamp(record["created_at"])
                 days[as_of_date] = LedgerDay(
                     as_of_date=as_of_date,
-                    published_at=parse_timestamp(record["created_at"]),
-                    origin=artifact_origin(as_of_date),
+                    published_at=created_at,
+                    origin=artifact_origin(created_at),
                     presets=_preset_matches(record["presets"]),
                 )
     except (KeyError, TypeError, ValueError) as exc:
@@ -518,11 +518,11 @@ def artifact_day(zip_path: Path, market: str, created_at: str, work: Path) -> Le
         archive.extractall(market_dir, members=wanted)
     entry = json.loads((market_dir / "manifest.market.json").read_text(encoding="utf-8"))["entry"]
     data = load_market(work, entry)
-    as_of_date = date.fromisoformat(data["scan"]["as_of_date"])
+    published_at = parse_timestamp(created_at)
     return LedgerDay(
-        as_of_date=as_of_date,
-        published_at=parse_timestamp(created_at),
-        origin=artifact_origin(as_of_date),
+        as_of_date=date.fromisoformat(data["scan"]["as_of_date"]),
+        published_at=published_at,
+        origin=artifact_origin(published_at),
         presets=match_presets(data["scan"], data["rows"], evaluate_expression),
     )
 
