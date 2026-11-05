@@ -66,7 +66,13 @@ gh workflow run scoreboard-ledger-recover.yml -f market=US -f date=2026-11-04
 gh run list --workflow scoreboard-ledger-recover.yml --limit 1
 ```
 
-While the run is pending, a newer pending publish can replace it. Check that it ran, and dispatch again if it was cancelled.
+The recover and the publisher share one concurrency group, and each new pending run replaces the one already pending, in both directions:
+
+- Dispatch a recover only when no publish is queued, because the recover would replace it.
+- Wait for each recover to finish before dispatching the next, because a second recover replaces a first one that is still pending. This includes the "every later day, oldest first" step in [Repair a corrupt canonical](#repair-a-corrupt-canonical).
+- If a recover did replace a publish, run `gh workflow run static-site-publish.yml` after the recover finishes. The publisher has no schedule, so nothing else starts it again.
+
+A newer pending publish can also replace a pending recover. Check that each recover ran, and dispatch it again if it was cancelled.
 
 The day gets `origin: artifact` (`artifact_pre_stage_fix` if the artifact was built before 2026-10-21T23:05:12Z, the merge of #671) and `published_at` set to the artifact's `created_at`, never `live`. `recover` inserts it by date and uploads `.previous` first, as `record` does. A date the ledger already holds uploads nothing. Each candidate artifact is a separate download, about 33 MB for US.
 
@@ -113,7 +119,7 @@ A local write needs `--i-paused-publishing` instead of `--dry-run`. Pass it only
    gh release upload scoreboard-ledger-data /tmp/ledger-repair/scoreboard-ledger-us-v1.jsonl.gz --clobber
    ```
 
-5. `.previous` is one recorded day behind the lost canonical. [Recover](#recover-a-lost-day) that day and every later day in the lag, oldest first.
+5. `.previous` is one recorded day behind the lost canonical. [Recover](#recover-a-lost-day) that day and every later day in the lag, oldest first, waiting for each run to finish before dispatching the next.
 
 If `.previous` is also corrupt or absent, the market's scoreboard stays omitted and `record-ledger` stays red. It never starts a fresh ledger, because that would erase history that cannot be rebuilt. Rebuild from a capture with `seed`, or from your own copy, and upload that file.
 

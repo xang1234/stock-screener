@@ -1142,6 +1142,17 @@ def test_recover_shares_the_production_publishers_concurrency_group() -> None:
     assert "'static-site-publisher'" in concurrency["group"]
 
 
+def test_runbook_tells_an_operator_how_a_recover_and_a_publish_can_replace_each_other() -> None:
+    # A pending run replaces another in this group and nothing reschedules a
+    # replaced publish, so the runbook's three steps are the only protection.
+    assert "schedule" not in _publish_workflow()[True]
+    runbook = (ROOT / "docs" / "runbooks" / "scoreboard-ledger.md").read_text(encoding="utf-8")
+    assert "Dispatch a recover only when no publish is queued" in runbook
+    assert "Wait for each recover to finish before dispatching the next" in runbook
+    assert "oldest first, waiting for each run to finish before dispatching the next" in runbook
+    assert "run `gh workflow run static-site-publish.yml` after the recover finishes" in runbook
+
+
 def test_recover_is_dispatch_only_for_one_market_and_date() -> None:
     # PyYAML reads the bare ``on`` key as True.
     triggers = _recover_workflow()[True]
