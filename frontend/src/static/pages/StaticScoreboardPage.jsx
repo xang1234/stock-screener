@@ -120,7 +120,19 @@ const defaultView = (cohorts) => {
   return { openOrigin, sessions: onlyShorterClosed ? 5 : 20 };
 };
 
-function OriginSection({ section, cohorts, sessions, defaultExpanded }) {
+// Accordion reads id and aria-controls off the props of its first child to build the panel, so that child
+// has to accept them and pass them on to the button rather than be the h2 itself.
+function AccordionHeading({ title, ...toggleProps }) {
+  return (
+    <Box component="h2" sx={{ m: 0 }}>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />} {...toggleProps}>
+        <Typography component="span" variant="subtitle1" sx={{ fontWeight: 600 }}>{title}</Typography>
+      </AccordionSummary>
+    </Box>
+  );
+}
+
+function OriginSection({ market, section, cohorts, sessions, defaultExpanded }) {
   const note = noResultNote(cohorts, sessions);
   const body = (
     <Stack spacing={1}>
@@ -159,11 +171,11 @@ function OriginSection({ section, cohorts, sessions, defaultExpanded }) {
   return (
     <Box component="section">
       <Accordion defaultExpanded={defaultExpanded} disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
-        <Box component="h2" sx={{ m: 0 }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography component="span" variant="subtitle1" sx={{ fontWeight: 600 }}>{section.title}</Typography>
-          </AccordionSummary>
-        </Box>
+        <AccordionHeading
+          title={section.title}
+          id={`scoreboard-${market}-${section.origin}-toggle`}
+          aria-controls={`scoreboard-${market}-${section.origin}-panel`}
+        />
         <AccordionDetails sx={{ p: 1.5 }}>{body}</AccordionDetails>
       </Accordion>
     </Box>
@@ -226,6 +238,7 @@ export default function StaticScoreboardPage() {
         <OriginSection
           // A market already loaded skips the spinner, and an Accordion reads defaultExpanded only on mount.
           key={`${marketEntry.market}-${section.origin}`}
+          market={marketEntry.market}
           section={section}
           cohorts={scoreboard.cohorts.filter((cohort) => cohort.origin === section.origin)}
           sessions={sessions}
