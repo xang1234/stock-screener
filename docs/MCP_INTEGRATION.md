@@ -12,7 +12,7 @@ The MCP server exposes 8 tools:
 |------|-------------|
 | `market_overview` | Current market state snapshot (breadth, sentiment, key indices) |
 | `compare_feature_runs` | Diff two published feature runs to identify biggest movers |
-| `find_candidates` | Query stocks with opinionated filters |
+| `find_candidates` | Query stocks with opinionated filters; a `market` argument selects that market's published run ([details](MCP_MARKET_SELECTION.md)) |
 | `explain_symbol` | Explain a stock's rating (brief or full depth) |
 | `watchlist_snapshot` | Summary of a named watchlist with current data |
 | `theme_state` | Inspect theme rankings, momentum, and lifecycle |
