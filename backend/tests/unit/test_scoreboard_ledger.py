@@ -1240,3 +1240,23 @@ def test_recover_goes_red_on_an_artifact_with_zero_presets(tmp_path, release, ca
 
     assert "US 2026-10-23 has zero presets" in capsys.readouterr().out
     assert release.uploads() == []
+
+
+def test_recover_runs_without_site_packages_as_its_workflow_does(tmp_path, release) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    write_artifact(release, tmp_path, 10, "2026-10-23")
+    (release.state / "artifacts.json").write_text(
+        json.dumps([{"artifacts": artifact_listing([(10, "2026-10-24T01:00:00Z", "main")])}])
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "app.scripts.scoreboard_ledger", "recover", "--market", "US", "--date", "2026-10-23", "--i-paused-publishing"],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert release.uploads() == [US_PREVIOUS, US]
+    assert ledger.parse_line(release.asset_lines(US)[0]).as_of_date == date(2026, 10, 23)
