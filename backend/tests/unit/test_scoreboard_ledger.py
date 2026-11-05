@@ -937,7 +937,45 @@ def test_extract_keeps_good_markets_when_one_is_damaged(tmp_path, capsys) -> Non
     assert ledger.main(["extract", "--site-dir", str(site), "--output", str(output)]) == 1
 
     assert "::warning::HK matches not extracted" in capsys.readouterr().out
-    assert sorted(path.name for path in output.iterdir()) == ["US.json"]
+    assert sorted(path.name for path in output.iterdir()) == ["HK.failed", "US.json"]
+    assert "JSONDecodeError" in (output / "HK.failed").read_text()
+
+
+def test_record_finishes_other_markets_then_goes_red_on_a_failure_marker(tmp_path, release, capsys) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-03")
+    (days / "HK.failed").write_text("JSONDecodeError('Expecting value')")
+
+    assert record(days) == 1
+
+    assert "::error::HK: matches were not extracted: JSONDecodeError('Expecting value')" in capsys.readouterr().out
+    assert release.uploads() == [US_PREVIOUS, US]
+    assert len(release.asset_lines(US)) == 2
+
+
+def test_only_failure_markers_name_the_market_rather_than_no_days(tmp_path, release, capsys) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    days = tmp_path / "days"
+    days.mkdir()
+    (days / "US.failed").write_text("KeyError('rows')")
+
+    assert record(days) == 1
+
+    output = capsys.readouterr().out
+    assert "::error::US: matches were not extracted: KeyError('rows')" in output
+    assert "No extracted days" not in output
+    assert release.uploads() == []
+
+
+def test_a_failure_marker_is_silent_before_the_release_exists(tmp_path, release, capsys) -> None:
+    days = tmp_path / "days"
+    days.mkdir()
+    (days / "US.failed").write_text("KeyError('rows')")
+
+    assert record(days) == 0
+
+    assert "does not exist" in capsys.readouterr().out
 
 
 def test_an_extracted_day_records_as_live(tmp_path, release) -> None:

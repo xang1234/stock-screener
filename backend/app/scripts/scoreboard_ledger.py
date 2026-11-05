@@ -416,11 +416,12 @@ def cmd_record(args: argparse.Namespace) -> int:
         print(f"::warning::Release {RELEASE_TAG} does not exist: the ledger is not initialized yet.", flush=True)
         return 0
     paths = sorted(args.days_dir.glob("*.json"))
-    if not paths:
+    markers = sorted(args.days_dir.glob("*.failed"))
+    if not paths and not markers:
         print(f"::error::No extracted days in {args.days_dir}.", flush=True)
         return 1
     published_at = datetime.now(timezone.utc)
-    failed = False
+    failed = bool(markers)
     for path in paths:
         try:
             market, day = read_day_file(path, published_at)
@@ -429,6 +430,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         except LedgerError as exc:
             print(f"::error::{path.stem}: {exc}", flush=True)
             failed = True
+    for marker in markers:
+        print(f"::error::{marker.stem}: matches were not extracted: {marker.read_text(encoding='utf-8')}", flush=True)
     return 1 if failed else 0
 
 
@@ -476,6 +479,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             as_of_date = data["scan"]["as_of_date"]
         except (OSError, KeyError, TypeError, ValueError) as exc:
             print(f"::warning::{market} matches not extracted: {exc!r}", flush=True)
+            (args.output / f"{market}.failed").write_text(repr(exc), encoding="utf-8")
             failed = True
             continue
         payload = {
