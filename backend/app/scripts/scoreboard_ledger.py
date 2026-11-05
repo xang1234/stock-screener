@@ -226,18 +226,29 @@ def read_asset(path: Path, market: str) -> AssetRead:
         return AssetRead(path, AssetState.CORRUPT, [], {})
 
 
-def read_assets(directory: Path, market: str) -> dict[Slot, AssetRead]:
-    return {slot: read_asset(directory / asset_name(market, slot), market) for slot in Slot}
-
-
-def sources_for(assets: dict[Slot, AssetRead]) -> LedgerSources:
-    return LEDGER_POLICY[(assets[Slot.CANONICAL].state, assets[Slot.PREVIOUS].state)]
-
-
 def lost_lines(assets: dict[Slot, AssetRead]) -> int:
     """How many lines of a valid .previous a usable canonical no longer holds, byte for byte."""
     canonical, previous = assets[Slot.CANONICAL], assets[Slot.PREVIOUS]
     return len(set(previous.lines) - set(canonical.lines)) if canonical.state is AssetState.VALID else 0
+
+
+def _lost_history(market: str, lost: int) -> str:
+    return f"{market} canonical lost {lost} line(s) that .previous holds; see {RUNBOOK}"
+
+
+def read_assets(directory: Path, market: str) -> dict[Slot, AssetRead]:
+    assets = {slot: read_asset(directory / asset_name(market, slot), market) for slot in Slot}
+    if lost := lost_lines(assets):
+        print(f"::warning::{_lost_history(market, lost)}", flush=True)
+    return assets
+
+
+def sources_for(assets: dict[Slot, AssetRead]) -> LedgerSources:
+    # Canonical parses, but it no longer holds what was published, so it scores and
+    # rotates no better than a corrupt file. Rotating would also overwrite the only
+    # copy that still shows the loss.
+    canonical = AssetState.CORRUPT if lost_lines(assets) else assets[Slot.CANONICAL].state
+    return LEDGER_POLICY[(canonical, assets[Slot.PREVIOUS].state)]
 
 
 def load_for_build(directory: Path, market: str) -> dict[date, LedgerDay] | None:
@@ -378,11 +389,10 @@ def advance(
     assets = read_assets(work, market)
     writer = sources_for(assets).writer
     if writer is None:
+        if lost := lost_lines(assets):
+            raise LedgerCorrupt(_lost_history(market, lost))
         states = {slot.value: asset.state.value for slot, asset in assets.items()}
         raise LedgerError(f"{market} ledger has no usable base {states}; see {RUNBOOK}")
-    # Rotating would overwrite the only copy that still shows the loss.
-    if lost := lost_lines(assets):
-        raise LedgerCorrupt(f"{market} canonical lost {lost} line(s) that .previous holds; see {RUNBOOK}")
     base = assets[writer]
     if not is_new(day.as_of_date, base.days):
         print(f"{market}: {day.as_of_date} is not new, nothing to upload", flush=True)
@@ -611,9 +621,6 @@ def _report_assets(directory: Path, market: str) -> int:
         print(f"{market} {slot.value}: {asset.state.value}, {len(asset.days)} days, through {through}")
     writer = sources_for(assets).writer
     print(f"{market} record job appends to: {writer.value if writer else 'nothing, it stops red'}")
-    if lost := lost_lines(assets):
-        print(f"{market} canonical lost {lost} line(s) that .previous holds, so the record job stops red")
-        return 1
     return 0 if writer is Slot.CANONICAL else 1
 
 

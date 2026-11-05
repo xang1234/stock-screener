@@ -816,6 +816,22 @@ def test_a_corrupt_canonical_falls_back_to_previous(tmp_path, db, calendar) -> N
     assert json.loads((market_dir / "scoreboard.json").read_text())["ledger_through"] == "2026-10-05"
 
 
+def test_a_day_lost_from_canonical_cannot_change_the_published_result(tmp_path, db, calendar, capsys) -> None:
+    first = ledger_day(date(2026, 10, 5), "2026-10-06T01:00:00Z", {"minervini": (DEF_A, [])})
+    lost = ledger_day(date(2026, 10, 6), "2026-10-07T01:00:00Z", {"minervini": (DEF_A, ["X"])})
+    later = ledger_day(date(2026, 10, 7), "2026-10-08T01:00:00Z", {"minervini": (DEF_A, ["X"])})
+    add_bars(db, calendar, "X", date(2026, 10, 5), date(2026, 10, 30), closes={date(2026, 10, 13): 200.0})
+    market_dir = write_artifact(tmp_path / "artifacts", as_of="2026-10-30")
+    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[first, later], previous=[first, lost])
+
+    assert run_write(market_dir, ledger_dir, db, calendar) is True
+
+    board = json.loads((market_dir / "scoreboard.json").read_text())
+    assert board["ledger_through"] == "2026-10-06"
+    assert horizon(board["cohorts"][0], 5)["median_return_pct"] == 100.0
+    assert "::warning::US canonical lost 1 line(s) that .previous holds" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     "assets",
     [

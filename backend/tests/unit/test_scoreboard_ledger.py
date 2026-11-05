@@ -346,12 +346,14 @@ def test_seed_refuses_truncated_input(tmp_path, capsys) -> None:
         ("corrupt", "good", 1, "US record job appends to: nothing, it stops red"),
         ("corrupt", None, 1, "US record job appends to: nothing, it stops red"),
         (None, None, 1, "US record job appends to: nothing, it stops red"),
+        ("good", "lost", 1, "US record job appends to: nothing, it stops red"),
+        ("good", "lost", 1, "::warning::US canonical lost 1 line(s) that .previous holds"),
     ],
 )
 def test_verify_reports_the_state_and_exits_nonzero_unless_canonical_is_usable(
     tmp_path, capsys, canonical, previous, expected_exit, expected_line
 ) -> None:
-    contents = {"good": day_line("2026-10-05") + "\n", "corrupt": "not json\n"}
+    contents = {"good": day_line("2026-10-05") + "\n", "corrupt": "not json\n", "lost": day_line("2026-10-02") + "\n"}
     if canonical:
         write_gz(tmp_path / asset_name("US"), contents[canonical])
     if previous:
@@ -365,7 +367,9 @@ def test_verify_reports_the_state_and_exits_nonzero_unless_canonical_is_usable(
 @pytest.mark.parametrize(
     ("canonical", "previous", "expected_dates"),
     [
-        ("2026-10-06", "2026-10-05", [date(2026, 10, 6)]),
+        (["2026-10-05", "2026-10-06"], "2026-10-05", [date(2026, 10, 5), date(2026, 10, 6)]),
+        (["2026-10-06"], None, [date(2026, 10, 6)]),
+        (["2026-10-06"], "corrupt", [date(2026, 10, 6)]),
         (None, "2026-10-05", [date(2026, 10, 5)]),
         ("corrupt", "2026-10-05", [date(2026, 10, 5)]),
         ("corrupt", None, None),
@@ -373,17 +377,57 @@ def test_verify_reports_the_state_and_exits_nonzero_unless_canonical_is_usable(
     ],
 )
 def test_the_market_build_reads_previous_only_when_canonical_is_unusable(
-    tmp_path, canonical, previous, expected_dates
+    tmp_path, capsys, canonical, previous, expected_dates
 ) -> None:
     if canonical:
-        text = "not json\n" if canonical == "corrupt" else day_line(canonical) + "\n"
+        text = "not json\n" if canonical == "corrupt" else "".join(f"{day_line(as_of)}\n" for as_of in canonical)
         write_gz(tmp_path / asset_name("US"), text)
     if previous:
-        write_gz(tmp_path / asset_name("US", Slot.PREVIOUS), day_line(previous) + "\n")
+        text = "not json\n" if previous == "corrupt" else day_line(previous) + "\n"
+        write_gz(tmp_path / asset_name("US", Slot.PREVIOUS), text)
 
     days = ledger.load_for_build(tmp_path, "US")
 
     assert (None if days is None else list(days)) == expected_dates
+    assert "lost" not in capsys.readouterr().out
+
+
+LIVE_DAY_1005 = LedgerDay(
+    as_of_date=date(2026, 10, 5),
+    published_at=datetime(2026, 11, 5, 1, 0, tzinfo=timezone.utc),
+    origin=Origin.LIVE,
+    presets={"minervini": PresetMatch(DEFINITION, ("AAPL",))},
+)
+LIVE_DAY_1006 = LedgerDay(
+    as_of_date=date(2026, 10, 6),
+    published_at=datetime(2026, 11, 5, 1, 0, tzinfo=timezone.utc),
+    origin=Origin.LIVE,
+    presets={"minervini": PresetMatch(DEFINITION, ("AAPL",))},
+)
+
+
+@pytest.mark.parametrize(
+    "canonical",
+    [
+        pytest.param([day_line("2026-10-05"), day_line("2026-10-07")], id="line-dropped"),
+        pytest.param(
+            [day_line("2026-10-05"), day_line("2026-10-06", published_at="2026-11-05T09:00:00Z")],
+            id="line-rewritten",
+        ),
+    ],
+)
+def test_the_market_build_scores_previous_when_canonical_lost_history(tmp_path, capsys, canonical) -> None:
+    write_gz(tmp_path / asset_name("US"), "".join(f"{line}\n" for line in canonical))
+    write_gz(
+        tmp_path / asset_name("US", Slot.PREVIOUS),
+        f"{day_line('2026-10-05')}\n{day_line('2026-10-06')}\n",
+    )
+
+    assert ledger.load_for_build(tmp_path, "US") == {
+        date(2026, 10, 5): LIVE_DAY_1005,
+        date(2026, 10, 6): LIVE_DAY_1006,
+    }
+    assert "::warning::US canonical lost 1 line(s) that .previous holds" in capsys.readouterr().out
 
 
 def test_module_imports_only_the_standard_library() -> None:

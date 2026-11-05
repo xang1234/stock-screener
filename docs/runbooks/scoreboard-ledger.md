@@ -125,9 +125,9 @@ If `.previous` is also corrupt or absent, the market's scoreboard stays omitted 
 
 ## Canonical lost a line
 
-`record-ledger` compares canonical with `.previous` before rotating. If a valid `.previous` holds a line canonical no longer holds byte for byte, something rewrote history. The job goes red for that market and uploads nothing, because rotating would overwrite the only copy that shows the loss. `verify` reports `canonical lost N line(s)` and exits 1.
+If a valid `.previous` holds a line canonical no longer holds byte for byte, something rewrote history, and canonical is treated as corrupt even though it parses. `record-ledger` goes red for that market and uploads nothing, because rotating would overwrite the only copy that shows the loss. Market builds warn and score `.previous`, so a day only canonical holds leaves the scoreboard until the repair. `verify` reports `canonical lost N line(s)` and exits 1.
 
-Find out what changed before fixing it, because market builds keep reading canonical in this state. If `.previous` is right, follow the [repair steps](#repair-a-corrupt-canonical) from step 2. If the rewrite was deliberate, such as a plain re-seed before you read [the warning](#re-seeding-after-live-days-exist), upload `.previous` again from a copy of the file you now trust so the two agree.
+Find out what changed before fixing it. If `.previous` is right, follow the [repair steps](#repair-a-corrupt-canonical) from step 2. If the rewrite was deliberate, such as a plain re-seed before you read [the warning](#re-seeding-after-live-days-exist), upload `.previous` again from a copy of the file you now trust so the two agree.
 
 ## What each state does
 
@@ -136,7 +136,7 @@ Find out what changed before fixing it, because market builds keep reading canon
 | Release does not exist | `::warning`, exit 0 | Omits the asset |
 | Canonical missing, `.previous` valid | Resumes from `.previous` | Uses `.previous` |
 | Canonical corrupt | Red, no upload for that market, other markets continue | Uses `.previous`, else omits the asset |
-| Canonical lost a line `.previous` holds | Red, no upload for that market, other markets continue | Uses canonical |
+| Canonical lost a line `.previous` holds | Red, no upload for that market, other markets continue | `::warning`, uses `.previous` |
 | `as_of_date` past the publish UTC date plus one day, or a day with zero presets | Red, no upload for that market, other markets continue | Unaffected |
 | Extraction failed for a market (`<market>.failed`) | Red after finishing the other markets | Unaffected |
 | Both assets absent in an existing release | Red, never starts fresh | Omits the asset |
