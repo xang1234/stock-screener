@@ -238,7 +238,7 @@ describe('StaticScoreboardPage', () => {
     expect(screen.getByText('Funds that match a screen are included.')).toBeInTheDocument();
     expect(screen.getByText('Stocks that later delist drop out as no price, which can flatter results.')).toBeInTheDocument();
     expect(screen.getByText(/A stock counts once per screen until its window ends/)).toBeInTheDocument();
-    expect(screen.getByText('A pick is a stock newly entering the screen. Stocks already on the list on the first recorded day are not counted.')).toBeInTheDocument();
+    expect(screen.getByText("A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.")).toBeInTheDocument();
     expect(screen.getByText('Effective dates count each date by how many picks it holds, so one busy day counts as about one.')).toBeInTheDocument();
     expect(screen.getByText('Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.')).toBeInTheDocument();
   });

@@ -186,7 +186,7 @@ export default function StaticScoreboardPage() {
         </Typography>
         <Box component="ul" sx={{ m: 0, pl: 2.5, typography: 'body2', color: 'text.secondary' }}>
           <li>Entry is the first open after publication. Exit is the close of the Nth session.</li>
-          <li>A pick is a stock newly entering the screen. Stocks already on the list on the first recorded day are not counted.</li>
+          <li>A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen&apos;s definition or the Stage calculation changed, are not counted.</li>
           <li>{`Returns are price only, in local currency, with no costs.${scoreboard.benchmark ? ` Excess is against ${scoreboard.benchmark}.` : ''}`}</li>
           <li>Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.</li>
           <li>Funds that match a screen are included.</li>
