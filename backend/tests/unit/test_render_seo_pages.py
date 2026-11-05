@@ -309,7 +309,9 @@ def test_scoreboard_shows_scored_since_when_it_differs_from_recording_since(dist
     "{}",
     "{not json",
     json.dumps({**SCOREBOARD, "cohorts": [{**SCOREBOARD["cohorts"][0], "horizons": []}]}),
-], ids=["cohorts-string", "list", "empty-object", "unparseable", "no-horizons"])
+    json.dumps({**SCOREBOARD, "cohorts": [{**SCOREBOARD["cohorts"][0], "horizons": [
+        horizon(5, sample_size="12"), horizon(20), horizon(60)]}]}),
+], ids=["cohorts-string", "list", "empty-object", "unparseable", "no-horizons", "sample-size-string"])
 def test_broken_scoreboard_skips_only_that_page_with_a_warning(dist, capsys, content):
     (dist / "static-data/g/1/markets/us/scoreboard.json").write_text(content)
     advertise_au_scoreboard(dist, {**SCOREBOARD, "market": "AU"})
