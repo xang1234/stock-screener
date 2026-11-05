@@ -154,6 +154,14 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
     }
 
 
+def _same_screen(before: LedgerDay, day: LedgerDay, preset: str) -> bool:
+    """Whether a preset's two days can be compared. If not, whatever changed the
+    screen moved stocks onto the list, and none of them is a pick.
+    """
+    crossed_stage_fix = before.origin is Origin.ARTIFACT_PRE_STAGE_FIX and day.origin is not before.origin
+    return not crossed_stage_fix and before.presets[preset].definition == day.presets[preset].definition
+
+
 def _scored_from(as_of_date: date) -> date:
     return as_of_date - timedelta(days=SCORED_WINDOW_DAYS)
 
@@ -179,11 +187,7 @@ def build_scoreboard(
     cohort_dates: dict[CohortKey, list[date]] = defaultdict(list)
     history: dict[str, list[tuple[CohortKey, date, date, str]]] = defaultdict(list)
     # The day just before the window shows what was already on each list when it opens.
-    last_matches = (
-        {preset: set(match.symbols) for preset, match in days[first_scored - 1].presets.items()}
-        if first_scored
-        else {}
-    )
+    last_day = dict.fromkeys(days[first_scored - 1].presets, days[first_scored - 1]) if first_scored else {}
     for day in scored:
         anchor = anchors[day.as_of_date]
         for preset, match in day.presets.items():
@@ -191,13 +195,13 @@ def build_scoreboard(
             cohort_dates[key].append(day.as_of_date)
             # A pick is a symbol entering the screen. On a preset's first day nothing
             # can be told apart from what was already on the list, so it yields none.
-            if preset in last_matches:
+            before = last_day.get(preset)
+            if before is not None and _same_screen(before, day, preset):
+                listed = set(before.presets[preset].symbols)
                 history[preset].extend(
-                    (key, day.as_of_date, anchor, symbol)
-                    for symbol in match.symbols
-                    if symbol not in last_matches[preset]
+                    (key, day.as_of_date, anchor, symbol) for symbol in match.symbols if symbol not in listed
                 )
-            last_matches[preset] = set(match.symbols)
+            last_day[preset] = day
 
     # A symbol's outcome depends only on its entry, so presets share one evaluation.
     unique = sorted({(symbol, anchor) for rows in history.values() for _, _, anchor, symbol in rows})

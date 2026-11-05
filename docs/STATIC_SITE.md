@@ -80,7 +80,7 @@ Three workflows touch the ledger:
 
 Returns follow these rules:
 
-- **A pick.** A pick is a symbol newly entering a preset: in that day's matches and not in the preset's matches on its previous ledger day. A preset's first ledger day is a baseline and yields none, so stocks already on the list on the first recorded day are not counted. A definition or era change is not a baseline.
+- **A pick.** A pick is a symbol newly entering a preset: in that day's matches and not in the preset's matches on its previous ledger day. A baseline day yields none. A preset's baselines are its first ledger day, a day whose `definition` differs from its previous ledger day's, and a day whose origin crosses from `artifact_pre_stage_fix` to anything else, because those changes move stocks onto the list without any stock newly qualifying. `artifact` to `live` is not a baseline, because that day's entrants are real.
 - **Window.** Only ledger days within 365 calendar days of `as_of_date` are scored, with the day before them as the baseline. `scored_since` is the first scored day and `recording_since` the ledger's first. Days stay in the ledger.
 - **Entry and exit.** Entry is the open of the first session that opens after publication. Exit is the close of the Nth session, for N of 5, 20 and 60. Returns are in local currency, price only, with no costs.
 - **Prices.** The builder reads `stock_prices` directly, capped at the export's `as_of_date`, so it cannot see a partial bar from a session in progress and cannot reach a provider. A recent IPO still scores, because there is no 50-bar minimum.

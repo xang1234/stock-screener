@@ -115,7 +115,7 @@ def as_ledger(*days: LedgerDay) -> dict[date, LedgerDay]:
 
 def after_baseline(*days: LedgerDay) -> dict[date, LedgerDay]:
     """``days`` after an empty first day, so each of their matches is a new entrant."""
-    presets = {preset: (match.definition, []) for day in days for preset, match in day.presets.items()}
+    presets = {preset: (match.definition, []) for day in reversed(days) for preset, match in day.presets.items()}
     return as_ledger(ledger_day(date(2026, 10, 2), "2026-10-03T02:00:00Z", presets, days[0].origin), *days)
 
 
@@ -329,7 +329,7 @@ def test_days_before_the_window_are_not_scored_and_the_last_of_them_is_the_basel
     add_bars(db, calendar, "OLDEST", date(2025, 10, 30), date(2025, 11, 17), closes={date(2025, 11, 10): 500.0})
     ledger = as_ledger(
         ledger_day(date(2025, 10, 30), "2025-10-31T02:00:00Z", {"minervini": (DEF_B, ["OLDEST"]), "old_screen": (DEF_B, ["OLDEST"])}),
-        ledger_day(date(2025, 10, 31), "2025-11-01T02:00:00Z", {"minervini": (DEF_B, ["STAYS"])}),
+        ledger_day(date(2025, 10, 31), "2025-11-01T02:00:00Z", {"minervini": (DEF_A, ["STAYS"])}),
         ledger_day(date(2025, 11, 3), "2025-11-04T02:00:00Z", {"minervini": (DEF_A, ["NEW", "STAYS"])}),
     )
 
@@ -376,37 +376,93 @@ def test_a_symbol_flipping_in_and_out_cannot_stack_windows(db, calendar) -> None
     assert (block["sample_size"], block["suppressed_overlapping"], block["signal_dates"]) == (2, 1, 2)
 
 
-def test_a_definition_change_is_no_new_baseline_and_does_not_reset_overlap(db, calendar) -> None:
-    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
-    add_bars(db, calendar, "STAYS", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+def test_a_definition_change_is_a_baseline_and_does_not_reset_overlap(db, calendar) -> None:
+    for symbol in ("AAPL", "STAYS", "FLOOD", "NEW", "OTHER"):
+        add_bars(db, calendar, symbol, date(2026, 10, 5), date(2026, 10, 23), close=110.0)
     ledger = after_baseline(
-        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "STAYS"])}),
-        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_B, ["STAYS"])}),
-        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_B, ["AAPL", "STAYS"])}),
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "STAYS"]), "canslim": (DEF_A, [])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_B, ["FLOOD", "STAYS"]), "canslim": (DEF_A, ["OTHER"])}),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_B, ["AAPL", "FLOOD", "NEW", "STAYS"]), "canslim": (DEF_A, ["OTHER"])}),
     )
 
-    cohorts = {cohort["definition"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 23))["cohorts"]}
+    payload = score(db, calendar, ledger, date(2026, 10, 23))
+    cohorts = {cohort["definition"]: cohort for cohort in payload["cohorts"] if cohort["preset"] == "minervini"}
 
     assert cohorts[DEF_A]["events"] == 2
     assert horizon(cohorts[DEF_A], 5)["sample_size"] == 2
-    assert cohorts[DEF_B]["events"] == 1
-    assert horizon(cohorts[DEF_B], 5)["sample_size"] == 0
+    assert cohorts[DEF_B]["events"] == 2
+    assert cohorts[DEF_B]["signal_dates"] == 1
+    assert (cohorts[DEF_B]["first_date"], cohorts[DEF_B]["last_date"]) == ("2026-10-06", "2026-10-07")
+    assert horizon(cohorts[DEF_B], 5)["sample_size"] == 1
     assert horizon(cohorts[DEF_B], 5)["suppressed_overlapping"] == 1
     assert horizon(cohorts[DEF_B], 5)["skipped_missing_history"] == 0
+    assert only_cohort(payload, "canslim")["events"] == 1
 
 
-def test_an_era_change_is_no_new_baseline_and_does_not_reset_overlap(db, calendar) -> None:
+@pytest.mark.parametrize("after_fix", [Origin.ARTIFACT, Origin.LIVE])
+def test_crossing_the_stage_fix_is_a_baseline_and_does_not_reset_overlap(db, calendar, after_fix) -> None:
+    for symbol in ("AAPL", "FLOOD", "NEW"):
+        add_bars(db, calendar, symbol, date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+    ledger = after_baseline(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, Origin.ARTIFACT_PRE_STAGE_FIX),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["FLOOD"])}, after_fix),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "FLOOD", "NEW"])}, after_fix),
+    )
+
+    cohorts = {cohort["origin"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 23))["cohorts"]}
+
+    assert cohorts["artifact_pre_stage_fix"]["events"] == 1
+    assert cohorts[after_fix.value]["events"] == 2
+    assert cohorts[after_fix.value]["first_date"] == "2026-10-06"
+    assert horizon(cohorts[after_fix.value], 5)["sample_size"] == 1
+    assert horizon(cohorts[after_fix.value], 5)["suppressed_overlapping"] == 1
+
+
+def test_crossing_the_stage_fix_is_judged_by_the_presets_own_last_day(db, calendar) -> None:
+    add_bars(db, calendar, "FLOOD", date(2026, 10, 5), date(2026, 10, 23))
+    ledger = as_ledger(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, []), "canslim": (DEF_A, [])}, Origin.ARTIFACT_PRE_STAGE_FIX),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"canslim": (DEF_A, [])}, Origin.ARTIFACT),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["FLOOD"]), "canslim": (DEF_A, ["FLOOD"])}, Origin.ARTIFACT),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 10, 23))
+
+    assert [(c["preset"], c["origin"], c["events"]) for c in payload["cohorts"]] == [
+        ("minervini", "artifact", 0),
+        ("minervini", "artifact_pre_stage_fix", 0),
+        ("canslim", "artifact", 1),
+        ("canslim", "artifact_pre_stage_fix", 0),
+    ]
+
+
+def test_the_day_before_the_window_with_another_definition_makes_the_first_scored_day_a_baseline(db, calendar) -> None:
+    add_bars(db, calendar, "NEW", date(2025, 10, 31), date(2025, 11, 17))
+    ledger = as_ledger(
+        ledger_day(date(2025, 10, 31), "2025-11-01T02:00:00Z", {"minervini": (DEF_B, [])}),
+        ledger_day(date(2025, 11, 3), "2025-11-04T02:00:00Z", {"minervini": (DEF_A, ["NEW"])}),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 11, 3))
+
+    assert only_cohort(payload)["events"] == 0
+
+
+def test_seed_to_live_keeps_its_entrants_and_does_not_reset_overlap(db, calendar) -> None:
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+    add_bars(db, calendar, "NEW", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
     ledger = after_baseline(
         ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, Origin.ARTIFACT),
         ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, [])}, Origin.ARTIFACT),
-        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, Origin.LIVE),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "NEW"])}, Origin.LIVE),
     )
 
     cohorts = {cohort["origin"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 23))["cohorts"]}
 
     assert horizon(cohorts["artifact"], 5)["sample_size"] == 1
-    assert (cohorts["live"]["events"], horizon(cohorts["live"], 5)["suppressed_overlapping"]) == (1, 1)
+    assert cohorts["live"]["events"] == 2
+    assert horizon(cohorts["live"], 5)["sample_size"] == 1
+    assert horizon(cohorts["live"], 5)["suppressed_overlapping"] == 1
 
 
 def test_a_later_publication_enters_a_session_later(db, calendar) -> None:
