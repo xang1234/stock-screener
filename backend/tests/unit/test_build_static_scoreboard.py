@@ -1039,6 +1039,22 @@ def test_a_broken_scoreboard_descriptor_loses_its_entry_and_the_market_stays(tmp
     assert [warning.split(":")[0] for warning in result.warnings] == ["US scoreboard asset ignored"]
 
 
+@pytest.mark.parametrize("advertised", [True, False], ids=["advertised", "unadvertised"])
+def test_a_directory_at_the_scoreboard_path_loses_only_the_asset(tmp_path, advertised) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    if advertised:
+        advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").mkdir()
+    (market_dir / "scoreboard.json" / "nested.json").write_text("{}")
+
+    result = combine_one_market(artifacts, tmp_path / "combined")
+
+    assert result.manifest["markets"]["US"]["assets"] == {}
+    assert result.manifest["markets"]["US"]["pages"] == {"scan": {"path": "markets/us/scan/manifest.json"}}
+    assert not (tmp_path / "combined" / "markets" / "us" / "scoreboard.json").exists()
+
+
 def test_an_unadvertised_scoreboard_file_is_not_shipped(tmp_path) -> None:
     artifacts = tmp_path / "artifacts"
     market_dir = write_artifact(artifacts)

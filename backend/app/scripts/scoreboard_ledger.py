@@ -255,16 +255,29 @@ def read_jsonl_gz(path: Path) -> list[dict[str, Any]]:
         raise LedgerCorrupt(f"{path.name}: {exc!r}") from exc
 
 
+def check_publishable(market: str, as_of_date: date, published_at: datetime) -> None:
+    # Asia's local date can run a day ahead of the UTC publish date, never two.
+    latest_possible = published_at.date() + timedelta(days=1)
+    if as_of_date > latest_possible:
+        raise LedgerError(
+            f"{market} as_of_date {as_of_date} is after the day following publication, {published_at.date()}"
+        )
+
+
 def seed_days(records: list[dict[str, Any]], market: str) -> dict[date, LedgerDay]:
-    """The first artifact per as_of_date wins, as the first publication does live."""
+    """The first artifact per as_of_date wins, as the first publication does live.
+
+    A zero-preset record is skipped, because recover refuses a date the ledger holds.
+    """
     days: dict[date, LedgerDay] = {}
     try:
         for record in sorted(records, key=lambda item: item["created_at"]):
             if record["market"] != market:
                 raise LedgerCorrupt(f"{market} input holds a {record['market']} record")
             as_of_date = date.fromisoformat(record["as_of_date"])
-            if as_of_date not in days:
+            if as_of_date not in days and record["presets"]:
                 created_at = parse_timestamp(record["created_at"])
+                check_publishable(market, as_of_date, created_at)
                 days[as_of_date] = LedgerDay(
                     as_of_date=as_of_date,
                     published_at=created_at,
@@ -360,26 +373,20 @@ def advance(
     """Add ``day`` to the market's ledger in the Release; False when it is not new."""
     if not day.presets:
         raise LedgerError(f"{market} {day.as_of_date} has zero presets")
-    # Asia's local date can run a day ahead of the UTC publish date, never two.
-    latest_possible = day.published_at.date() + timedelta(days=1)
-    if day.as_of_date > latest_possible:
-        raise LedgerError(
-            f"{market} as_of_date {day.as_of_date} is after the day following publication, {day.published_at.date()}"
-        )
+    check_publishable(market, day.as_of_date, day.published_at)
     download_assets(listing, market, work)
     assets = read_assets(work, market)
     writer = sources_for(assets).writer
     if writer is None:
         states = {slot.value: asset.state.value for slot, asset in assets.items()}
         raise LedgerError(f"{market} ledger has no usable base {states}; see {RUNBOOK}")
+    # Rotating would overwrite the only copy that still shows the loss.
+    if lost := lost_lines(assets):
+        raise LedgerCorrupt(f"{market} canonical lost {lost} line(s) that .previous holds; see {RUNBOOK}")
     base = assets[writer]
     if not is_new(day.as_of_date, base.days):
         print(f"{market}: {day.as_of_date} is not new, nothing to upload", flush=True)
         return False
-
-    # Rotating would overwrite the only copy that still shows the loss.
-    if lost := lost_lines(assets):
-        raise LedgerCorrupt(f"{market} canonical lost {lost} line(s) that .previous holds; see {RUNBOOK}")
 
     line = canonical_line(day)
     position = sum(existing < day.as_of_date for existing in base.days)
@@ -429,7 +436,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     if not paths and not markers:
         print(f"::error::No extracted days in {args.days_dir}.", flush=True)
         return 1
-    published_at = datetime.now(timezone.utc)
+    published_at = parse_timestamp(args.published_at)
     failed = bool(markers)
     for path in paths:
         try:
@@ -645,6 +652,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     record = commands.add_parser("record", help="Append extracted days the ledger has not seen")
     record.add_argument("--days-dir", required=True, type=Path)
+    record.add_argument("--published-at", required=True, help="When the deploy finished, as YYYY-MM-DDTHH:MM:SSZ")
     record.set_defaults(run=cmd_record)
 
     recover = commands.add_parser("recover", help="Insert one lost day from a retained artifact")

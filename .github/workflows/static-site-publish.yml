@@ -196,6 +196,8 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      deployed_at: ${{ steps.deployed-at.outputs.at }}
 
     steps:
       - name: Configure Pages
@@ -265,6 +267,11 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v5
 
+      # A rerun of a failed record-ledger keeps this value, so a late retry cannot
+      # push a pick's entry back a session.
+      - id: deployed-at
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
   # Records what the site now shows, so it runs only after a real deploy. The
   # production concurrency group serializes it with scoreboard-ledger-recover.yml,
   # the ledger's only other writer. It holds contents:write, so it installs nothing
@@ -291,6 +298,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PUBLISHED_AT: ${{ needs.deploy.outputs.deployed_at }}
         run: |
           cd backend
-          python3 -m app.scripts.scoreboard_ledger record --days-dir /tmp/scoreboard-days
+          python3 -m app.scripts.scoreboard_ledger record --days-dir /tmp/scoreboard-days --published-at "$PUBLISHED_AT"

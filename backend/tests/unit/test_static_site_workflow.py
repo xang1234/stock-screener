@@ -1052,8 +1052,21 @@ def test_record_ledger_installs_nothing_and_runs_only_the_ledger_script() -> Non
             "record",
             "--days-dir",
             "/tmp/scoreboard-days",
+            "--published-at",
+            '"$PUBLISHED_AT"',
         ]
     ]
+    record = next(step for step in steps if "run" in step)
+    assert record["env"]["PUBLISHED_AT"] == "${{ needs.deploy.outputs.deployed_at }}"
+
+
+def test_deploy_exposes_the_time_the_site_went_live() -> None:
+    deploy = _publish_workflow()["jobs"]["deploy"]
+    names = [step.get("id") for step in deploy["steps"]]
+    assert names.index("deployed-at") == names.index("deployment") + 1
+    assert deploy["outputs"]["deployed_at"] == "${{ steps.deployed-at.outputs.at }}"
+    stamp = next(step for step in deploy["steps"] if step.get("id") == "deployed-at")
+    assert stamp["run"].strip() == 'echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"'
 
 
 def test_record_ledger_reads_the_artifact_the_build_uploads() -> None:

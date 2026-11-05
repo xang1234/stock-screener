@@ -511,8 +511,8 @@ def write_day_file(directory: Path, market: str, as_of: str, symbols: list[str] 
     )
 
 
-def record(days: Path) -> int:
-    return ledger.main(["record", "--days-dir", str(days)])
+def record(days: Path, published_at: str = "2026-11-05T01:00:00Z") -> int:
+    return ledger.main(["record", "--days-dir", str(days), "--published-at", published_at])
 
 
 US = asset_name("US")
@@ -746,6 +746,60 @@ def test_a_date_at_or_before_the_ledger_end_is_a_no_op_with_no_upload(tmp_path, 
     assert (release.assets / US).read_bytes() == before
 
 
+def test_record_stamps_the_deploy_time_it_is_given(tmp_path, release) -> None:
+    release.create(**{US: OLD_LINE + "\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-03")
+
+    assert record(days, "2026-11-03T21:15:30Z") == 0
+
+    added = ledger.parse_line(release.asset_lines(US)[1])
+    assert added.published_at == datetime(2026, 11, 3, 21, 15, 30, tzinfo=timezone.utc)
+
+
+def test_a_same_date_run_is_red_when_canonical_lost_a_previous_line(tmp_path, release, capsys) -> None:
+    release.create(**{US: OLD_LINE + "\n", US_PREVIOUS: OLDER_LINE + "\n"})
+    days = tmp_path / "days"
+    write_day_file(days, "US", "2026-11-02")
+
+    assert record(days) == 1
+
+    assert "US canonical lost 1 line(s) that .previous holds" in capsys.readouterr().out
+    assert release.uploads() == []
+
+
+def test_seed_refuses_a_day_dated_after_the_day_following_its_artifact(tmp_path, capsys) -> None:
+    source = tmp_path / "input"
+    write_seed_input(source, "US", [seed_record("2026-10-12", "2026-10-10T02:00:00Z", ["NVDA"])])
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing"]) == 1
+
+    assert "US as_of_date 2026-10-12 is after the day following publication, 2026-10-10" in capsys.readouterr().out
+    assert not (output / asset_name("US")).exists()
+
+
+def test_seed_skips_a_zero_preset_record_so_a_later_one_can_fill_its_date(tmp_path) -> None:
+    source = tmp_path / "input"
+    write_seed_input(
+        source,
+        "US",
+        [
+            {**seed_record("2026-10-09", "2026-10-10T02:00:00Z", ["EMPTY"]), "presets": {}},
+            seed_record("2026-10-09", "2026-10-10T09:00:00Z", ["LATER"]),
+            {**seed_record("2026-10-13", "2026-10-14T02:00:00Z", ["EMPTY"]), "presets": {}},
+        ],
+    )
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing"]) == 0
+
+    days = ledger.load_ledger(output / asset_name("US"), "US")
+    assert list(days) == [date(2026, 10, 9)]
+    assert days[date(2026, 10, 9)].presets["minervini"] == PresetMatch(DEFINITION, ("LATER",))
+    assert days[date(2026, 10, 9)].published_at == datetime(2026, 10, 10, 9, tzinfo=timezone.utc)
+
+
 def test_a_rerun_after_recording_uploads_nothing(tmp_path, release) -> None:
     release.create(**{US: OLD_LINE + "\n"})
     days = tmp_path / "days"
@@ -781,18 +835,8 @@ def test_no_extracted_days_is_red(tmp_path, release, capsys) -> None:
     assert "No extracted days" in capsys.readouterr().out
 
 
-@pytest.fixture
-def publishing_at_1103_noon(monkeypatch) -> None:
-    class Frozen(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-
-    monkeypatch.setattr(ledger, "datetime", Frozen)
-
-
 def test_a_day_two_days_past_the_publish_date_is_red_for_that_market_only(
-    tmp_path, release, capsys, publishing_at_1103_noon
+    tmp_path, release, capsys
 ) -> None:
     release.create(**{US: OLD_LINE + "\n", HK: OLD_LINE + "\n"})
     before = (release.assets / US).read_bytes()
@@ -800,19 +844,19 @@ def test_a_day_two_days_past_the_publish_date_is_red_for_that_market_only(
     write_day_file(days, "US", "2026-11-05")
     write_day_file(days, "HK", "2026-11-03")
 
-    assert record(days) == 1
+    assert record(days, "2026-11-03T12:00:00Z") == 1
 
     assert "::error::US: US as_of_date 2026-11-05 is after the day following publication, 2026-11-03" in capsys.readouterr().out
     assert release.uploads() == [HK_PREVIOUS, HK]
     assert (release.assets / US).read_bytes() == before
 
 
-def test_a_day_one_past_the_publish_date_records(tmp_path, release, publishing_at_1103_noon) -> None:
+def test_a_day_one_past_the_publish_date_records(tmp_path, release) -> None:
     release.create(**{US: OLD_LINE + "\n"})
     days = tmp_path / "days"
     write_day_file(days, "US", "2026-11-04")
 
-    assert record(days) == 0
+    assert record(days, "2026-11-03T12:00:00Z") == 0
 
     assert ledger.parse_line(release.asset_lines(US)[1]).as_of_date == date(2026, 11, 4)
 
@@ -1048,7 +1092,7 @@ def test_extract_and_record_run_without_site_packages(tmp_path, release) -> None
     output = tmp_path / "days"
     for arguments in (
         ["extract", "--site-dir", str(site), "--output", str(output)],
-        ["record", "--days-dir", str(output)],
+        ["record", "--days-dir", str(output), "--published-at", "2026-11-05T01:00:00Z"],
     ):
         result = subprocess.run(
             [sys.executable, "-S", "-m", "app.scripts.scoreboard_ledger", *arguments],

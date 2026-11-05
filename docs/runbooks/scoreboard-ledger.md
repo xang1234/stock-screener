@@ -33,7 +33,7 @@ The next `static-site.yml` market build then downloads the ledger and publishes 
 
 ### Re-seeding after live days exist
 
-Do not upload a plain `seed` output once `record-ledger` has added a day. It would replace `live` lines with `artifact` lines or drop them, and `record-ledger` would then go red because canonical no longer holds what `.previous` holds. Merge instead, so every existing line stays byte for byte and the seed only fills gaps:
+Do not upload a plain `seed` output once `record-ledger` has added a day. It would replace `live` lines with `artifact` lines or drop them, and `record-ledger` would then go red because canonical no longer holds what `.previous` holds. Merge instead, so every existing line stays byte for byte and the seed only fills gaps. Nothing locks these steps against the publisher, so confirm that no publish is running or queued before the download:
 
 ```bash
 mkdir /tmp/ledger-current
@@ -41,7 +41,7 @@ gh release download scoreboard-ledger-data --pattern 'scoreboard-ledger-*-v1.jso
 python3 -m app.scripts.scoreboard_ledger seed --input ../.audit/scoreboard-seed --output /tmp/ledger-merged --merge-with /tmp/ledger-current
 ```
 
-If the capture lacks a market, add `--allow-missing`, and that market's current ledger stays as it is. Check each market with `verify --dir`, confirm that no publish is running, then upload the files with `--clobber`. For one or two lost days, [recover](#recover-a-lost-day) is simpler. `--merge-with` exits 1 if any market's current ledger is absent or corrupt.
+If the capture lacks a market, add `--allow-missing`, and that market's current ledger stays as it is. Check each market with `verify --dir`. Then run `verify --market <m>` against the Release for each market and compare its `through` date with your download. If a date moved, a publish appended a day that your merged file lacks, and uploading would erase it without any error, so start again from the download. Otherwise upload the files with `--clobber`. For one or two lost days, [recover](#recover-a-lost-day) is simpler. `--merge-with` exits 1 if any market's current ledger is absent or corrupt.
 
 ## Check a ledger
 
@@ -144,4 +144,4 @@ Find out what changed before fixing it, because market builds keep reading canon
 | Same-date rerun or rewind | No upload | Recomputes, bars capped at the export's `as_of_date` |
 | Branch dispatch or PR rehearsal | Job does not run | Downloads only |
 
-A canonical that goes missing mid-upload (`gh release upload --clobber` deletes before it uploads) is the second row, and the next run heals it.
+A canonical that goes missing mid-upload (`gh release upload --clobber` deletes before it uploads) is the second row. The next `record` run heals it only if its date is newer than the latest date in `.previous`. A run at or before that date uploads nothing, so after a failed recover, rerun the recover or wait for a newer session.
