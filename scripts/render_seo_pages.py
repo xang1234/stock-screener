@@ -240,6 +240,7 @@ def render_scoreboard(site: Site, code: str, name: str, scoreboard: dict[str, An
     benchmark = scoreboard["benchmark"]
     rules = ("Entry is the first open after publication. Exit is the close of the Nth session.",
              "A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.",
+             "A stock that leaves the screen and returns counts again.",
              "Returns are price only, in local currency, with no costs." + (f" Excess is against {benchmark}." if benchmark else ""),
              "Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.",
              "Funds that match a screen are included.",

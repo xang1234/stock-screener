@@ -280,6 +280,9 @@ describe('StaticScoreboardPage', () => {
     expect(screen.getByText(/A stock counts once per screen until its window ends/)).toBeInTheDocument();
     expect(screen.getByText("A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.")).toBeInTheDocument();
     expect(screen.getByText('Effective dates count each date by how many picks it holds, so one busy day counts as about one.')).toBeInTheDocument();
+    const rules = screen.getAllByRole('listitem').map((item) => item.textContent);
+    expect(rules[rules.indexOf("A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.") + 1])
+      .toBe('A stock that leaves the screen and returns counts again.');
     expect(screen.getByText('Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.')).toBeInTheDocument();
   });
 
