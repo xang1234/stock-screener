@@ -177,7 +177,10 @@ export const nullBenchmarkScoreboardFixture = {
       ...liveAllPendingCohort,
       preset: 'canslim',
       name: 'CANSLIM',
+      first_date: '2025-11-05',
+      last_date: '2026-10-20',
       events: 64,
+      signal_dates: 14,
       horizons: [
         horizon(5, closed(64, 11, 7.3, 0.55, null, 1.1, null, { excess_sample_size: 0 })),
         horizon(20, pending(64, 9)),
