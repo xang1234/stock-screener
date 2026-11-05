@@ -36,7 +36,7 @@ const ORIGIN_SECTIONS = [
   },
   {
     origin: 'artifact_pre_stage_fix',
-    title: 'Recovered from retained build artifacts, not recorded live, from before the 2026-10-22 Stage calculation fix',
+    title: 'Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)',
     collapsed: true,
   },
 ];
@@ -45,8 +45,8 @@ const formatRate = (rate) => (rate == null ? '-' : `${Math.round(rate * 100)}%`)
 
 const STAT_COLUMNS = [
   { label: 'Median', value: (horizon) => formatPercent(horizon.median_return_pct) },
-  { label: 'Average', value: (horizon) => formatPercent(horizon.avg_return_pct) },
   { label: 'Positive', value: (horizon) => formatRate(horizon.positive_rate) },
+  { label: 'Beat benchmark', value: (horizon) => formatRate(horizon.beat_benchmark_rate) },
   { label: 'Median excess', value: (horizon) => formatPercent(horizon.median_excess_return_pct) },
 ];
 
@@ -59,12 +59,15 @@ const sampleText = (cohort, horizon) => {
   if (cohort.events === 0) return 'No picks';
   return [
     `${count(horizon.sample_size)} closed`,
-    plural(horizon.signal_dates, 'date'),
+    horizon.sample_size > 0
+      ? `${plural(horizon.signal_dates, 'date')}, effective ${horizon.effective_dates.toFixed(1)}`
+      : plural(horizon.signal_dates, 'date'),
     `${count(horizon.pending_windows)} pending`,
     horizon.sample_size === 0 && horizon.oldest_open_sessions != null
       && `oldest ${horizon.oldest_open_sessions} of ${horizon.horizon_sessions} sessions`,
     horizon.skipped_missing_history > 0 && `${count(horizon.skipped_missing_history)} no price`,
     horizon.suppressed_overlapping > 0 && `${count(horizon.suppressed_overlapping)} overlapping`,
+    horizon.excess_sample_size !== horizon.sample_size && `excess on ${count(horizon.excess_sample_size)}`,
   ].filter(Boolean).join(' · ');
 };
 
@@ -110,7 +113,8 @@ function OriginSection({ section, cohorts, sessions }) {
       {note && <Alert severity="info">{note}</Alert>}
       {cohorts.length > 0 && (
         <TableContainer>
-          <Table size="small">
+          <Table size="small" sx={{ '& caption': { captionSide: 'top', px: 1, pt: 0, pb: 0.5 } }}>
+            <caption>{`${sessions}-session windows`}</caption>
             <TableHead>
               <TableRow>
                 <TableCell>Screen</TableCell>
@@ -141,9 +145,11 @@ function OriginSection({ section, cohorts, sessions }) {
   return (
     <Box component="section">
       <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography component="h2" variant="subtitle1" sx={{ fontWeight: 600 }}>{section.title}</Typography>
-        </AccordionSummary>
+        <Box component="h2" sx={{ m: 0 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography component="span" variant="subtitle1" sx={{ fontWeight: 600 }}>{section.title}</Typography>
+          </AccordionSummary>
+        </Box>
         <AccordionDetails sx={{ p: 1.5 }}>{body}</AccordionDetails>
       </Accordion>
     </Box>
@@ -171,13 +177,21 @@ export default function StaticScoreboardPage() {
         <Typography component="h1" variant="h6">{marketEntry.display_name} scoreboard</Typography>
         <Typography variant="body2" sx={{ mb: 1 }}>How each preset screen&apos;s picks moved after they were published.</Typography>
         <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
-          {`Recording since ${scoreboard.recording_since ?? '-'} · Ledger through ${scoreboard.ledger_through ?? '-'} · ${plural(scoreboard.missing_sessions, 'missing session')}`}
+          {[
+            `Recording since ${scoreboard.recording_since ?? '-'}`,
+            scoreboard.scored_since && scoreboard.scored_since !== scoreboard.recording_since && `Scored since ${scoreboard.scored_since}`,
+            `Ledger through ${scoreboard.ledger_through ?? '-'}`,
+            plural(scoreboard.missing_sessions, 'missing session'),
+          ].filter(Boolean).join(' · ')}
         </Typography>
         <Box component="ul" sx={{ m: 0, pl: 2.5, typography: 'body2', color: 'text.secondary' }}>
           <li>Entry is the first open after publication. Exit is the close of the Nth session.</li>
-          <li>{`Returns are price only, in local currency, with no costs. Excess is against ${scoreboard.benchmark}.`}</li>
+          <li>A pick is a stock newly entering the screen. Stocks already on the list on the first recorded day are not counted.</li>
+          <li>{`Returns are price only, in local currency, with no costs.${scoreboard.benchmark ? ` Excess is against ${scoreboard.benchmark}.` : ''}`}</li>
+          <li>Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.</li>
           <li>Funds that match a screen are included.</li>
           <li>A stock counts once per screen until its window ends. A repeat that enters earlier is left out and shown as overlapping.</li>
+          <li>Effective dates count each date by how many picks it holds, so one busy day counts as about one.</li>
           <li>Stocks that later delist drop out as no price, which can flatter results.</li>
         </Box>
       </Paper>

@@ -2,13 +2,13 @@ const horizon = (horizonSessions, fields = {}) => ({
   horizon_sessions: horizonSessions,
   sample_size: 0,
   signal_dates: 0,
+  effective_dates: 0,
   pending_windows: 0,
   oldest_open_sessions: null,
   thin: true,
   positive_rate: null,
-  avg_return_pct: null,
+  beat_benchmark_rate: null,
   median_return_pct: null,
-  avg_excess_return_pct: null,
   median_excess_return_pct: null,
   excess_sample_size: 0,
   skipped_missing_history: 0,
@@ -16,14 +16,14 @@ const horizon = (horizonSessions, fields = {}) => ({
   ...fields,
 });
 
-const closed = (sampleSize, signalDates, positiveRate, avg, median, avgExcess, medianExcess, fields = {}) => ({
+const closed = (sampleSize, signalDates, effectiveDates, positiveRate, beatRate, median, medianExcess, fields = {}) => ({
   sample_size: sampleSize,
   signal_dates: signalDates,
-  thin: sampleSize < 20 || signalDates < 5,
+  effective_dates: effectiveDates,
+  thin: sampleSize < 20 || effectiveDates < 5,
   positive_rate: positiveRate,
-  avg_return_pct: avg,
+  beat_benchmark_rate: beatRate,
   median_return_pct: median,
-  avg_excess_return_pct: avgExcess,
   median_excess_return_pct: medianExcess,
   excess_sample_size: sampleSize,
   ...fields,
@@ -76,9 +76,10 @@ const artifactClosedCohort = {
   events: 1441,
   signal_dates: 6,
   horizons: [
-    horizon(5, closed(1298, 6, 0.57, 1.42, 0.86, 0.31, 0.12, pending(40, 4, {
+    horizon(5, closed(1298, 12, 8.4, 0.57, 0.48, 0.86, 0.12, pending(40, 4, {
       skipped_missing_history: 3,
       suppressed_overlapping: 100,
+      excess_sample_size: 1250,
     }))),
     horizon(20, pending(1341, 9, { suppressed_overlapping: 100 })),
     horizon(60, pending(1341, 9, { suppressed_overlapping: 100 })),
@@ -96,7 +97,7 @@ const artifactThinCohort = {
   events: 14,
   signal_dates: 2,
   horizons: [
-    horizon(5, closed(12, 2, 0.5, -0.74, -0.31, -1.2, -0.95, pending(2, 4))),
+    horizon(5, closed(12, 2, 1.9, 0.5, 0.25, -0.31, -0.95, pending(2, 4))),
     horizon(20, pending(14, 7)),
     horizon(60, pending(14, 7)),
   ],
@@ -113,7 +114,7 @@ const artifactRetiredCohort = {
   events: 8,
   signal_dates: 2,
   horizons: [
-    horizon(5, closed(8, 2, 0.625, 2.05, 1.5, 1.1, 0.8)),
+    horizon(5, closed(8, 2, 2, 0.625, 0.5, 1.5, 0.8)),
     horizon(20, pending(8, 9)),
     horizon(60, pending(8, 9)),
   ],
@@ -130,8 +131,8 @@ const preStageFixCohort = {
   events: 620,
   signal_dates: 13,
   horizons: [
-    horizon(5, closed(540, 13, 0.52, 0.91, 0.44, -0.2, -0.36, { suppressed_overlapping: 80 })),
-    horizon(20, closed(26, 6, 0.46, -1.63, -2.27, -2.9, -3.05, pending(300, 19, { suppressed_overlapping: 294 }))),
+    horizon(5, closed(540, 13, 9, 0.52, 0.44, 0.44, -0.36, { suppressed_overlapping: 80 })),
+    horizon(20, closed(26, 6, 4.8, 0.46, 0.42, -2.27, -3.05, pending(300, 19, { suppressed_overlapping: 294 }))),
     horizon(60, pending(326, 22, { suppressed_overlapping: 294 })),
   ],
 };
@@ -143,6 +144,7 @@ export const scoreboardFixture = {
   generated_at: '2026-11-05T02:15:22Z',
   benchmark: 'SPY',
   recording_since: '2026-10-05',
+  scored_since: '2026-10-05',
   ledger_through: '2026-11-04',
   missing_sessions: 2,
   cohorts: [
@@ -161,4 +163,26 @@ export const allPendingScoreboardFixture = {
   benchmark: '2800.HK',
   missing_sessions: 0,
   cohorts: [liveAllPendingCohort, liveZeroMatchCohort],
+};
+
+export const nullBenchmarkScoreboardFixture = {
+  ...scoreboardFixture,
+  market: 'AU',
+  benchmark: null,
+  recording_since: '2025-06-02',
+  scored_since: '2025-11-04',
+  missing_sessions: 0,
+  cohorts: [
+    {
+      ...liveAllPendingCohort,
+      preset: 'canslim',
+      name: 'CANSLIM',
+      events: 64,
+      horizons: [
+        horizon(5, closed(64, 11, 7.3, 0.55, null, 1.1, null, { excess_sample_size: 0 })),
+        horizon(20, pending(64, 9)),
+        horizon(60, pending(64, 9)),
+      ],
+    },
+  ],
 };
