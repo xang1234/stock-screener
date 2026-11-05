@@ -257,7 +257,7 @@ def test_scoreboard_page_states_its_method_and_ledger(dist):
     assert "Stocks that later delist drop out as no price, which can flatter results." in html
     assert "/stock-screener/#/scoreboard?market=US" in html
     assert "A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen&#x27;s definition or the Stage calculation changed, are not counted." in html
-    assert "are not counted.</li><li>A stock that leaves the screen and returns counts again.</li>" in html
+    assert "are not counted.</li><li>A stock that returns after its window ends counts again.</li>" in html
     assert "Effective dates count each date by how many picks it holds, so one busy day counts as about one." in html
     assert "Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect." in html
     assert "Scored since" not in html
