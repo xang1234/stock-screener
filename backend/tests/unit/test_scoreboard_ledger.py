@@ -192,7 +192,7 @@ def test_seed_keeps_the_first_artifact_per_date_and_stamps_origin_and_publicatio
     )
     output = tmp_path / "out"
 
-    assert ledger.main(["seed", "--input", str(source), "--output", str(output)]) == 0
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing"]) == 0
 
     days = ledger.load_ledger(output / asset_name("US"), "US")
     assert list(days) == [date(2026, 10, 9), date(2026, 10, 22)]
@@ -214,7 +214,7 @@ def test_seed_dates_the_same_session_by_when_each_market_built_it(tmp_path) -> N
     write_seed_input(source, "JP", [seed_record("2026-10-21", "2026-10-21T15:50:00Z", ["7203.T"], market="JP")])
     output = tmp_path / "out"
 
-    assert ledger.main(["seed", "--input", str(source), "--output", str(output)]) == 0
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing"]) == 0
 
     assert ledger.load_ledger(output / asset_name("US"), "US")[date(2026, 10, 21)].origin is Origin.ARTIFACT
     assert (
@@ -223,21 +223,46 @@ def test_seed_dates_the_same_session_by_when_each_market_built_it(tmp_path) -> N
     )
 
 
-def test_seed_writes_an_empty_ledger_for_a_market_with_no_records(tmp_path) -> None:
+def test_seed_refuses_a_missing_market_and_writes_nothing(tmp_path, capsys) -> None:
     source = tmp_path / "input"
     write_seed_input(source, "US", [seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["NVDA"])])
     output = tmp_path / "out"
 
-    assert ledger.main(["seed", "--input", str(source), "--output", str(output)]) == 0
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output)]) == 1
+
+    assert "No input for CA, HK, JP, TW, IN, KR, CN, DE, AU, SG, MY; pass --allow-missing" in capsys.readouterr().out
+    assert not output.exists()
+
+
+def test_seed_with_allow_missing_writes_an_empty_ledger_and_names_the_market(tmp_path, capsys) -> None:
+    source = tmp_path / "input"
+    write_seed_input(source, "US", [seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["NVDA"])])
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output), "--allow-missing"]) == 0
 
     assert sorted(path.name for path in output.iterdir()) == sorted(asset_name(m) for m in ledger.MARKETS)
     assert ledger.load_ledger(output / asset_name("MY"), "MY") == {}
+    assert list(ledger.load_ledger(output / asset_name("US"), "US")) == [date(2026, 10, 22)]
+    assert "::warning::No input for CA, HK, JP, TW, IN, KR, CN, DE, AU, SG, MY; their ledgers start empty" in capsys.readouterr().out
 
 
-def test_seed_refuses_an_input_directory_with_no_market_files(tmp_path, capsys) -> None:
+def test_seed_with_all_twelve_inputs_needs_no_flag(tmp_path) -> None:
+    source = tmp_path / "input"
+    for market in ledger.MARKETS:
+        write_seed_input(source, market, [])
     output = tmp_path / "out"
 
-    assert ledger.main(["seed", "--input", str(tmp_path / "mistyped"), "--output", str(output)]) == 1
+    assert ledger.main(["seed", "--input", str(source), "--output", str(output)]) == 0
+
+    assert ledger.load_ledger(output / asset_name("SG"), "SG") == {}
+
+
+@pytest.mark.parametrize("flags", [[], ["--allow-missing"]], ids=["plain", "allow-missing"])
+def test_seed_refuses_an_input_directory_with_no_market_files(tmp_path, capsys, flags) -> None:
+    output = tmp_path / "out"
+
+    assert ledger.main(["seed", "--input", str(tmp_path / "mistyped"), "--output", str(output), *flags]) == 1
 
     assert "No <market>.jsonl.gz input" in capsys.readouterr().out
     assert not output.exists()
@@ -247,7 +272,7 @@ def test_seed_refuses_a_record_from_another_market(tmp_path, capsys) -> None:
     source = tmp_path / "input"
     write_seed_input(source, "US", [seed_record("2026-10-22", "2026-10-23T02:00:00Z", ["0700.HK"], market="HK")])
 
-    assert ledger.main(["seed", "--input", str(source), "--output", str(tmp_path / "out")]) == 1
+    assert ledger.main(["seed", "--input", str(source), "--output", str(tmp_path / "out"), "--allow-missing"]) == 1
 
     assert "US input holds a HK record" in capsys.readouterr().out
 
@@ -258,7 +283,7 @@ def test_seed_refuses_truncated_input(tmp_path, capsys) -> None:
     whole = gzip.compress(json.dumps(seed_record("2026-10-22", "2026-10-23T02:00:00Z", [])).encode() + b"\n")
     (source / "US.jsonl.gz").write_bytes(whole[:20])
 
-    assert ledger.main(["seed", "--input", str(source), "--output", str(tmp_path / "out")]) == 1
+    assert ledger.main(["seed", "--input", str(source), "--output", str(tmp_path / "out"), "--allow-missing"]) == 1
 
     assert "::error::US.jsonl.gz" in capsys.readouterr().out
 

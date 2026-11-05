@@ -271,9 +271,14 @@ def seed_days(records: list[dict[str, Any]], market: str) -> dict[date, LedgerDa
 
 def cmd_seed(args: argparse.Namespace) -> int:
     sources = {market: args.input / f"{market}.jsonl.gz" for market in MARKETS}
+    missing = ", ".join(market for market, source in sources.items() if not source.exists())
     # A mistyped path must not produce twelve valid empty ledgers ready to upload.
     if not any(source.exists() for source in sources.values()):
         raise LedgerError(f"No <market>.jsonl.gz input in {args.input}")
+    if missing and not args.allow_missing:
+        raise LedgerError(f"No input for {missing}; pass --allow-missing to start them empty")
+    if missing:
+        print(f"::warning::No input for {missing}; their ledgers start empty", flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
     for market, source in sources.items():
         records = read_jsonl_gz(source) if source.exists() else []
@@ -587,6 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     seed = commands.add_parser("seed", help="Build ledger files from captured artifact records")
     seed.add_argument("--input", required=True, type=Path)
     seed.add_argument("--output", required=True, type=Path)
+    seed.add_argument("--allow-missing", action="store_true", help="Start a market with no input file empty")
     seed.set_defaults(run=cmd_seed)
 
     verify = commands.add_parser("verify", help="Parse one market's ledger assets strictly")
