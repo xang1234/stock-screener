@@ -159,15 +159,26 @@ def build_scoreboard(
     }
     sessions = calendar.trading_days(market, min(*anchors.values(), as_of_date), as_of_date)
 
+    cohort_dates: dict[CohortKey, list[date]] = defaultdict(list)
+    history: dict[str, list[tuple[CohortKey, date, date, str]]] = defaultdict(list)
+    last_matches: dict[str, set[str]] = {}
+    for day in days:
+        anchor = anchors[day.as_of_date]
+        for preset, match in day.presets.items():
+            key = CohortKey(preset, match.definition, day.origin)
+            cohort_dates[key].append(day.as_of_date)
+            # A pick is a symbol entering the screen. On a preset's first day nothing
+            # can be told apart from what was already on the list, so it yields none.
+            if preset in last_matches:
+                history[preset].extend(
+                    (key, day.as_of_date, anchor, symbol)
+                    for symbol in match.symbols
+                    if symbol not in last_matches[preset]
+                )
+            last_matches[preset] = set(match.symbols)
+
     # A symbol's outcome depends only on its entry, so presets share one evaluation.
-    unique = sorted(
-        {
-            (symbol, anchors[day.as_of_date])
-            for day in days
-            for match in day.presets.values()
-            for symbol in match.symbols
-        }
-    )
+    unique = sorted({(symbol, anchor) for rows in history.values() for _, _, anchor, symbol in rows})
     evaluations, benchmark = PriceOutcomeCalculator(prices).evaluate_many(
         [
             RawValidationEvent(symbol, ValidationSourceKind.SCAN_PICK, "", anchor, {})
@@ -177,15 +188,6 @@ def build_scoreboard(
         benchmark_candidates=benchmark_registry.get_candidate_symbols(market),
     )
     evaluated = dict(zip(unique, evaluations))
-
-    cohort_dates: dict[CohortKey, list[date]] = defaultdict(list)
-    history: dict[str, list[tuple[CohortKey, date, date, str]]] = defaultdict(list)
-    for day in days:
-        anchor = anchors[day.as_of_date]
-        for preset, match in day.presets.items():
-            key = CohortKey(preset, match.definition, day.origin)
-            cohort_dates[key].append(day.as_of_date)
-            history[preset].extend((key, day.as_of_date, anchor, symbol) for symbol in match.symbols)
 
     current = {preset["id"]: preset for preset in preset_screens}
     recorded = {key.preset for key in cohort_dates}

@@ -113,6 +113,12 @@ def as_ledger(*days: LedgerDay) -> dict[date, LedgerDay]:
     return {day.as_of_date: day for day in days}
 
 
+def after_baseline(*days: LedgerDay) -> dict[date, LedgerDay]:
+    """``days`` after an empty first day, so each of their matches is a new entrant."""
+    presets = {preset: (match.definition, []) for day in days for preset, match in day.presets.items()}
+    return as_ledger(ledger_day(date(2026, 10, 2), "2026-10-03T02:00:00Z", presets, days[0].origin), *days)
+
+
 def score(db, calendar, ledger, as_of: date, *, market: str = "US", presets=PRESETS) -> dict:
     return build_scoreboard(
         ledger,
@@ -185,7 +191,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
         db, calendar, "SPY", date(2026, 10, 5), date(2026, 10, 12),
         open_=400.0, close=401.0, closes={date(2026, 10, 12): 404.0},
     )
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
 
     pending = {
         "sample_size": 0,
@@ -203,7 +209,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
         "as_of_date": "2026-10-12",
         "generated_at": "2026-11-05T03:00:00Z",
         "benchmark": "SPY",
-        "recording_since": "2026-10-05",
+        "recording_since": "2026-10-02",
         "ledger_through": "2026-10-05",
         "missing_sessions": 0,
         "cohorts": [
@@ -213,7 +219,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
                 "retired": False,
                 "definition": DEF_A,
                 "origin": "live",
-                "first_date": "2026-10-05",
+                "first_date": "2026-10-02",
                 "last_date": "2026-10-05",
                 "events": 1,
                 "signal_dates": 1,
@@ -244,7 +250,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
 
 def test_a_symbol_in_two_presets_counts_once_in_each(db, calendar) -> None:
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 12), closes={date(2026, 10, 12): 110.0})
-    ledger = as_ledger(
+    ledger = after_baseline(
         ledger_day(
             date(2026, 10, 5),
             "2026-10-06T02:00:00Z",
@@ -259,54 +265,116 @@ def test_a_symbol_in_two_presets_counts_once_in_each(db, calendar) -> None:
         assert (block["sample_size"], block["median_return_pct"], block["suppressed_overlapping"]) == (1, 10.0, 0)
 
 
-def test_a_repeat_inside_the_window_is_suppressed_and_one_after_it_counts(db, calendar) -> None:
+def test_a_first_ledger_day_is_a_baseline_with_no_events(db, calendar) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23))
+    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
+
+    cohort = only_cohort(score(db, calendar, ledger, date(2026, 10, 23)))
+
+    assert (cohort["events"], cohort["signal_dates"], cohort["first_date"]) == (0, 0, "2026-10-05")
+    assert horizon(cohort, 5)["pending_windows"] == 0
+    assert horizon(cohort, 5)["sample_size"] == 0
+
+
+def test_only_a_symbol_new_to_the_preset_is_a_pick(db, calendar) -> None:
+    add_bars(db, calendar, "OLD", date(2026, 10, 5), date(2026, 10, 23), closes={date(2026, 10, 13): 150.0})
+    add_bars(db, calendar, "NEW", date(2026, 10, 5), date(2026, 10, 23), closes={date(2026, 10, 13): 120.0})
+    ledger = as_ledger(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["OLD"])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["NEW", "OLD"])}),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["NEW", "OLD"])}),
+    )
+
+    cohort = only_cohort(score(db, calendar, ledger, date(2026, 10, 23)))
+
+    assert (cohort["events"], cohort["signal_dates"]) == (1, 1)
+    block = horizon(cohort, 5)
+    assert (block["sample_size"], block["median_return_pct"], block["suppressed_overlapping"]) == (1, 20.0, 0)
+
+
+def test_a_preset_added_later_starts_with_its_own_baseline(db, calendar) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23))
+    ledger = as_ledger(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, [])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["AAPL"]), "canslim": (DEF_A, ["AAPL"])}),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 10, 23))
+
+    assert only_cohort(payload, "minervini")["events"] == 1
+    assert only_cohort(payload, "canslim")["events"] == 0
+    assert only_cohort(payload, "canslim")["first_date"] == "2026-10-06"
+
+
+def test_a_preset_missing_from_a_day_compares_with_its_last_appearance(db, calendar) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23))
+    add_bars(db, calendar, "NEW", date(2026, 10, 5), date(2026, 10, 23))
+    ledger = as_ledger(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"]), "canslim": (DEF_A, [])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"canslim": (DEF_A, [])}),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "NEW"]), "canslim": (DEF_A, [])}),
+    )
+
+    cohort = only_cohort(score(db, calendar, ledger, date(2026, 10, 23)))
+
+    assert (cohort["events"], cohort["first_date"], cohort["last_date"]) == (1, "2026-10-05", "2026-10-07")
+
+
+def test_a_symbol_flipping_in_and_out_cannot_stack_windows(db, calendar) -> None:
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
-    ledger = as_ledger(
+    ledger = after_baseline(
         ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
-        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, [])}),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
+        ledger_day(date(2026, 10, 8), "2026-10-09T02:00:00Z", {"minervini": (DEF_A, [])}),
         ledger_day(date(2026, 10, 12), "2026-10-13T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
-        ledger_day(date(2026, 10, 13), "2026-10-14T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
     )
 
-    block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 23))), 5)
+    cohort = only_cohort(score(db, calendar, ledger, date(2026, 10, 23)))
 
-    assert (block["sample_size"], block["suppressed_overlapping"], block["signal_dates"]) == (2, 2, 2)
+    block = horizon(cohort, 5)
+    assert (cohort["events"], cohort["signal_dates"]) == (3, 3)
+    assert (block["sample_size"], block["suppressed_overlapping"], block["signal_dates"]) == (2, 1, 2)
 
 
-def test_a_definition_change_does_not_reset_overlap(db, calendar) -> None:
-    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 13), close=110.0)
-    ledger = as_ledger(
-        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}),
-        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_B, ["AAPL"])}),
+def test_a_definition_change_is_no_new_baseline_and_does_not_reset_overlap(db, calendar) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+    add_bars(db, calendar, "STAYS", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+    ledger = after_baseline(
+        ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL", "STAYS"])}),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_B, ["STAYS"])}),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_B, ["AAPL", "STAYS"])}),
     )
 
-    cohorts = {cohort["definition"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 13))["cohorts"]}
+    cohorts = {cohort["definition"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 23))["cohorts"]}
 
-    assert horizon(cohorts[DEF_A], 5)["sample_size"] == 1
-    assert horizon(cohorts[DEF_A], 5)["suppressed_overlapping"] == 0
+    assert cohorts[DEF_A]["events"] == 2
+    assert horizon(cohorts[DEF_A], 5)["sample_size"] == 2
+    assert cohorts[DEF_B]["events"] == 1
     assert horizon(cohorts[DEF_B], 5)["sample_size"] == 0
     assert horizon(cohorts[DEF_B], 5)["suppressed_overlapping"] == 1
     assert horizon(cohorts[DEF_B], 5)["skipped_missing_history"] == 0
 
 
-def test_an_era_change_does_not_reset_overlap(db, calendar) -> None:
-    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 13), close=110.0)
-    ledger = as_ledger(
+def test_an_era_change_is_no_new_baseline_and_does_not_reset_overlap(db, calendar) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
+    ledger = after_baseline(
         ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, Origin.ARTIFACT),
-        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, Origin.LIVE),
+        ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, [])}, Origin.ARTIFACT),
+        ledger_day(date(2026, 10, 7), "2026-10-08T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}, Origin.LIVE),
     )
 
-    cohorts = {cohort["origin"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 13))["cohorts"]}
+    cohorts = {cohort["origin"]: cohort for cohort in score(db, calendar, ledger, date(2026, 10, 23))["cohorts"]}
 
     assert horizon(cohorts["artifact"], 5)["sample_size"] == 1
-    assert horizon(cohorts["live"], 5)["suppressed_overlapping"] == 1
+    assert (cohorts["live"]["events"], horizon(cohorts["live"], 5)["suppressed_overlapping"]) == (1, 1)
 
 
 def test_a_later_publication_enters_a_session_later(db, calendar) -> None:
     opens = {date(2026, 10, 6): 100.0, date(2026, 10, 7): 200.0}
     closes = {date(2026, 10, 13): 220.0}
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 13), open_=200.0, opens=opens, closes=closes)
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T15:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T15:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
 
     block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 13))), 5)
 
@@ -320,7 +388,7 @@ def test_an_au_late_publication_enters_the_next_sydney_session(db, calendar) -> 
         db, calendar, "BHP.AX", date(2026, 10, 5), date(2026, 10, 13),
         market="AU", open_=100.0, opens=opens, closes=closes,
     )
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T03:00:00Z", {"minervini": (DEF_A, ["BHP.AX"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T03:00:00Z", {"minervini": (DEF_A, ["BHP.AX"])}))
 
     payload = score(db, calendar, ledger, date(2026, 10, 13), market="AU")
 
@@ -337,7 +405,7 @@ def test_bars_after_the_as_of_date_are_never_read(db, calendar) -> None:
     assert frame.index[-1].date() == date(2026, 10, 9)
     assert len(frame) == 5
 
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
     block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 9))), 5)
     assert block == {
         "horizon_sessions": 5,
@@ -354,7 +422,7 @@ def test_bars_after_the_as_of_date_are_never_read(db, calendar) -> None:
 
 def test_a_rewound_export_keeps_later_ledger_days_pending(db, calendar) -> None:
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 16), close=500.0)
-    ledger = as_ledger(ledger_day(date(2026, 10, 12), "2026-10-13T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 12), "2026-10-13T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])}))
 
     payload = score(db, calendar, ledger, date(2026, 10, 9))
 
@@ -365,7 +433,7 @@ def test_a_rewound_export_keeps_later_ledger_days_pending(db, calendar) -> None:
 
 def test_a_recent_ipo_with_few_bars_still_scores(db, calendar) -> None:
     add_bars(db, calendar, "IPO", date(2026, 10, 6), date(2026, 10, 12), closes={date(2026, 10, 12): 120.0})
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["IPO"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["IPO"])}))
 
     block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 12))), 5)
 
@@ -374,7 +442,7 @@ def test_a_recent_ipo_with_few_bars_still_scores(db, calendar) -> None:
 
 def test_a_symbol_with_no_price_counts_as_skipped_once_its_window_closes(db, calendar) -> None:
     add_bars(db, calendar, "SPY", date(2026, 10, 5), date(2026, 10, 12))
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["GONE"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["GONE"])}))
 
     cohort = only_cohort(score(db, calendar, ledger, date(2026, 10, 12)))
 
@@ -388,7 +456,7 @@ def test_a_symbol_with_no_price_counts_as_skipped_once_its_window_closes(db, cal
 def test_a_symbol_one_session_behind_stays_pending_short_of_its_last_bar(db, calendar) -> None:
     add_bars(db, calendar, "LAGS", date(2026, 10, 5), date(2026, 10, 9))
     add_bars(db, calendar, "SPY", date(2026, 10, 5), date(2026, 10, 12))
-    ledger = as_ledger(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["LAGS"])}))
+    ledger = after_baseline(ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["LAGS"])}))
 
     block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 12))), 5)
 
@@ -417,10 +485,10 @@ def test_cohorts_segment_by_definition_and_origin_live_first_in_manifest_order(d
         for c in payload["cohorts"]
     ] == [
         ("minervini", "Minervini", False, DEF_A, "live", "2026-10-07", "2026-10-07", 1),
-        ("minervini", "Minervini", False, DEF_B, "live", "2026-10-08", "2026-10-08", 1),
+        ("minervini", "Minervini", False, DEF_B, "live", "2026-10-08", "2026-10-08", 0),
         ("minervini", "Minervini", False, DEF_A, "artifact", "2026-10-06", "2026-10-06", 0),
         ("minervini", "Minervini", False, DEF_A, "artifact_pre_stage_fix", "2026-10-05", "2026-10-05", 0),
-        ("canslim", "CANSLIM", False, DEF_A, "artifact_pre_stage_fix", "2026-10-05", "2026-10-05", 1),
+        ("canslim", "CANSLIM", False, DEF_A, "artifact_pre_stage_fix", "2026-10-05", "2026-10-05", 0),
         ("old_screen", "old_screen", True, DEF_A, "artifact_pre_stage_fix", "2026-10-05", "2026-10-05", 0),
     ]
 
@@ -468,7 +536,7 @@ def test_thin_needs_both_twenty_closed_events_and_five_dates(db, calendar) -> No
         add_bars(db, calendar, symbol, date(2026, 10, 5), date(2026, 10, 16), close=110.0)
     published = ["2026-10-06T02:00:00Z", "2026-10-07T02:00:00Z", "2026-10-08T02:00:00Z", "2026-10-09T02:00:00Z", "2026-10-10T02:00:00Z"]
 
-    spread = as_ledger(
+    spread = after_baseline(
         *(
             ledger_day(day, stamp, {"minervini": (DEF_A, symbols[index * 5 : index * 5 + 5])})
             for index, (day, stamp) in enumerate(zip(dates, published))
@@ -477,11 +545,11 @@ def test_thin_needs_both_twenty_closed_events_and_five_dates(db, calendar) -> No
     block = horizon(only_cohort(score(db, calendar, spread, date(2026, 10, 16))), 5)
     assert (block["sample_size"], block["signal_dates"], block["thin"]) == (25, 5, False)
 
-    one_date = as_ledger(ledger_day(dates[0], published[0], {"minervini": (DEF_A, symbols)}))
+    one_date = after_baseline(ledger_day(dates[0], published[0], {"minervini": (DEF_A, symbols)}))
     block = horizon(only_cohort(score(db, calendar, one_date, date(2026, 10, 16))), 5)
     assert (block["sample_size"], block["signal_dates"], block["thin"]) == (25, 1, True)
 
-    too_few = as_ledger(
+    too_few = after_baseline(
         *(
             ledger_day(day, stamp, {"minervini": (DEF_A, symbols[index * 3 : index * 3 + 3])})
             for index, (day, stamp) in enumerate(zip(dates, published))
@@ -542,6 +610,7 @@ def run_write(market_dir: Path, ledger_dir: Path, db, calendar) -> bool:
     return write_scoreboard(market="US", market_dir=market_dir, ledger_dir=ledger_dir, db=db, calendar=calendar, now=NOW)
 
 
+DAY_1002 = ledger_day(date(2026, 10, 2), "2026-10-03T02:00:00Z", {"minervini": (DEF_A, [])})
 DAY_1005 = ledger_day(date(2026, 10, 5), "2026-10-06T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])})
 DAY_1006 = ledger_day(date(2026, 10, 6), "2026-10-07T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])})
 
@@ -753,7 +822,7 @@ def test_command_line_scores_from_the_configured_database(tmp_path, db, calendar
     db.commit()
     monkeypatch.setattr(builder, "SessionLocal", sessionmaker(bind=db.get_bind()))
     market_dir = write_artifact(tmp_path / "artifacts")
-    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[DAY_1005])
+    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[DAY_1002, DAY_1005])
 
     assert builder.main(["--market", "US", "--market-dir", str(market_dir), "--ledger-dir", str(ledger_dir)]) == 0
 
