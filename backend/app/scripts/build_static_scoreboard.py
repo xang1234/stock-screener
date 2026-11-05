@@ -300,7 +300,8 @@ def write_scoreboard(
     _write_atomic(target, json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n")
     entry["assets"]["scoreboard"] = {"path": f"markets/{market.lower()}/scoreboard.json"}
     _write_atomic(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    print(f"{market}: scored {len(ledger)} ledger days into {len(payload['cohorts'])} cohorts", flush=True)
+    scored_days = sum(day >= _scored_from(as_of_date) for day in ledger)
+    print(f"{market}: scored {scored_days} of {len(ledger)} ledger days into {len(payload['cohorts'])} cohorts", flush=True)
     return True
 
 

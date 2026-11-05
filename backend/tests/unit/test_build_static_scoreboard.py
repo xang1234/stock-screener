@@ -787,7 +787,7 @@ def test_a_ledger_that_ended_before_the_window_advertises_nothing(tmp_path, db, 
     assert "::warning::No usable US ledger" in capsys.readouterr().out
 
 
-def test_prices_are_read_only_from_the_window(tmp_path, db, calendar, monkeypatch) -> None:
+def test_prices_are_read_only_from_the_window(tmp_path, db, calendar, monkeypatch, capsys) -> None:
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 11, 3))
     market_dir = write_artifact(tmp_path / "artifacts", as_of="2026-11-03")
     ancient = ledger_day(date(2024, 1, 2), "2024-01-03T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])})
@@ -806,6 +806,7 @@ def test_prices_are_read_only_from_the_window(tmp_path, db, calendar, monkeypatc
     assert seen == {"start": date(2025, 11, 3), "through": date(2026, 11, 3)}
     payload = json.loads((market_dir / "scoreboard.json").read_text())
     assert (payload["recording_since"], payload["scored_since"]) == ("2024-01-02", "2026-10-05")
+    assert "US: scored 1 of 2 ledger days into 1 cohorts" in capsys.readouterr().out
 
 
 def test_a_scoring_failure_leaves_the_manifest_unchanged(tmp_path, calendar) -> None:
