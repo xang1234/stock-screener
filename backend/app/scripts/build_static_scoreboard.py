@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -56,6 +56,10 @@ from app.services.validation_service import (
 SCOREBOARD_HORIZONS = (5, 20, 60)
 THIN_SAMPLE_SIZE = 20
 THIN_SIGNAL_DATES = 5
+# ponytail: a year bounds time and memory and stays inside the 730 days of bundled
+# prices. Ceiling: older picks leave the page, while their days stay in the ledger, so
+# a longer history only needs this raised alongside the bundle.
+SCORED_WINDOW_DAYS = 365
 PRICE_QUERY_CHUNK = 250
 
 
@@ -143,6 +147,10 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
     }
 
 
+def _scored_from(as_of_date: date) -> date:
+    return as_of_date - timedelta(days=SCORED_WINDOW_DAYS)
+
+
 def build_scoreboard(
     ledger: dict[date, LedgerDay],
     *,
@@ -154,15 +162,22 @@ def build_scoreboard(
     generated_at: datetime,
 ) -> dict[str, Any]:
     days = [ledger[day] for day in sorted(ledger)]
+    first_scored = bisect_left([day.as_of_date for day in days], _scored_from(as_of_date))
+    scored = days[first_scored:]
     anchors = {
-        day.as_of_date: entry_anchor(day.published_at, day.as_of_date, market, calendar) for day in days
+        day.as_of_date: entry_anchor(day.published_at, day.as_of_date, market, calendar) for day in scored
     }
     sessions = calendar.trading_days(market, min(*anchors.values(), as_of_date), as_of_date)
 
     cohort_dates: dict[CohortKey, list[date]] = defaultdict(list)
     history: dict[str, list[tuple[CohortKey, date, date, str]]] = defaultdict(list)
-    last_matches: dict[str, set[str]] = {}
-    for day in days:
+    # The day just before the window shows what was already on each list when it opens.
+    last_matches = (
+        {preset: set(match.symbols) for preset, match in days[first_scored - 1].presets.items()}
+        if first_scored
+        else {}
+    )
+    for day in scored:
         anchor = anchors[day.as_of_date]
         for preset, match in day.presets.items():
             key = CohortKey(preset, match.definition, day.origin)
@@ -232,6 +247,7 @@ def build_scoreboard(
         "generated_at": format_timestamp(generated_at),
         "benchmark": benchmark,
         "recording_since": recording_since.isoformat(),
+        "scored_since": scored[0].as_of_date.isoformat(),
         "ledger_through": ledger_through.isoformat(),
         "missing_sessions": sum(session not in ledger for session in recorded_sessions),
         "cohorts": cohorts,
@@ -255,13 +271,13 @@ def write_scoreboard(
 ) -> bool:
     """Write and advertise the asset; False when the market has no ledger to score."""
     ledger = load_for_build(ledger_dir, market)
-    if not ledger:
-        print(f"::warning::No usable {market} ledger; the scoreboard is omitted.", flush=True)
-        return False
     manifest_path = market_dir / STATIC_MARKET_METADATA_FILENAME
     manifest = read_static_market_manifest(manifest_path, expected_market=market)
     entry = manifest["entry"]
     as_of_date = date.fromisoformat(entry["as_of_date"])
+    if not ledger or max(ledger) < _scored_from(as_of_date):
+        print(f"::warning::No usable {market} ledger; the scoreboard is omitted.", flush=True)
+        return False
     scan = json.loads((market_dir / "scan" / "manifest.json").read_text(encoding="utf-8"))
 
     payload = build_scoreboard(
@@ -269,7 +285,7 @@ def write_scoreboard(
         market=market,
         as_of_date=as_of_date,
         preset_screens=scan["preset_screens"],
-        prices=StockPriceTable(db, start=min(ledger), through=as_of_date),
+        prices=StockPriceTable(db, start=_scored_from(as_of_date), through=as_of_date),
         calendar=calendar,
         generated_at=now,
     )

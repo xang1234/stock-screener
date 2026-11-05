@@ -210,6 +210,7 @@ def test_the_payload_is_exactly_the_published_schema(db, calendar) -> None:
         "generated_at": "2026-11-05T03:00:00Z",
         "benchmark": "SPY",
         "recording_since": "2026-10-02",
+        "scored_since": "2026-10-02",
         "ledger_through": "2026-10-05",
         "missing_sessions": 0,
         "cohorts": [
@@ -318,6 +319,42 @@ def test_a_preset_missing_from_a_day_compares_with_its_last_appearance(db, calen
     cohort = only_cohort(score(db, calendar, ledger, date(2026, 10, 23)))
 
     assert (cohort["events"], cohort["first_date"], cohort["last_date"]) == (1, "2026-10-05", "2026-10-07")
+
+
+def test_days_before_the_window_are_not_scored_and_the_last_of_them_is_the_baseline(db, calendar) -> None:
+    add_bars(db, calendar, "NEW", date(2025, 10, 30), date(2025, 11, 17), closes={date(2025, 11, 10): 130.0})
+    add_bars(db, calendar, "STAYS", date(2025, 10, 30), date(2025, 11, 17), closes={date(2025, 11, 10): 500.0})
+    add_bars(db, calendar, "OLDEST", date(2025, 10, 30), date(2025, 11, 17), closes={date(2025, 11, 10): 500.0})
+    ledger = as_ledger(
+        ledger_day(date(2025, 10, 30), "2025-10-31T02:00:00Z", {"minervini": (DEF_B, ["OLDEST"]), "old_screen": (DEF_B, ["OLDEST"])}),
+        ledger_day(date(2025, 10, 31), "2025-11-01T02:00:00Z", {"minervini": (DEF_B, ["STAYS"])}),
+        ledger_day(date(2025, 11, 3), "2025-11-04T02:00:00Z", {"minervini": (DEF_A, ["NEW", "STAYS"])}),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 11, 3))
+
+    assert payload["recording_since"] == "2025-10-30"
+    assert payload["scored_since"] == "2025-11-03"
+    assert payload["ledger_through"] == "2025-11-03"
+    assert [(c["preset"], c["definition"], c["first_date"], c["last_date"], c["events"]) for c in payload["cohorts"]] == [
+        ("minervini", DEF_A, "2025-11-03", "2025-11-03", 1)
+    ]
+    block = horizon(only_cohort(payload), 5)
+    assert (block["sample_size"], block["median_return_pct"]) == (1, 30.0)
+
+
+def test_the_day_one_past_the_window_is_the_baseline_not_a_scored_day(db, calendar) -> None:
+    add_bars(db, calendar, "NEW", date(2025, 11, 3), date(2025, 11, 17))
+    ledger = as_ledger(
+        ledger_day(date(2025, 11, 3), "2025-11-04T02:00:00Z", {"minervini": (DEF_A, ["NEW"])}),
+        ledger_day(date(2025, 11, 4), "2025-11-05T02:00:00Z", {"minervini": (DEF_A, ["NEW"])}),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 11, 4))
+
+    assert payload["scored_since"] == "2025-11-04"
+    assert only_cohort(payload)["events"] == 0
+    assert only_cohort(payload)["first_date"] == "2025-11-04"
 
 
 def test_a_symbol_flipping_in_and_out_cannot_stack_windows(db, calendar) -> None:
@@ -659,6 +696,40 @@ def test_no_usable_ledger_leaves_the_manifest_unchanged(tmp_path, db, calendar, 
     assert (market_dir / "manifest.market.json").read_bytes() == before
     assert not (market_dir / "scoreboard.json").exists()
     assert "::warning::No usable US ledger" in capsys.readouterr().out
+
+
+def test_a_ledger_that_ended_before_the_window_advertises_nothing(tmp_path, db, calendar, capsys) -> None:
+    market_dir = write_artifact(tmp_path / "artifacts", as_of="2026-11-03")
+    before = (market_dir / "manifest.market.json").read_bytes()
+    stale = ledger_day(date(2025, 11, 2), "2025-11-03T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])})
+    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[stale])
+
+    assert run_write(market_dir, ledger_dir, db, calendar) is False
+
+    assert (market_dir / "manifest.market.json").read_bytes() == before
+    assert not (market_dir / "scoreboard.json").exists()
+    assert "::warning::No usable US ledger" in capsys.readouterr().out
+
+
+def test_prices_are_read_only_from_the_window(tmp_path, db, calendar, monkeypatch) -> None:
+    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 11, 3))
+    market_dir = write_artifact(tmp_path / "artifacts", as_of="2026-11-03")
+    ancient = ledger_day(date(2024, 1, 2), "2024-01-03T02:00:00Z", {"minervini": (DEF_A, ["AAPL"])})
+    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[ancient, DAY_1005])
+    seen = {}
+    real_table = builder.StockPriceTable
+
+    def recording_table(session, *, start, through):
+        seen.update(start=start, through=through)
+        return real_table(session, start=start, through=through)
+
+    monkeypatch.setattr(builder, "StockPriceTable", recording_table)
+
+    assert run_write(market_dir, ledger_dir, db, calendar) is True
+
+    assert seen == {"start": date(2025, 11, 3), "through": date(2026, 11, 3)}
+    payload = json.loads((market_dir / "scoreboard.json").read_text())
+    assert (payload["recording_since"], payload["scored_since"]) == ("2024-01-02", "2026-10-05")
 
 
 def test_a_scoring_failure_leaves_the_manifest_unchanged(tmp_path, calendar) -> None:
