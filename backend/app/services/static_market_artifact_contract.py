@@ -9,6 +9,7 @@ from typing import Any
 
 STATIC_SITE_SCHEMA_VERSION = "static-site-v3"
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
+STATIC_SCOREBOARD_SCHEMA_VERSION = "static-scoreboard-v1"
 
 
 class StaticMarketArtifactContractError(RuntimeError):

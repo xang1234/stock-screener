@@ -637,14 +637,113 @@ def test_the_asset_survives_validation_combine_and_generation_relocation(tmp_pat
     assert_live_only_static_isolation(combined)
 
 
-def test_an_unparseable_advertised_asset_would_reject_the_market(tmp_path, db, calendar) -> None:
-    add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 12))
-    market_dir = write_artifact(tmp_path / "artifacts")
-    ledger_dir = write_ledger_assets(tmp_path / "ledger", canonical=[DAY_1005])
-    assert run_write(market_dir, ledger_dir, db, calendar) is True
-    (market_dir / "scoreboard.json").write_text("{truncated")
-    entry = json.loads((market_dir / "manifest.market.json").read_text())["entry"]
+GOOD_SHAPE = {"schema_version": "static-scoreboard-v1", "market": "US", "cohorts": [{"horizons": []}]}
 
+
+def combine_one_market(artifacts: Path, output: Path, *, as_fallback: bool = False):
+    empty = output.parent / "no-current-artifacts"
+    return StaticArtifactCombiner(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        supported_markets=("US",),
+        default_market="US",
+    ).combine(
+        artifacts_dir=empty if as_fallback else artifacts,
+        fallback_artifacts_dir=artifacts if as_fallback else None,
+        output_dir=output,
+        clean=True,
+    )
+
+
+def advertise_scoreboard(market_dir: Path, descriptor: object) -> None:
+    manifest_path = market_dir / "manifest.market.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["entry"]["assets"]["scoreboard"] = descriptor
+    manifest_path.write_text(json.dumps(manifest))
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        pytest.param("{truncated", "does not parse", id="truncated"),
+        pytest.param(None, "advertised file is absent", id="absent"),
+        pytest.param("[]", "is not a static-scoreboard-v1 file for US", id="not-an-object"),
+        pytest.param("{}", "is not a static-scoreboard-v1 file for US", id="empty-object"),
+        pytest.param(json.dumps({**GOOD_SHAPE, "schema_version": "static-scoreboard-v0"}), "is not a static-scoreboard-v1 file for US", id="wrong-schema"),
+        pytest.param(json.dumps({**GOOD_SHAPE, "market": "HK"}), "is not a static-scoreboard-v1 file for US", id="another-market"),
+        pytest.param(json.dumps({**GOOD_SHAPE, "cohorts": {}}), "is not a static-scoreboard-v1 file for US", id="cohorts-not-a-list"),
+        pytest.param(json.dumps({**GOOD_SHAPE, "cohorts": [1]}), "is not a static-scoreboard-v1 file for US", id="cohort-not-an-object"),
+        pytest.param(json.dumps({**GOOD_SHAPE, "cohorts": [{}]}), "is not a static-scoreboard-v1 file for US", id="cohort-without-horizons"),
+    ],
+)
+def test_a_broken_scoreboard_loses_its_entry_and_the_market_stays(tmp_path, content, reason) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    if content is not None:
+        (market_dir / "scoreboard.json").write_text(content)
+
+    result = combine_one_market(artifacts, tmp_path / "combined")
+
+    assert result.manifest["markets"]["US"]["assets"] == {}
+    assert result.manifest["markets"]["US"]["pages"] == {"scan": {"path": "markets/us/scan/manifest.json"}}
+    assert result.manifest.get("unavailable_markets", []) == []
+    assert len(result.warnings) == 1
+    assert result.warnings[0].startswith("US scoreboard asset ignored: ")
+    assert reason in result.warnings[0]
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("markets/us/scoreboard.json", id="string"),
+        pytest.param({}, id="no-path"),
+        pytest.param({"path": "../../outside.json"}, id="escapes-the-artifact"),
+        pytest.param({"path": "markets/hk/scoreboard.json"}, id="another-markets-path"),
+    ],
+)
+def test_a_broken_scoreboard_descriptor_loses_its_entry_and_the_market_stays(tmp_path, descriptor) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, descriptor)
+
+    result = combine_one_market(artifacts, tmp_path / "combined")
+
+    assert result.manifest["markets"]["US"]["assets"] == {}
+    assert [warning.split(":")[0] for warning in result.warnings] == ["US scoreboard asset ignored"]
+
+
+def test_a_fallback_artifact_with_a_broken_scoreboard_still_serves_the_market(tmp_path) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").write_text("{truncated")
+    metadata = json.loads((market_dir / "manifest.market.json").read_text())
+
+    assert StaticArtifactCombiner.rejection_reason(
+        market="US", source_label="fallback", metadata=metadata, market_dir=market_dir
+    ) is None
+
+    result = combine_one_market(artifacts, tmp_path / "combined", as_fallback=True)
+
+    assert result.manifest["markets"]["US"]["assets"] == {}
+    assert result.manifest["markets"]["US"]["as_of_date"] == "2026-10-12"
+
+
+def test_a_good_scoreboard_keeps_its_entry_and_every_other_broken_asset_still_rejects(tmp_path) -> None:
+    artifacts = tmp_path / "artifacts"
+    market_dir = write_artifact(artifacts)
+    advertise_scoreboard(market_dir, {"path": "markets/us/scoreboard.json"})
+    (market_dir / "scoreboard.json").write_text(json.dumps(GOOD_SHAPE))
+
+    result = combine_one_market(artifacts, tmp_path / "combined")
+
+    assert result.manifest["markets"]["US"]["assets"] == {"scoreboard": {"path": "markets/us/scoreboard.json"}}
+    assert result.warnings == ()
+
+    entry = json.loads((market_dir / "manifest.market.json").read_text())["entry"]
+    (market_dir / "breadth.json").write_text("{truncated")
+    entry["assets"]["breadth"] = {"path": "markets/us/breadth.json"}
     with pytest.raises(StaticAdvertisedPathError, match="does not parse"):
         validate_advertised_paths(market="US", entry=entry, market_dir=market_dir)
 

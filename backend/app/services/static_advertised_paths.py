@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from app.services.static_market_artifact_contract import STATIC_SCOREBOARD_SCHEMA_VERSION
+
 # Root-level files a market entry may advertise but that ship as their own
 # artifacts (static-options-US) and are validated by their own selectors.
 ROOT_LEVEL_ADVERTISED_PATHS = frozenset({"options/manifest.json"})
@@ -68,7 +70,13 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
         if section in entry and not isinstance(entry[section], dict):
             raise StaticAdvertisedPathError(f"{section} must be an object")
     pages = entry.get("pages") or {}
-    assets = entry.get("assets") or {}
+    # A broken scoreboard must not cost the market, so it has its own validator
+    # and the combiner drops the entry rather than rejecting the artifact.
+    assets = {
+        name: descriptor
+        for name, descriptor in (entry.get("assets") or {}).items()
+        if name != "scoreboard"
+    }
     listed_files = {
         id(pages.get("scan")): ("scan manifest", "chunks"),
         id(assets.get("charts")): ("chart index", "symbols"),
@@ -101,3 +109,24 @@ def validate_advertised_paths(*, market: str, entry: dict, market_dir: Path) -> 
             )
         for ref in refs:
             _load_json(market=market, market_dir=market_dir, advertised=ref.get("path"))
+
+
+def validate_scoreboard_asset(*, market: str, market_dir: Path, descriptor: object) -> None:
+    """Raise unless ``descriptor`` names a scoreboard file for ``market`` the page can read."""
+    if not isinstance(descriptor, dict) or "path" not in descriptor:
+        raise StaticAdvertisedPathError("descriptor must be an object with a path")
+    payload = _load_json(market=market, market_dir=market_dir, advertised=descriptor["path"])
+    cohorts = payload.get("cohorts") if isinstance(payload, dict) else None
+    if (
+        not isinstance(cohorts, list)
+        or payload.get("schema_version") != STATIC_SCOREBOARD_SCHEMA_VERSION
+        or payload.get("market") != market
+        or not all(
+            isinstance(cohort, dict) and isinstance(cohort.get("horizons"), list)
+            for cohort in cohorts
+        )
+    ):
+        raise StaticAdvertisedPathError(
+            f"advertised file {descriptor['path']!r} is not a "
+            f"{STATIC_SCOREBOARD_SCHEMA_VERSION} file for {market}"
+        )

@@ -41,6 +41,7 @@ from app.services.price_row_normalization import (
 )
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
+    STATIC_SCOREBOARD_SCHEMA_VERSION,
     read_static_market_manifest,
 )
 from app.services.validation_service import (
@@ -52,7 +53,6 @@ from app.services.validation_service import (
     summarize_horizon,
 )
 
-SCHEMA_VERSION = "static-scoreboard-v1"
 SCOREBOARD_HORIZONS = (5, 20, 60)
 THIN_SAMPLE_SIZE = 20
 THIN_SIGNAL_DATES = 5
@@ -224,7 +224,7 @@ def build_scoreboard(
     recording_since, ledger_through = days[0].as_of_date, days[-1].as_of_date
     recorded_sessions = calendar.trading_days(market, recording_since, ledger_through)
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": STATIC_SCOREBOARD_SCHEMA_VERSION,
         "market": market,
         "as_of_date": as_of_date.isoformat(),
         "generated_at": format_timestamp(generated_at),
@@ -273,8 +273,6 @@ def write_scoreboard(
     )
     target = market_dir / "scoreboard.json"
     _write_atomic(target, json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n")
-    # One unparseable advertised file rejects the whole market at combine time.
-    json.loads(target.read_text(encoding="utf-8"))
     entry["assets"]["scoreboard"] = {"path": f"markets/{market.lower()}/scoreboard.json"}
     _write_atomic(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(f"{market}: scored {len(ledger)} ledger days into {len(payload['cohorts'])} cohorts", flush=True)
