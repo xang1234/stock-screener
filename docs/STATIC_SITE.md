@@ -68,24 +68,27 @@ This rolling release is a static-build continuity mechanism only. The live app c
 
 ## Forward-Return Scoreboard
 
-A market entry can advertise `assets.scoreboard = {"path": "markets/<m>/scoreboard.json"}`, a small file of what happened after each preset's published matches. It adds no schema bump: the path validator checks it like any other asset, and one unparseable advertised file rejects the whole market.
+A market entry can advertise `assets.scoreboard = {"path": "markets/<m>/scoreboard.json"}`, a small file of what happened after a stock newly entered each preset's published matches. It adds no schema bump. A market never depends on it: the combiner validates it apart from required assets, so an unparseable or wrong-shape file loses only its `assets.scoreboard` entry, with a warning.
 
 Past matches cannot be rebuilt, because fundamentals keep no history. So the `scoreboard-ledger-data` release stores what the site published, one line per first-published date, in `scoreboard-ledger-<m>-v1.jsonl.gz` with `scoreboard-ledger-<m>-v1.previous.jsonl.gz` as the prior copy. The ledger stores symbols and a hash of each preset's `filter_expression`. It never stores returns or entry prices, because every build recomputes them from current prices.
 
-Two workflows touch the ledger:
+Three workflows touch the ledger:
 
-- The `record-ledger` job in `static-site-publish.yml` runs after `deploy`, with the same `if`, so it records what actually deployed. It holds `contents: write`, installs nothing and runs `backend/app/scripts/scoreboard_ledger.py`, which is stdlib only. A date at or before the ledger's end uploads nothing.
+- The `record-ledger` job in `static-site-publish.yml` runs after `deploy`, with the same `if`, so it records what actually deployed. It holds `contents: write`, installs nothing and runs `backend/app/scripts/scoreboard_ledger.py`, which is stdlib only. A date at or before the ledger's end uploads nothing. It goes red for a market whose extraction failed, whose day cannot have been published (dated past the publish UTC date plus one day, or holding zero presets), or whose canonical lost a line `.previous` holds.
+- `scoreboard-ledger-recover.yml` inserts one lost day from a retained artifact. It is dispatched by hand and shares the production publisher's concurrency group, so it cannot overlap `record-ledger`.
 - The `Build market scoreboard` step in `static-site.yml` downloads the ledger and runs `backend/app/scripts/build_static_scoreboard.py` as its own process, with `continue-on-error` and a 20 minute cap. This workflow never writes the release. If the step fails, `manifest.market.json` stays unchanged and the market publishes without the asset.
 
 Returns follow these rules:
 
+- **A pick.** A pick is a symbol newly entering a preset: in that day's matches and not in the preset's matches on its previous ledger day. A preset's first ledger day is a baseline and yields none, so stocks already on the list on the first recorded day are not counted. A definition or era change is not a baseline.
+- **Window.** Only ledger days within 365 calendar days of `as_of_date` are scored, with the day before them as the baseline. `scored_since` is the first scored day and `recording_since` the ledger's first. Days stay in the ledger.
 - **Entry and exit.** Entry is the open of the first session that opens after publication. Exit is the close of the Nth session, for N of 5, 20 and 60. Returns are in local currency, price only, with no costs.
 - **Prices.** The builder reads `stock_prices` directly, capped at the export's `as_of_date`, so it cannot see a partial bar from a session in progress and cannot reach a provider. A recent IPO still scores, because there is no 50-bar minimum.
-- **Overlap.** A repeat of a symbol inside its counted window is suppressed. The rule runs per preset across the preset's whole history, so a definition or era change does not reset it, and a symbol in two presets counts once in each.
-- **Cohorts.** Numbers are never pooled across `(preset, definition, origin)`. `origin` is `live`, `artifact` (read from a retained build artifact, whose `created_at` only approximates publication) or `artifact_pre_stage_fix` (the same, before the 2026-10-22 stage fix).
+- **Overlap.** A symbol that re-enters inside its counted window is suppressed. The rule runs per preset across the scored days, so a definition or era change does not reset it, and a symbol in two presets counts once in each.
+- **Cohorts.** Numbers are never pooled across `(preset, definition, origin)`. `origin` is `live`, `artifact` (read from a retained build artifact, whose `created_at` only approximates publication) or `artifact_pre_stage_fix` (the same, for an artifact built before the stage fix merged at 2026-10-21T23:05:12Z, #671). The era follows the build time, so US as-of 2026-10-21, built after the merge, is `artifact` while Asian markets' as-of 2026-10-21, built before it, is `artifact_pre_stage_fix`.
 - **Delisted stocks.** A symbol with no price counts in `skipped_missing_history`. Stocks that later delist drop out this way, which can flatter results, so the count is published beside the returns.
 
-Each horizon block has `sample_size`, `signal_dates`, `pending_windows`, `oldest_open_sessions`, `thin`, `positive_rate` (a fraction from 0 to 1), `avg_return_pct`, `median_return_pct`, `avg_excess_return_pct`, `median_excess_return_pct`, `excess_sample_size`, `skipped_missing_history` and `suppressed_overlapping`. `thin` means fewer than 20 closed events or fewer than 5 signal dates. `oldest_open_sessions` is null when no window is open. Statistics with no closed window are null.
+Each horizon block has `sample_size`, `signal_dates`, `effective_dates`, `pending_windows`, `oldest_open_sessions`, `thin`, `positive_rate` and `beat_benchmark_rate` (fractions from 0 to 1), `median_return_pct`, `median_excess_return_pct`, `excess_sample_size`, `skipped_missing_history` and `suppressed_overlapping`. There are no averages, because one bad bar can move an average by many points. `beat_benchmark_rate` is the share of benchmark-covered closed events with excess above zero. `effective_dates` is `(sum n)^2 / sum(n^2)` over the closed events' signal dates, rounded to one decimal, so one busy day counts as about one date. `thin` means fewer than 20 closed events or an `effective_dates` below 5. `oldest_open_sessions` is null when no window is open. Statistics with no closed window are null.
 
 `missing_sessions` counts completed sessions between `recording_since` and `ledger_through` with no ledger line. To seed the release, recover a lost day or repair a corrupt asset, see the [scoreboard ledger runbook](runbooks/scoreboard-ledger.md).
 
