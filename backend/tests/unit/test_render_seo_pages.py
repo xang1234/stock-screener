@@ -311,7 +311,11 @@ def test_scoreboard_shows_scored_since_when_it_differs_from_recording_since(dist
     json.dumps({**SCOREBOARD, "cohorts": [{**SCOREBOARD["cohorts"][0], "horizons": []}]}),
     json.dumps({**SCOREBOARD, "cohorts": [{**SCOREBOARD["cohorts"][0], "horizons": [
         horizon(5, sample_size="12"), horizon(20), horizon(60)]}]}),
-], ids=["cohorts-string", "list", "empty-object", "unparseable", "no-horizons", "sample-size-string"])
+    json.dumps({**SCOREBOARD, "cohorts": {}}),
+    json.dumps({**SCOREBOARD, "cohorts": ""}),
+    json.dumps({**SCOREBOARD, "cohorts": [cohort("vcp", "VCP", "live", 0, [horizon(5), horizon(20)])]}),
+], ids=["cohorts-string", "list", "empty-object", "unparseable", "no-horizons", "sample-size-string",
+        "cohorts-empty-object", "cohorts-empty-string", "zero-pick-cohort-missing-a-session-count"])
 def test_broken_scoreboard_skips_only_that_page_with_a_warning(dist, capsys, content):
     (dist / "static-data/g/1/markets/us/scoreboard.json").write_text(content)
     advertise_au_scoreboard(dist, {**SCOREBOARD, "market": "AU"})
@@ -322,6 +326,29 @@ def test_broken_scoreboard_skips_only_that_page_with_a_warning(dist, capsys, con
     assert (dist / "stocks/us/AAA/index.html").exists()
     assert "1,720 picks tracked" in page(dist, "markets/au")
     assert "::warning::" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("cohorts, kind", [({}, "dict"), ("", "str")], ids=["empty-object", "empty-string"])
+def test_cohorts_that_iterate_as_empty_warn_and_stay_out_of_the_sitemap(dist, capsys, cohorts, kind):
+    write(dist, "g/1/markets/us/scoreboard.json", {**SCOREBOARD, "cohorts": cohorts})
+    render(dist)
+
+    assert (f"::warning::US scoreboard.json has the wrong shape, skipping its page: "
+            f"TypeError('cohorts is {kind}, not a list')") in capsys.readouterr().out
+    assert "/scoreboard/" not in (dist / "sitemap.xml").read_text()
+
+
+def test_empty_cohorts_list_publishes_an_empty_scoreboard_that_claims_no_results(dist, capsys):
+    write(dist, "g/1/markets/us/scoreboard.json", {**SCOREBOARD, "cohorts": []})
+    render(dist)
+    html = page(dist, "scoreboard/us")
+
+    assert "<h2>Recorded live</h2><p>No window has closed yet. Nothing here is a result.</p><a class=cta" in html
+    assert '<meta name="description" content="United States preset screens tracked after publication: 0 screens, ' \
+           '0 picks, 0 windows closed and 0 pending at 20 sessions, as of 2026-11-04.">' in html
+    assert "0 picks tracked" in page(dist, "markets/us")
+    assert f"<loc>{SITE}scoreboard/us/</loc>" in (dist / "sitemap.xml").read_text()
+    assert "::warning::" not in capsys.readouterr().out
 
 
 def test_market_without_scoreboard_asset_has_no_page_or_link(dist):
