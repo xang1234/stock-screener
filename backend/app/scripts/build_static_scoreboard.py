@@ -186,8 +186,9 @@ def build_scoreboard(
 
     cohort_dates: dict[CohortKey, list[date]] = defaultdict(list)
     history: dict[str, list[tuple[CohortKey, date, date, str]]] = defaultdict(list)
-    # The day just before the window shows what was already on each list when it opens.
-    last_day = dict.fromkeys(days[first_scored - 1].presets, days[first_scored - 1]) if first_scored else {}
+    # A preset can be absent from any one day, so each list's state when the window
+    # opens is its own latest day before the cutoff.
+    last_day = {preset: day for day in days[:first_scored] for preset in day.presets}
     for day in scored:
         anchor = anchors[day.as_of_date]
         for preset, match in day.presets.items():

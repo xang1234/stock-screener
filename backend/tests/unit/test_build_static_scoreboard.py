@@ -359,6 +359,25 @@ def test_the_day_one_past_the_window_is_the_baseline_not_a_scored_day(db, calend
     assert only_cohort(payload)["first_date"] == "2025-11-04"
 
 
+def test_a_preset_missing_from_the_day_before_the_window_compares_with_its_latest_earlier_day(db, calendar) -> None:
+    add_bars(db, calendar, "NEW", date(2025, 11, 3), date(2025, 11, 14), closes={date(2025, 11, 10): 130.0})
+    add_bars(db, calendar, "OLD", date(2025, 11, 3), date(2025, 11, 14))
+    ledger = as_ledger(
+        ledger_day(date(2025, 10, 29), "2025-10-30T02:00:00Z", {"minervini": (DEF_A, ["STALE"])}),
+        ledger_day(date(2025, 10, 30), "2025-10-31T02:00:00Z", {"minervini": (DEF_A, ["OLD"])}),
+        ledger_day(date(2025, 10, 31), "2025-11-01T02:00:00Z", {"canslim": (DEF_A, [])}),
+        ledger_day(date(2025, 11, 3), "2025-11-04T02:00:00Z", {"minervini": (DEF_A, ["NEW", "OLD"])}),
+    )
+
+    payload = score(db, calendar, ledger, date(2026, 11, 3))
+
+    assert payload["scored_since"] == "2025-11-03"
+    cohort = only_cohort(payload)
+    assert (cohort["preset"], cohort["events"], cohort["signal_dates"]) == ("minervini", 1, 1)
+    block = horizon(cohort, 5)
+    assert (block["sample_size"], block["median_return_pct"]) == (1, 30.0)
+
+
 def test_a_symbol_flipping_in_and_out_cannot_stack_windows(db, calendar) -> None:
     add_bars(db, calendar, "AAPL", date(2026, 10, 5), date(2026, 10, 23), close=110.0)
     ledger = after_baseline(
