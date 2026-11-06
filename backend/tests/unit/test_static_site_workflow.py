@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -1085,6 +1086,25 @@ def test_extraction_reads_the_built_site_and_never_blocks_the_deploy() -> None:
     assert _publish_step("Extract published screen matches")["continue-on-error"] is True
     assert _publish_step("Upload published screen matches")["continue-on-error"] is True
     assert "--site-dir ../frontend/dist/static-data" in _publish_step("Extract published screen matches")["run"]
+
+
+def test_publisher_adds_the_agent_files_to_the_built_site(tmp_path) -> None:
+    names = _step_names(_publish_workflow()["jobs"]["build"]["steps"])
+    step = "Add agent files to the site"
+    assert names.index("Build static frontend") < names.index(step) < names.index("Upload Pages artifact")
+
+    dist = tmp_path / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    shutil.copytree(ROOT / "contracts", tmp_path / "contracts")
+    subprocess.run(["bash", "-euc", _publish_step(step)["run"]], cwd=tmp_path, check=True)
+
+    assert (dist / "llms.txt").read_bytes() == (ROOT / "contracts" / "llms.txt").read_bytes()
+    assert (dist / "fields.json").read_bytes() == (ROOT / "contracts" / "scan_field_dictionary.json").read_bytes()
+
+
+def test_self_hosted_builds_do_not_serve_the_agent_files() -> None:
+    assert not (ROOT / "frontend" / "public" / "llms.txt").exists()
+    assert not (ROOT / "frontend" / "public" / "fields.json").exists()
 
 
 def test_publisher_rehearses_a_ledger_script_change() -> None:

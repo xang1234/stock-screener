@@ -1,0 +1,21 @@
+# Stock Screener
+
+> End-of-day stock screening data for 12 markets (US, CA, DE, HK, CN, JP, KR, TW, IN, SG, MY, AU) from the open-source stock-screener project. It covers preset screens such as Minervini, CANSLIM and VCP, relative-strength ratings, market breadth and industry group rankings. This is educational screening data, not investment advice. There is no intraday data.
+
+The data is static JSON published after each market's close. Each publish lives in a new generation folder, so always start from the manifest.
+
+## Data
+
+- [Manifest](https://xang1234.github.io/stock-screener/static-data/manifest.json): The entry point. `data_root` names the current generation folder, and every other path below is relative to `static-data/<data_root>`. `markets.<CODE>` gives each market's `as_of_date`, `features`, `pages` and `assets`.
+- Scan rows: `markets.<CODE>.pages.scan.path` is a scan manifest with the screen rules in `preset_screens` and the row files in `chunks`. Each chunk's `path` holds `rows`, and together the chunks hold every row.
+- Track record: `markets.<CODE>.assets.scoreboard.path`, present only for a market with a published record.
+- [Field dictionary](https://xang1234.github.io/stock-screener/fields.json): The meaning, unit and hard range of every scan row field. Read it before quoting a number, because names mislead: `volume` is traded value rather than shares, and `pct_day` is a percentile rank rather than a percent change.
+
+## MCP server
+
+- [stockscreen-mcp](https://github.com/xang1234/stock-screener/tree/main/stockscreen-mcp): Tools over this data, with no API key. Run `uvx stockscreen-mcp`, or `claude mcp add stockscreen -- uvx stockscreen-mcp`. The `stockscreen://skill` resource teaches the workflow and reading rules.
+
+## Optional
+
+- [Live site](https://xang1234.github.io/stock-screener/): The same data in a browser.
+- [Source](https://github.com/xang1234/stock-screener): Code that computes every field.

@@ -50,6 +50,7 @@ All tools are read-only.
 |---|---|
 | `list_markets` | Markets in the current publish, with each one's data date, status and features |
 | `list_screens` | The 28 preset screens and their exact rules: Minervini, CANSLIM, VCP, cup with handle, high tight flag, momentum, IPOs and more |
+| `describe_fields` | What each scan field means, its unit and any hard range, with exact counts from this market's rows: how many hold a value, how many are true on a flag, and how many hold each label. Filter with `group` or name `fields`, which also reveals internal bookkeeping fields |
 | `run_screen` | A preset and/or your own filters over every stock in a market's scan, sorted, with the match count. A preset returns exactly the stocks the website shows for it |
 | `get_stock` | One stock: RS ratings (overall, 1M, 3M, 12M), stage, screener scores, growth, group rank, setup and pattern fields, and the screens it passes |
 | `audit_stocks` | A watchlist of up to 50 symbols against the preset screens: the screens each stock passes, and near misses that fail exactly one of several rules, as the field and how far short it is (the field alone when the rule is not numeric or the value is missing). `detail` also returns every failed rule per failing screen; responses over 80,000 characters are refused with a hint of how many symbols fit |
@@ -63,6 +64,12 @@ All tools are read-only.
 - **Group rank 1** is the strongest group.
 - **Track records** have one row per screen definition and origin. Compare the rows separately and don't rank `thin` ones. Each result's `how_to_read` note explains the numbers.
 - **Every result has an `as_of_date`:** the last completed session the publish covers. This is end-of-day data with nothing intraday, and it is never fetched live from price providers.
+
+### For agents
+
+- **Skill:** the `stockscreen://skill` resource is an Agent Skills file teaching the tool sequence and the reading rules that prevent wrong answers.
+- **Prompts:** `review_watchlist` and `find_candidates` start that sequence.
+- **Field dictionary:** the `stockscreen://fields` resource holds every scan field's meaning, unit and hard range. `describe_fields` adds per-market counts. Without the server, read [fields.json](https://xang1234.github.io/stock-screener/fields.json) and [llms.txt](https://xang1234.github.io/stock-screener/llms.txt).
 
 ## Setup
 

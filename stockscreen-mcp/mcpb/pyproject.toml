@@ -2,9 +2,9 @@
 # server.py. Pins the released package; its version must match ../src/stockscreen_mcp/__init__.py.
 [project]
 name = "stockscreen-mcp-bundle"
-version = "0.2.0"
+version = "0.3.0"
 requires-python = ">=3.10"
-dependencies = ["stockscreen-mcp==0.2.0"]
+dependencies = ["stockscreen-mcp==0.3.0"]
 
 [tool.uv]
 package = false

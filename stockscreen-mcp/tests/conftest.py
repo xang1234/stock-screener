@@ -22,6 +22,8 @@ def stock(symbol, **fields):
         "price_sparkline_data": [1.0, 1.1],
         "rs_sparkline_data": [1.0, 0.9],
         "field_availability": {"short_interest": {"status": "missing"}},
+        "scan_mode": "full",
+        "data_status": "complete",
     }
     row.update(fields)
     return row

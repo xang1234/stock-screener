@@ -5,8 +5,10 @@ from __future__ import annotations
 import difflib
 import json
 import math
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib.resources import files
 from typing import Annotated, Any
 
 from mcp.server import MCPServer
@@ -14,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from .data import StaticData
+from .data import HEAVY_FIELDS, StaticData
 from .screens import (
     evaluate_expression,
     explain_expression,
@@ -42,13 +44,22 @@ Daily stock-screening data from the open-source stock-screener project
   for market health and breadth, group_rankings for leading groups.
 - screen_track_record reports how stocks did after newly entering a screen, one holding
   period per call. Follow its how_to_read note when quoting the numbers.
+- Call describe_fields before quoting or filtering on an unfamiliar field. Names mislead, and what
+  rows hold varies by market.
+- The stockscreen://skill resource teaches the full workflow and reading rules.
 - This is educational screening data, not investment advice.
 """
 
 mcp = MCPServer("stockscreen", instructions=INSTRUCTIONS)
 data = StaticData()
 
+
+def _packaged_text(name: str) -> str:
+    return files("stockscreen_mcp").joinpath(name).read_text("utf-8")
+
+
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
+FIELD_DICTIONARY = json.loads(_packaged_text("fields.json"))
 Market = Annotated[str, Field(description="Market code, e.g. US, HK, JP, IN, DE. See list_markets.")]
 
 # Columns shown for every screen row, before the fields used to filter and sort.
@@ -58,11 +69,7 @@ ROW_FIELDS = (
     "ibd_industry_group", "ibd_group_rank", "eps_growth_qq", "sales_growth_qq", "week_52_high_distance",
     "market_cap_usd",
 )
-# Internal bookkeeping fields nobody asks about.
-HIDDEN_STOCK_FIELDS = frozenset({
-    "market_rs_run_id", "rs_formula_version", "rs_universe_size", "scan_mode", "screeners_run",
-    "applicable_screeners", "unavailable_screeners", "matched_groups", "data_status",
-})
+HIDDEN_STOCK_FIELDS = frozenset(name for name, e in FIELD_DICTIONARY["fields"].items() if e.get("internal"))
 BREADTH_FIELDS = (
     "date", "stocks_up_4pct", "stocks_down_4pct", "ratio_5day", "ratio_10day", "advancing_count",
     "declining_count", "new_high_52week_count", "new_low_52week_count", "t2108_pct",
@@ -82,6 +89,7 @@ SNAPSHOT_FIELDS = (
 # numeric indent-2 JSON at 3.1 to 3.28 characters per token (cl100k estimates). The worst 50-symbol audit summary
 # measured 67 KB and a normal publish's 84 track record rows about 60 KB. A re-hash of every preset reaches about 78 KB.
 MAX_RESPONSE_CHARS = 80_000
+MAX_LISTED_LABELS = 15
 # uvx clients stay on old versions, so a client that cannot read a newer file must say so.
 SCOREBOARD_SCHEMA = "static-scoreboard-v1"
 TRACK_RECORD_HORIZONS = (5, 20, 60)
@@ -136,8 +144,9 @@ class Filter(BaseModel):
 
     field: str = Field(description=(
         "Scan field, e.g. rs_rating, rs_rating_3m, stage (1-4), ibd_group_rank, eps_growth_qq, "
-        "sales_growth_qq, current_price, volume, market_cap_usd, week_52_high_distance, "
-        "minervini_score, canslim_score, vcp_score, ma_alignment, passes_template, se_pattern_primary."
+        "sales_growth_qq, current_price, volume (average daily traded value in the listing currency, not shares), "
+        "market_cap_usd, week_52_high_distance, minervini_score, canslim_score, vcp_score, ma_alignment, "
+        "passes_template, se_pattern_primary. describe_fields defines them all."
     ))
     min: float | None = Field(default=None, description="Inclusive lower bound.")
     max: float | None = Field(default=None, description="Inclusive upper bound.")
@@ -271,6 +280,74 @@ def list_screens(market: Market = "US") -> dict[str, Any]:
         for p in _visible_presets(market, scan)
     ]
     return {"market": market.upper(), "as_of_date": scan.get("as_of_date"), "screens": screens}
+
+
+def _row_counts(rows: list[dict[str, Any]], name: str, entry: dict[str, Any]) -> dict[str, Any]:
+    if name in HEAVY_FIELDS:
+        return {"rows_with_value": None}
+    present = [v for v in (row_value(row, name) for row in rows) if v not in (None, "", [], {})]
+    counts: dict[str, Any] = {"rows_with_value": len(present)}
+    if entry["type"] == "boolean":
+        counts["true_rows"] = sum(v is True for v in present)
+    # JSON keys are strings, and a filter on the string "4" does not match the integer 4.
+    if entry["unit"] == "label" and entry["type"] != "integer":
+        labels = Counter(label for v in present for label in (set(v) if isinstance(v, list) else [v]))
+        if len(labels) <= MAX_LISTED_LABELS:
+            counts["values"] = {str(label): count for label, count in labels.most_common()}
+    return counts
+
+
+@mcp.tool(annotations=READ_ONLY)
+def describe_fields(
+    market: Market = "US",
+    fields: Annotated[list[str] | None, Field(
+        min_length=1, description="Exact field names to define, internal ones included; defaults to every public field.",
+    )] = None,
+    group: Annotated[str | None, Field(
+        description="Only the fields in this group, e.g. fundamentals. The response lists every group.",
+    )] = None,
+) -> dict[str, Any]:
+    """Define scan fields and count what a market's rows hold for them.
+
+    Call it before quoting or filtering on a field you have not used, because names mislead: volume is
+    traded value rather than shares, and pct_day is a percentile rank rather than a percent change.
+
+    Each field returns its group, type, unit and meaning. note says what a reader would otherwise get
+    wrong, range appears only where the code guarantees a hard bound, and alias_of names the row field
+    this name reads.
+
+    rows_with_value counts this market's rows with a non-null, non-empty value. At 0 the field supports
+    no claim here. It is null for fields the tools drop, which exist
+    only in the published JSON. true_rows appears on boolean fields and counts the rows that are true.
+    values appears on text and list label fields as {label: rows}, most common first, unless the market
+    has more than 15 distinct labels. Filters can test only the text ones. These counts say what this publish holds and not why. They cannot separate a
+    field that cannot be computed from a result where nothing qualified.
+
+    Internal fields, which are bookkeeping fields and rule names, appear only when named
+    in `fields`. `fields` and `group` together keep the named fields that are in the group.
+    """
+    known = FIELD_DICTIONARY["fields"]
+    groups = FIELD_DICTIONARY["groups"]
+    if group is not None and group not in groups:
+        raise ToolError(f"Unknown group {group!r}. Groups: {', '.join(groups)}.")
+    for name in fields or []:
+        if name not in known:
+            close = difflib.get_close_matches(name, list(known), n=5)
+            hint = f" Did you mean: {', '.join(close)}?" if close else ""
+            raise ToolError(f"Unknown field {name!r}.{hint}")
+    scan, rows = data.scan(market)
+    names = fields or [name for name in known if name not in HIDDEN_STOCK_FIELDS]
+    return {
+        "market": market.upper(),
+        "as_of_date": scan.get("as_of_date"),
+        "rows": len(rows),
+        "groups": groups,
+        "fields": {
+            name: {**known[name], **_row_counts(rows, name, known[name])}
+            for name in names
+            if group is None or known[name]["group"] == group
+        },
+    }
 
 
 def match_screen(
@@ -670,6 +747,57 @@ def group_rankings(
         "stocks": [_pick(s, GROUP_STOCK_FIELDS) for s in stocks[:limit]],
     }
     return result
+
+
+@mcp.resource(
+    "stockscreen://fields",
+    name="fields",
+    description="Meaning, unit and hard range of every scan field, as JSON. describe_fields adds per-market counts.",
+    mime_type="application/json",
+)
+def fields_resource() -> str:
+    return _packaged_text("fields.json")
+
+
+@mcp.resource(
+    "stockscreen://skill",
+    name="skill",
+    description="Workflow and reading rules for answering stock questions with these tools.",
+    mime_type="text/markdown",
+)
+def skill_resource() -> str:
+    return _packaged_text("SKILL.md")
+
+
+CLOSING_INSTRUCTIONS = (
+    "Call `describe_fields` before quoting an unfamiliar field. State the as_of_date and any data gaps, and say this "
+    "is screening data, not investment advice."
+)
+
+
+@mcp.prompt()
+def review_watchlist(
+    symbols: Annotated[str, Field(description="Tickers to review, separated by commas, e.g. NVDA, AAPL.")],
+    market: Market = "US",
+) -> str:
+    """Review a watchlist or holdings against the market regime and the preset screens."""
+    return (
+        f"Review these {market.upper()} stocks: {symbols}. Read the stockscreen://skill resource first. "
+        "Call `market_overview` for the regime, `audit_stocks` for the screens each stock passes and nearly passes, "
+        "`group_rankings` to see whether its group leads, and `get_stock` for any name that needs more detail. "
+        f"{CLOSING_INSTRUCTIONS}"
+    )
+
+
+@mcp.prompt()
+def find_candidates(market: Market = "US") -> str:
+    """Find screening candidates in a market, from the regime down to individual names."""
+    return (
+        f"Find screening candidates in the {market.upper()} market. Read the stockscreen://skill resource first. "
+        "Call `market_overview` for the regime, `list_screens` and `screen_track_record` to choose screens, "
+        "`run_screen` for the matches, `group_rankings` to confirm leadership, and `get_stock` for the finalists. "
+        f"{CLOSING_INSTRUCTIONS}"
+    )
 
 
 def main() -> None:

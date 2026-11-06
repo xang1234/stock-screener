@@ -557,7 +557,7 @@ def test_installed_entry_point_answers_an_mcp_handshake_over_stdio():
     assert initialized["id"] == 1
     assert initialized["result"]["serverInfo"]["name"] == "stockscreen"
     assert {tool["name"] for tool in tools["result"]["tools"]} == {
-        "list_markets", "list_screens", "run_screen", "get_stock", "audit_stocks", "screen_track_record",
+        "list_markets", "list_screens", "describe_fields", "run_screen", "get_stock", "audit_stocks", "screen_track_record",
         "market_overview", "group_rankings",
     }
 

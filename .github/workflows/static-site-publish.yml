@@ -179,6 +179,13 @@ jobs:
           path: /tmp/scoreboard-days
           if-no-files-found: warn
 
+      # Not in frontend/public, because llms.txt points at this site's data and a
+      # self-hosted build would serve it too.
+      - name: Add agent files to the site
+        run: |
+          cp contracts/llms.txt frontend/dist/llms.txt
+          cp contracts/scan_field_dictionary.json frontend/dist/fields.json
+
       - name: Upload Pages artifact
         id: upload-pages-artifact
         uses: actions/upload-pages-artifact@v5
