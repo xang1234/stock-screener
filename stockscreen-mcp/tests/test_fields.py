@@ -152,6 +152,13 @@ async def test_describe_fields_lists_labels_most_common_first(monkeypatch):
     assert "values" not in described["vcp_score"]
 
 
+async def test_describe_fields_counts_a_repeated_label_once_per_row(monkeypatch):
+    fake_scan(monkeypatch, [{"market_themes": ["AI", "AI", "Chips"]}, {"market_themes": ["AI"]}])
+    described = (await describe(fields=["market_themes"]))["fields"]
+
+    assert described["market_themes"]["values"] == {"AI": 2, "Chips": 1}
+
+
 async def test_describe_fields_omits_values_above_fifteen_labels(monkeypatch):
     fake_scan(monkeypatch, [{"gics_sector": f"sector {i}"} for i in range(15)])
     assert len((await describe(fields=["gics_sector"]))["fields"]["gics_sector"]["values"]) == 15

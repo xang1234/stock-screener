@@ -291,7 +291,7 @@ def _row_counts(rows: list[dict[str, Any]], name: str, entry: dict[str, Any]) ->
         counts["true_rows"] = sum(v is True for v in present)
     # JSON keys are strings, and a filter on the string "4" does not match the integer 4.
     if entry["unit"] == "label" and entry["type"] != "integer":
-        labels = Counter(label for v in present for label in (v if isinstance(v, list) else [v]))
+        labels = Counter(label for v in present for label in (set(v) if isinstance(v, list) else [v]))
         if len(labels) <= MAX_LISTED_LABELS:
             counts["values"] = {str(label): count for label, count in labels.most_common()}
     return counts
@@ -323,7 +323,7 @@ def describe_fields(
     has more than 15 distinct labels. Filters can test only the text ones. These counts say what this publish holds and not why. They cannot separate a
     field that cannot be computed from a result where nothing qualified.
 
-    Internal fields, which are bookkeeping and rule names that filters reject, appear only when named
+    Internal fields, which are bookkeeping fields and rule names, appear only when named
     in `fields`. `fields` and `group` together keep the named fields that are in the group.
     """
     known = FIELD_DICTIONARY["fields"]

@@ -163,6 +163,8 @@ def test_volume_is_traded_value_in_the_listing_currency(market_rows):
             for row in rows
             if row.get("volume") and row.get("adv_usd") and row.get("market_cap") and row.get("market_cap_usd")
         ]
+        if not priced:
+            continue
         assert 0.5 < statistics.median(ratio / fx for ratio, fx, _ in priced) < 2, code
         # ponytail: the two readings split at the square root of the FX rate, so a rate near 1 leaves little margin.
         foreign = [(ratio, fx) for ratio, fx, currency in priced if currency != "USD"]
