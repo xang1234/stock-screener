@@ -35,7 +35,7 @@ async def test_every_tool_is_listed_as_read_only():
 
     assert set(tools) == {
         "list_markets", "list_screens", "run_screen", "get_stock", "audit_stocks", "market_overview",
-        "group_rankings", "screen_track_record",
+        "group_rankings", "screen_track_record", "describe_fields",
     }
     for tool in tools.values():
         assert tool.annotations.read_only_hint is True

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the canonical scan-field contract for each runtime."""
+"""Package the canonical scan-field contract and dictionary for each runtime."""
 
 from __future__ import annotations
 
@@ -8,11 +8,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "contracts" / "scan_filter_fields.json"
-TARGETS = (
-    ROOT / "backend" / "app" / "domain" / "scanning" / "scan_filter_fields.json",
-    ROOT / "frontend" / "src" / "features" / "scan" / "scanFilterFields.json",
-)
+TARGETS_BY_SOURCE = {
+    ROOT / "contracts" / "scan_filter_fields.json": (
+        ROOT / "backend" / "app" / "domain" / "scanning" / "scan_filter_fields.json",
+        ROOT / "frontend" / "src" / "features" / "scan" / "scanFilterFields.json",
+    ),
+    ROOT / "contracts" / "scan_field_dictionary.json": (
+        ROOT / "stockscreen-mcp" / "src" / "stockscreen_mcp" / "fields.json",
+    ),
+}
 
 
 def main() -> int:
@@ -23,15 +27,19 @@ def main() -> int:
         help="fail when a packaged artifact differs from the canonical contract",
     )
     args = parser.parse_args()
-    content = SOURCE.read_bytes()
 
-    stale = [target for target in TARGETS if not target.exists() or target.read_bytes() != content]
+    copies = [
+        (target, source.read_bytes())
+        for source, targets in TARGETS_BY_SOURCE.items()
+        for target in targets
+    ]
+    stale = [target for target, content in copies if not target.exists() or target.read_bytes() != content]
     if args.check:
         for target in stale:
             print(f"stale generated scan-field contract: {target.relative_to(ROOT)}")
         return 1 if stale else 0
 
-    for target in TARGETS:
+    for target, content in copies:
         target.write_bytes(content)
     return 0
 
