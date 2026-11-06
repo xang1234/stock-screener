@@ -319,8 +319,8 @@ def describe_fields(
     rows_with_value counts this market's rows with a non-null, non-empty value. At 0 the field supports
     no claim here. It is null for fields the tools drop, which exist
     only in the published JSON. true_rows appears on boolean fields and counts the rows that are true.
-    values appears on text and list label fields as {label: rows}, and filters can test only the text ones, most common first, unless the market has more than
-    15 distinct labels. These counts say what this publish holds and not why. They cannot separate a
+    values appears on text and list label fields as {label: rows}, most common first, unless the market
+    has more than 15 distinct labels. Filters can test only the text ones. These counts say what this publish holds and not why. They cannot separate a
     field that cannot be computed from a result where nothing qualified.
 
     Internal fields, which are bookkeeping and rule names that filters reject, appear only when named
