@@ -3,7 +3,7 @@
   "name": "io.github.xang1234/stockscreen-mcp",
   "title": "Stock Screener",
   "description": "Daily stock screens, RS ratings, market breadth and group rankings for 12 markets. No API keys.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "websiteUrl": "https://xang1234.github.io/stock-screener/",
   "repository": {
     "url": "https://github.com/xang1234/stock-screener",
@@ -14,7 +14,7 @@
     {
       "registryType": "pypi",
       "identifier": "stockscreen-mcp",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "transport": { "type": "stdio" }
     }
   ]

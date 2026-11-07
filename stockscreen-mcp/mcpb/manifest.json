@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "stockscreen-mcp",
   "display_name": "Stock Screener",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Daily stock screens, RS ratings, market breadth and group rankings for 12 markets. No API keys.",
   "long_description": "Minervini, CANSLIM, VCP and 25 more preset screens, relative-strength ratings, market health and StockBee-style breadth, and IBD-style industry group rankings for the US, Canada, Germany, Hong Kong, China, Japan, Korea, Taiwan, India, Singapore, Malaysia and Australia. Reads the end-of-day snapshot the open-source stock-screener project publishes after every market close. Educational screening data, not investment advice. Requires uv (https://docs.astral.sh/uv/) on your PATH: the server starts with `uv run`, which installs the stockscreen-mcp package from PyPI.",
   "author": {
