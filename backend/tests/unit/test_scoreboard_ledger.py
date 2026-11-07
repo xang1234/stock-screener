@@ -470,18 +470,22 @@ def fail(message):
     raise SystemExit(1)
 
 
+if args[0] == "release" and args[2] != "scoreboard-ledger-data":
+    fail(f"unexpected tag: {args}")
 if args[:2] == ["release", "view"]:
     if "view" in faults:
         fail(faults["view"])
     if not release.exists():
         fail("release not found")
-    print(json.dumps({"assets": [{"name": p.name} for p in sorted(release.iterdir())]}))
+    print(json.dumps({"assets": [{"name": p.name, "state": "uploaded"} for p in sorted(release.iterdir())]}))
 elif args[:2] == ["release", "download"]:
     name = args[args.index("--pattern") + 1]
     if name in faults.get("download", []):
         fail("HTTP 502")
     shutil.copy(release / name, pathlib.Path(args[args.index("--dir") + 1]) / name)
 elif args[:2] == ["release", "upload"]:
+    if "--clobber" not in args:
+        fail(f"a ledger upload without --clobber: {args}")
     source = pathlib.Path(args[3])
     remaining = faults.get("upload", {}).get(source.name, 0)
     if remaining:

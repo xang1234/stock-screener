@@ -335,19 +335,25 @@ def run_gh(*args: str) -> str:
     return result.stdout
 
 
-def release_assets() -> set[str] | None:
-    """Asset names in the ledger Release; None when the Release does not exist."""
+def release_asset_states(tag: str) -> dict[str, str] | None:
+    """Asset name to upload state; None when the Release does not exist."""
     result = subprocess.run(
-        ["gh", "release", "view", RELEASE_TAG, "--json", "assets"],
+        ["gh", "release", "view", tag, "--json", "assets"],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode == 0:
-        return {asset["name"] for asset in json.loads(result.stdout)["assets"]}
+        return {asset["name"]: asset["state"] for asset in json.loads(result.stdout)["assets"]}
     if "release not found" in result.stderr:
         return None
     raise GhError(f"gh release view failed: {result.stderr.strip()[:400]}")
+
+
+def release_assets() -> set[str] | None:
+    """Asset names in the ledger Release; None when the Release does not exist."""
+    states = release_asset_states(RELEASE_TAG)
+    return None if states is None else set(states)
 
 
 def download_assets(listing: set[str], market: str, directory: Path) -> None:

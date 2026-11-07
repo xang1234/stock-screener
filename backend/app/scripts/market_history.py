@@ -14,7 +14,6 @@ import gzip
 import json
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import zipfile
@@ -38,6 +37,7 @@ from app.scripts.scoreboard_ledger import (
     load_artifact_market,
     match_presets,
     parse_timestamp,
+    release_asset_states,
     run_gh,
     site_markets,
     site_readers,
@@ -127,21 +127,6 @@ def read_document(path: Path, published_at: datetime) -> dict[str, Any]:
     return document
 
 
-def listed_assets(tag: str) -> dict[str, str] | None:
-    """Asset name to upload state; None when the Release does not exist."""
-    result = subprocess.run(
-        ["gh", "release", "view", tag, "--json", "assets"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return {asset["name"]: asset["state"] for asset in json.loads(result.stdout)["assets"]}
-    if "release not found" in result.stderr:
-        return None
-    raise GhError(f"gh release view failed: {result.stderr.strip()[:400]}")
-
-
 def session_dates(listing: dict[str, str], market: str) -> list[str]:
     pattern = re.compile(rf"{market.lower()}-(\d{{4}}-\d{{2}}-\d{{2}})\.json\.gz")
     return sorted(
@@ -165,7 +150,7 @@ def create_release(market: str) -> None:
         )
     except GhError:
         # Another writer can create it between the listing and this call.
-        if listed_assets(tag) is None:
+        if release_asset_states(tag) is None:
             raise
 
 
@@ -174,7 +159,7 @@ def upload_session(path: Path, tag: str) -> None:
         upload_asset(path, tag, clobber=False)
     except GhError:
         # gh refuses a name that exists, which is how a concurrent backfill shows up here.
-        if (listed_assets(tag) or {}).get(path.name) != UPLOADED:
+        if (release_asset_states(tag) or {}).get(path.name) != UPLOADED:
             raise
         print(f"{path.name} was uploaded by another run, keeping that one", flush=True)
 
@@ -211,7 +196,7 @@ def heal_index(market: str, listing: dict[str, str], dry_run: Path | None) -> No
 def archive(market: str, documents: Iterable[dict[str, Any]], dry_run: Path | None) -> None:
     """Add each session the Release lacks, then make the index match the listing."""
     tag = release_tag(market)
-    listing = listed_assets(tag)
+    listing = release_asset_states(tag)
     if listing is None:
         listing = {}
         if dry_run is None:
@@ -237,7 +222,7 @@ def archive(market: str, documents: Iterable[dict[str, Any]], dry_run: Path | No
         listing[name] = UPLOADED
         print(f"{market}: added {as_of_date} ({document['origin']})", flush=True)
     # Listed again because a backfill runs for minutes and publishes can land meanwhile.
-    heal_index(market, {**listing, **(listed_assets(tag) or {})}, dry_run)
+    heal_index(market, {**listing, **(release_asset_states(tag) or {})}, dry_run)
 
 
 def cmd_extract(args: argparse.Namespace) -> int:
