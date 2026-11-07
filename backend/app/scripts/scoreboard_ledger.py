@@ -357,10 +357,10 @@ def download_assets(listing: set[str], market: str, directory: Path) -> None:
             run_gh("release", "download", RELEASE_TAG, "--pattern", name, "--dir", str(directory), "--clobber")
 
 
-def upload_asset(path: Path) -> None:
+def upload_asset(path: Path, tag: str = RELEASE_TAG, *, clobber: bool = True) -> None:
     for attempt in range(1, UPLOAD_ATTEMPTS + 1):
         result = subprocess.run(
-            ["gh", "release", "upload", RELEASE_TAG, str(path), "--clobber"],
+            ["gh", "release", "upload", tag, str(path), *(["--clobber"] if clobber else [])],
             capture_output=True,
             text=True,
             check=False,
@@ -489,16 +489,24 @@ def match_presets(
     }
 
 
+def site_markets(site_dir: Path) -> tuple[Path, dict[str, dict[str, Any]]]:
+    """A built site's data root and the markets it serves a scan for, in name order."""
+    manifest = json.loads((site_dir / "manifest.json").read_text(encoding="utf-8"))
+    unavailable = set(manifest.get("unavailable_markets") or [])
+    markets = {
+        market: entry
+        for market, entry in sorted(manifest["markets"].items())
+        if market not in unavailable and "scan" in entry.get("pages", {})
+    }
+    return site_dir / (manifest.get("data_root") or ""), markets
+
+
 def cmd_extract(args: argparse.Namespace) -> int:
     load_market, evaluate_expression = site_readers()
-    manifest = json.loads((args.site_dir / "manifest.json").read_text(encoding="utf-8"))
-    data_root = args.site_dir / (manifest.get("data_root") or "")
-    unavailable = set(manifest.get("unavailable_markets") or [])
+    data_root, markets = site_markets(args.site_dir)
     args.output.mkdir(parents=True, exist_ok=True)
     failed = False
-    for market, entry in sorted(manifest["markets"].items()):
-        if market in unavailable or "scan" not in entry.get("pages", {}):
-            continue
+    for market, entry in markets.items():
         try:
             data = load_market(data_root, entry)
             presets = match_presets(data["scan"], data["rows"], evaluate_expression)
@@ -563,14 +571,20 @@ def download_artifact(artifact_id: int, path: Path) -> None:
         raise GhError(f"gh api artifact {artifact_id} failed: {result.stderr.strip()[:400]}")
 
 
-def artifact_day(zip_path: Path, market: str, created_at: str, work: Path) -> LedgerDay:
-    load_market, evaluate_expression = site_readers()
+def load_artifact_market(
+    zip_path: Path, market: str, work: Path, load_market: Callable[..., dict[str, Any]]
+) -> dict[str, Any]:
     market_dir = work / "markets" / market.lower()
     with zipfile.ZipFile(zip_path) as archive:
         wanted = [name for name in archive.namelist() if name == "manifest.market.json" or name.startswith("scan/")]
         archive.extractall(market_dir, members=wanted)
     entry = json.loads((market_dir / "manifest.market.json").read_text(encoding="utf-8"))["entry"]
-    data = load_market(work, entry)
+    return load_market(work, entry)
+
+
+def artifact_day(zip_path: Path, market: str, created_at: str, work: Path) -> LedgerDay:
+    load_market, evaluate_expression = site_readers()
+    data = load_artifact_market(zip_path, market, work, load_market)
     published_at = parse_timestamp(created_at)
     return LedgerDay(
         as_of_date=date.fromisoformat(data["scan"]["as_of_date"]),
