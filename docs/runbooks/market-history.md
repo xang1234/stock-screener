@@ -62,11 +62,13 @@ If neither can happen, that session is gone for good.
 
 ## Delete an incomplete asset
 
-GitHub's [REST documentation](https://docs.github.com/en/rest/releases/assets) says a 502 during an upload "may leave an empty asset with a state of starter" that "can be safely deleted". An asset in any state but `uploaded` never counts as a session and never appears in the index, and no job deletes one. `gh release upload` refuses a name that exists, so uploads for that date stop with this error until you delete the asset. Later dates are unaffected.
+GitHub's [REST documentation](https://docs.github.com/en/rest/releases/assets) says a 502 during an upload "may leave an empty asset with a state of starter" that "can be safely deleted". An asset in any state but `uploaded` never counts as a session and never appears in the index, and no job deletes one. `gh release upload` refuses a name that exists, so uploads for that date stop with this error until you delete the asset:
 
 ```text
-::error::US: US us-2026-11-06.json.gz is starter: an upload is running or died part way. If none is running, gh release delete-asset market-history-us-v1 us-2026-11-06.json.gz --yes and run this again; see docs/runbooks/market-history.md
+::error::US: US us-2026-11-06.json.gz is starter: an upload is running or died part way. If none is running, gh release delete-asset market-history-us-v1 us-2026-11-06.json.gz --yes; see docs/runbooks/market-history.md
 ```
+
+`record-history` records one date per market, so the publishes of later dates still go green. Each of those runs prints the same text as a `::warning::` until you delete the asset. A backfill stops at that date, so it adds no later date for that market until you delete the asset.
 
 1. Confirm that no publish or backfill is running, because a running upload may show the same state.
 2. Delete the asset:
@@ -80,6 +82,12 @@ GitHub's [REST documentation](https://docs.github.com/en/rest/releases/assets) s
    ```bash
    gh run rerun <run-id> --failed
    ```
+
+   The rerun joins the publisher's concurrency group, and each new pending run replaces the one already pending, in both directions:
+
+   - Rerun only when no publish is queued, because the rerun would replace it.
+   - If the rerun did replace a publish, run `gh workflow run static-site-publish.yml` after the rerun finishes. The publisher has no schedule, so a replaced publish otherwise waits for the next market build to wake it.
+   - A newer pending publish can also replace the pending rerun. Check that the rerun ran, and rerun it again if it was cancelled.
 
 The `market-history-days` artifact lasts 7 days. After that the rerun fails at its download, and a backfill can still add the session as long as a market artifact holds it.
 
@@ -96,6 +104,8 @@ The `market-history-days` artifact lasts 7 days. After that the rerun fails at i
 | Crash after the session upload, before the index upload | The next run rewrites the index | Same |
 | Another run uploads the same session first | Keeps that file once a fresh listing shows it `uploaded` | Same |
 | Session asset in any state but `uploaded` | Red for that market, no upload, other markets continue | Red, the run stops |
+| Another date's asset in any state but `uploaded` | A warning names it and the delete command, then the run records as usual | Same |
+| Another run's `--clobber` deletes the index between the listing and the download | Rewrites it | Same |
 | Session upload fails any other way | Tries 3 times, then red for that market, index untouched | Tries 3 times, then red, the run stops |
 | Zero rows, zero presets, wrong market, schema mismatch, or `as_of_date` past the publish UTC date plus one day | Red for that market, no upload, other markets continue | Skips the artifact with a warning |
 | Extraction failed for a market (`<market>.failed`) | Red after finishing the other markets | Not applicable |
