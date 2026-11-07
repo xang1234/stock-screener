@@ -13,7 +13,7 @@ gh workflow run market-history-backfill.yml -f market=US
 gh run list --workflow market-history-backfill.yml --limit 1
 ```
 
-Wait for each run to finish before you dispatch the next market. All runs share the concurrency group `market-history-backfill`, and a newer pending run replaces an older pending one. Check that each market's run started, and dispatch it again if it was cancelled.
+Each market has its own concurrency group, `market-history-backfill-<M>`, so you can dispatch every market at once. Within one market a newer pending run replaces an older pending one, so dispatch a market again only after its last run finishes.
 
 A backfill reads every retained default-branch `static-market-<M>` artifact, oldest first. Each artifact is a separate download. These rules decide what it adds:
 

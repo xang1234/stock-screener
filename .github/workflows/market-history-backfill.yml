@@ -14,9 +14,10 @@ on:
 concurrency:
   # Not the publisher's group: session assets are immutable and the index heals
   # itself, so overlapping record-history is safe, and sharing the group would let a
-  # pending backfill replace a pending publish. A newer pending backfill still replaces
-  # an older pending one, so wait for each run before dispatching the next market.
-  group: market-history-backfill
+  # pending backfill replace a pending publish. Per market, because each market has
+  # its own Release, and one shared group would cancel all but the first and last
+  # runs of a dispatch loop.
+  group: market-history-backfill-${{ inputs.market }}
   cancel-in-progress: false
 
 permissions: {}

@@ -17,6 +17,7 @@ from app.scripts.download_static_market_fallbacks import (
     collect_current_markets,
     inspect_downloaded_market,
 )
+from app.scripts.scoreboard_ledger import MARKETS
 
 ROOT = Path(__file__).resolve().parents[3]
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "static-site-publish.yml"
@@ -1123,6 +1124,12 @@ def test_record_history_runs_only_after_a_production_deploy() -> None:
     assert job["permissions"] == {"contents": "write"}
 
 
+@pytest.mark.parametrize("job", ["record-ledger", "record-history"])
+def test_a_hung_release_write_cannot_hold_the_publishers_slot_for_hours(job) -> None:
+    # Both jobs run inside the publisher's concurrency group, whose default timeout is 6 hours.
+    assert _publish_workflow()["jobs"][job]["timeout-minutes"] == 15
+
+
 def test_record_history_installs_nothing_and_runs_only_the_history_script() -> None:
     steps = _publish_workflow()["jobs"]["record-history"]["steps"]
     assert [step["uses"].split("@")[0] for step in steps if "uses" in step] == [
@@ -1190,11 +1197,12 @@ def _backfill_workflow() -> dict:
     return yaml.safe_load(BACKFILL_WORKFLOW.read_text(encoding="utf-8"))
 
 
-def test_backfill_stays_out_of_the_publishers_concurrency_group() -> None:
+def test_backfill_queues_per_market_and_stays_out_of_the_publishers_group() -> None:
     # A shared group would let a pending backfill replace a pending publish. Session
-    # assets are immutable and the index heals itself, so overlapping is safe.
+    # assets are immutable and the index heals itself, so overlapping is safe. Each
+    # market has its own Release, so one group per market keeps a dispatch loop whole.
     concurrency = _backfill_workflow()["concurrency"]
-    assert concurrency == {"group": "market-history-backfill", "cancel-in-progress": False}
+    assert concurrency == {"group": "market-history-backfill-${{ inputs.market }}", "cancel-in-progress": False}
     assert concurrency["group"] != _publish_workflow()["concurrency"]["group"]
     assert "static-site-publisher" not in concurrency["group"]
 
@@ -1207,7 +1215,7 @@ def test_backfill_is_dispatch_only_for_one_market() -> None:
     assert sorted(inputs) == ["market"]
     assert inputs["market"]["required"] is True
     assert inputs["market"]["type"] == "choice"
-    assert inputs["market"]["options"] == ["US", "CA", "HK", "JP", "TW", "IN", "KR", "CN", "DE", "AU", "SG", "MY"]
+    assert inputs["market"]["options"] == list(MARKETS)
 
 
 def test_backfill_writes_only_from_the_default_branch_with_the_least_permissions() -> None:
@@ -1334,7 +1342,7 @@ def test_recover_is_dispatch_only_for_one_market_and_date() -> None:
     assert sorted(inputs) == ["date", "market"]
     assert (inputs["market"]["required"], inputs["date"]["required"]) == (True, True)
     assert inputs["market"]["type"] == "choice"
-    assert inputs["market"]["options"] == ["US", "CA", "HK", "JP", "TW", "IN", "KR", "CN", "DE", "AU", "SG", "MY"]
+    assert inputs["market"]["options"] == list(MARKETS)
 
 
 def test_recover_writes_only_from_the_default_branch_with_the_least_permissions() -> None:
