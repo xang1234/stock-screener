@@ -129,28 +129,32 @@ def moves(**named):
 
 
 async def test_a_rule_field_gaining_or_losing_its_value_is_reported_apart_from_a_move(fake_archive):
+    # OTH and OUT gain and lose se_pattern_primary, which only se_cup_handle reads, without matching it.
     fake_archive.add("US", "2026-10-08", [
         *SINCE_ROWS, archived("GAIN", rs_rating=None, minervini_score=80),
         archived("LOSS", rs_rating=80, minervini_score=80), archived("OTH", rs_rating=65, minervini_score=80),
+        archived("OUT", rs_rating=75, minervini_score=80, se_pattern_primary="flat_base"),
     ])
     fake_archive.add("US", "2026-10-09", [
         *UNTIL_ROWS, archived("GAIN", rs_rating=80, minervini_score=80),
         archived("LOSS", rs_rating=None, minervini_score=80),
-        archived("OTH", rs_rating=75, minervini_score=80, eps_growth_qq=5.0),
+        archived("OTH", rs_rating=75, minervini_score=80, se_pattern_primary="flat_base"),
+        archived("OUT", rs_rating=60, minervini_score=80),
     ])
 
-    result = await call(screen="minervini", symbols=["GAIN", "LOSS", "OTH"])
+    result = await call(screen="minervini", symbols=["GAIN", "LOSS", "OTH", "OUT"])
 
     assert result["screens"]["minervini"] == {
         "name": "Minervini Trend Template", "definition_changed": False,
         "entered": listed("CCC", "DDD", "OTH"), "entered_with_new_data": listed("GAIN"),
-        "entered_with_basis_change": NOTHING, "left": listed("BBB"), "left_with_lost_data": listed("LOSS"),
+        "entered_with_basis_change": NOTHING, "left": listed("BBB", "OUT"), "left_with_lost_data": listed("LOSS"),
         "left_with_basis_change": NOTHING, "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
     }
     assert {symbol: {move: change[move] for move in MOVES} for symbol, change in result["symbols"].items()} == {
         "GAIN": moves(entered_with_new_data=["minervini"]),
         "LOSS": moves(left_with_lost_data=["minervini"]),
         "OTH": moves(entered=["minervini"]),
+        "OUT": moves(left=["minervini"]),
     }
 
 
@@ -162,6 +166,48 @@ def either(*conditions, disabled=()):
         {"id": "off", "name": "Off", "enabled": False, "match": "all", "conditions": list(disabled)},
     ]
     return screen
+
+
+async def test_a_rule_field_losing_its_value_on_an_entry_is_a_plain_move(fake_archive):
+    presets = [*PRESETS, either(condition("rs_rating", "range", min=90), condition("eps_growth_qq", "range", min=25))]
+    # SWAP enters on rs_rating as eps_growth_qq goes missing, and BACK leaves as eps_growth_qq returns.
+    fake_archive.add("US", "2026-10-08", [
+        *SINCE_ROWS, archived("BACK", rs_rating=95), archived("SWAP", rs_rating=60, eps_growth_qq=10.0),
+    ], presets=presets)
+    fake_archive.add("US", "2026-10-09", [
+        *UNTIL_ROWS, archived("BACK", rs_rating=60, eps_growth_qq=10.0), archived("SWAP", rs_rating=95),
+    ], presets=presets)
+
+    result = await call(screen="either", symbols=["BACK", "SWAP"])
+
+    assert (result["screens"]["either"]["entered"], result["screens"]["either"]["left"]) == (
+        listed("SWAP"), listed("BACK"),
+    )
+    assert {symbol: change["entered"] + change["left"] for symbol, change in result["symbols"].items()} == {
+        "BACK": ["either"], "SWAP": ["either"],
+    }
+
+
+@pytest.mark.parametrize(("ruled", "since", "until", "move"), [
+    ("until", {}, {"se_pattern_primary": "flat_base"}, "entered_with_new_data"),
+    ("since", {"se_pattern_primary": "flat_base"}, {}, "left_with_lost_data"),
+])
+async def test_a_move_reads_the_rules_of_the_session_the_symbol_matched_in(fake_archive, ruled, since, until, move):
+    # One session's minervini also needs se_pattern_primary, which se_cup_handle reads in both.
+    patterned = copy.deepcopy(PRESETS)
+    patterned[0]["filter_expression"]["required"]["conditions"].append(
+        condition("se_pattern_primary", "categorical", values=["flat_base"], mode="include"),
+    )
+    matching, failing = {"rs_rating": 80, "minervini_score": 80}, {"rs_rating": 80, "minervini_score": 60}
+    since_row = archived("NB", **(failing if ruled == "until" else matching), **since)
+    until_row = archived("NB", **(matching if ruled == "until" else failing), **until)
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, since_row], presets=patterned if ruled == "since" else PRESETS)
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS, until_row], presets=patterned if ruled == "until" else PRESETS)
+
+    result = await call(screen="minervini", symbols=["NB"])
+
+    assert result["screens"]["minervini"][move] == listed("NB")
+    assert {m: change for m, change in result["symbols"]["NB"].items() if m in MOVES} == moves(**{move: ["minervini"]})
 
 
 async def test_limit_cuts_each_list_and_says_so():
