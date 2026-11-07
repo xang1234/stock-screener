@@ -325,7 +325,8 @@ def _symbol_change(old: Session, new: Session, symbol: str, presets: list[str]) 
     if before[BASIS] != after[BASIS]:
         change["warnings"].append(
             f"growth_metric_basis went from {before[BASIS]} to {after[BASIS]}, so {' and '.join(GROWTH_FIELDS)} "
-            "measure different comparisons in the two sessions and their change is not a move by the stock."
+            "measure different comparisons in the two sessions, so their change can come from the comparison rather "
+            "than the stock."
         )
     return change
 

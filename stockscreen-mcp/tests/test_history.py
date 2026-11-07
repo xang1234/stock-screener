@@ -205,7 +205,8 @@ async def test_a_field_null_in_both_sessions_is_missing_not_unchanged(fake_archi
 @pytest.mark.parametrize(("since_basis", "until_basis", "warnings"), [
     ("comparable_period_yoy", "quarterly_qoq", [
         "growth_metric_basis went from comparable_period_yoy to quarterly_qoq, so eps_growth_qq and sales_growth_qq "
-        "measure different comparisons in the two sessions and their change is not a move by the stock.",
+        "measure different comparisons in the two sessions, so their change can come from the comparison rather than "
+        "the stock.",
     ]),
     ("quarterly_qoq", "quarterly_qoq", []),
 ])
