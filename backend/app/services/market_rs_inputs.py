@@ -208,8 +208,13 @@ class MarketRsInputLoader:
                     normalized
                 ),
             }
+            missing_summary = "; ".join(
+                f"{candidate} missing {', '.join(missing_dates)}"
+                for candidate, missing_dates in missing_by_candidate.items()
+            )
             raise MarketRsInputUnavailable(
-                f"No {normalized} benchmark has every exact RS session anchor",
+                f"No {normalized} benchmark has every exact RS session anchor "
+                f"({missing_summary})",
                 reason_code=MARKET_RS_REASON_BENCHMARK_ADJUSTED_ANCHOR_MISSING,
                 diagnostics=diagnostics,
                 **context,
