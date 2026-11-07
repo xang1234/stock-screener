@@ -20,6 +20,7 @@ on:
       - backend/app/scripts/export_static_site.py
       - backend/app/scripts/report_static_market_freshness.py
       - backend/app/scripts/scoreboard_ledger.py
+      - backend/app/scripts/market_history.py
       - backend/app/services/static_site_export_service.py
       - backend/app/services/static_global_artifacts.py
       - backend/app/services/static_market_artifact_contract.py
@@ -34,8 +35,8 @@ concurrency:
 
 # Granted per job. build runs PR code and third-party installs, so it is
 # read-only: it can neither mint an OIDC token nor delete stored market
-# artifacts. Every write happens in the production-only deploy and
-# record-ledger jobs.
+# artifacts. Every write happens in the production-only deploy, record-ledger
+# and record-history jobs.
 permissions: {}
 
 jobs:
@@ -179,6 +180,25 @@ jobs:
           path: /tmp/scoreboard-days
           if-no-files-found: warn
 
+      # Reads the built site, so the rows are what deploys. Never blocks the deploy;
+      # with nothing uploaded, record-history goes red instead.
+      - name: Extract published market history
+        continue-on-error: true
+        run: |
+          cd backend
+          python3 -m app.scripts.market_history extract \
+            --site-dir ../frontend/dist/static-data \
+            --output /tmp/market-history-days
+
+      - name: Upload published market history
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-history-days
+          path: /tmp/market-history-days
+          if-no-files-found: warn
+          retention-days: 7
+
       # Not in frontend/public, because llms.txt points at this site's data and a
       # self-hosted build would serve it too.
       - name: Add agent files to the site
@@ -309,3 +329,33 @@ jobs:
         run: |
           cd backend
           python3 -m app.scripts.scoreboard_ledger record --days-dir /tmp/scoreboard-days --published-at "$PUBLISHED_AT"
+
+  # Archives what the site now shows, so it runs only after a real deploy, and a red
+  # ledger cannot stop it or the other way round. It holds contents:write, so it
+  # installs nothing and runs only stdlib Python and gh.
+  record-history:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download published market history
+        uses: actions/download-artifact@v4
+        with:
+          name: market-history-days
+          path: /tmp/market-history-days
+
+      - name: Record first-published sessions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PUBLISHED_AT: ${{ needs.deploy.outputs.deployed_at }}
+        run: |
+          cd backend
+          python3 -m app.scripts.market_history record --days-dir /tmp/market-history-days --published-at "$PUBLISHED_AT"
