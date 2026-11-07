@@ -9,6 +9,7 @@ import pytest
 from app.domain.markets.calendar_coverage import CalendarCoverageRegistry
 from app.domain.markets.catalog import get_market_catalog
 from app.domain.markets.reviewed_calendar_input import ReviewedCalendarInput
+from app.services.market_calendar_service import MarketCalendarService
 
 
 CALENDAR_ROOT = Path(__file__).resolve().parents[2] / "data" / "market_calendars"
@@ -196,3 +197,15 @@ def test_singapore_provisional_calendar_excludes_fixed_holidays(
     assert date(2027, 1, 1) not in annual.sessions
     assert date(2027, 3, 26) not in annual.sessions  # Good Friday
     assert date(2027, 8, 9) not in annual.sessions
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "sessions"),
+    [
+        (date(2026, 1, 1), date(2026, 1, 5), [date(2026, 1, 2), date(2026, 1, 5)]),
+        (date(2026, 7, 9), date(2026, 7, 13), [date(2026, 7, 9), date(2026, 7, 13)]),
+        (date(2026, 10, 22), date(2026, 10, 27), [date(2026, 10, 22), date(2026, 10, 27)]),
+    ],
+)
+def test_tw_2026_matches_sessions_twse_reported(start, end, sessions) -> None:
+    assert MarketCalendarService().trading_days("TW", start, end) == sessions

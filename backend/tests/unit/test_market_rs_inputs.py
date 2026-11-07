@@ -252,6 +252,10 @@ def test_missing_benchmark_anchor_reports_price_backed_calendar_diagnostics(
     with pytest.raises(MarketRsInputUnavailable) as exc_info:
         loader.load(db_session, market="JP", as_of_date=ANCHORS[0])
 
+    assert str(exc_info.value) == (
+        "No JP benchmark has every exact RS session anchor "
+        f"(^N225 missing {ANCHORS[21].isoformat()})"
+    )
     diagnostics = exc_info.value.diagnostics
     assert diagnostics["missing_anchor_dates"] == {"^N225": [ANCHORS[21].isoformat()]}
     assert diagnostics["benchmark_anchor_price_coverage"]["^N225"] == pytest.approx(
