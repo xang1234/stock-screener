@@ -21,6 +21,7 @@ from conftest import HISTORY, PRESETS, REPO, SINCE_ROWS, UNTIL_ROWS, archived, c
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("use_fake_data", "use_fake_history")]
 
 NOTHING = {"count": 0, "symbols": [], "truncated": False}
+MOVES = ("entered", "entered_with_new_data", "left", "left_with_lost_data")
 RS_FORMULA = "balanced-horizon-percentile-v2"
 
 
@@ -62,16 +63,19 @@ async def test_defaults_compare_the_two_newest_sessions_screen_by_screen():
         "warnings": [],
         "screens": {
             "correction_survivors": {
-                "name": "Correction Survivors", "definition_changed": False, "entered": NOTHING, "left": NOTHING,
-                "new_to_publish": NOTHING, "dropped_from_publish": NOTHING,
+                "name": "Correction Survivors", "definition_changed": False, "entered": NOTHING, "entered_with_new_data": NOTHING,
+                "left": NOTHING, "left_with_lost_data": NOTHING, "new_to_publish": NOTHING,
+                "dropped_from_publish": NOTHING,
             },
             "minervini": {
                 "name": "Minervini Trend Template", "definition_changed": False, "entered": listed("CCC", "DDD"),
-                "left": listed("BBB"), "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
+                "entered_with_new_data": NOTHING, "left": listed("BBB"), "left_with_lost_data": NOTHING,
+                "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
             },
             "se_cup_handle": {
-                "name": "Cup with Handle", "definition_changed": False, "entered": NOTHING, "left": NOTHING,
-                "new_to_publish": NOTHING, "dropped_from_publish": NOTHING,
+                "name": "Cup with Handle", "definition_changed": False, "entered": NOTHING, "entered_with_new_data": NOTHING,
+                "left": NOTHING, "left_with_lost_data": NOTHING, "new_to_publish": NOTHING,
+                "dropped_from_publish": NOTHING,
             },
         },
     }
@@ -118,6 +122,32 @@ async def test_one_archived_session_says_when_the_archive_started(fake_archive):
     )
 
 
+async def test_a_rule_field_gaining_or_losing_its_value_is_reported_apart_from_a_move(fake_archive):
+    fake_archive.add("US", "2026-10-08", [
+        *SINCE_ROWS, archived("GAIN", rs_rating=None, minervini_score=80),
+        archived("LOSS", rs_rating=80, minervini_score=80), archived("OTH", rs_rating=65, minervini_score=80),
+    ])
+    fake_archive.add("US", "2026-10-09", [
+        *UNTIL_ROWS, archived("GAIN", rs_rating=80, minervini_score=80),
+        archived("LOSS", rs_rating=None, minervini_score=80),
+        archived("OTH", rs_rating=75, minervini_score=80, eps_growth_qq=5.0),
+    ])
+
+    result = await call(screen="minervini", symbols=["GAIN", "LOSS", "OTH"])
+
+    assert result["screens"]["minervini"] == {
+        "name": "Minervini Trend Template", "definition_changed": False,
+        "entered": listed("CCC", "DDD", "OTH"), "entered_with_new_data": listed("GAIN"),
+        "left": listed("BBB"), "left_with_lost_data": listed("LOSS"),
+        "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
+    }
+    assert {symbol: {move: change[move] for move in MOVES} for symbol, change in result["symbols"].items()} == {
+        "GAIN": {"entered": [], "entered_with_new_data": ["minervini"], "left": [], "left_with_lost_data": []},
+        "LOSS": {"entered": [], "entered_with_new_data": [], "left": [], "left_with_lost_data": ["minervini"]},
+        "OTH": {"entered": ["minervini"], "entered_with_new_data": [], "left": [], "left_with_lost_data": []},
+    }
+
+
 async def test_limit_cuts_each_list_and_says_so():
     minervini = (await call(screen="minervini", limit=1))["screens"]["minervini"]
 
@@ -134,8 +164,8 @@ NEVER_SET = [
 
 def absent(in_since, in_until):
     return {
-        "in_since": in_since, "in_until": in_until, "entered": [], "left": [], "changed": {}, "missing": [],
-        "warnings": [],
+        "in_since": in_since, "in_until": in_until, "entered": [], "entered_with_new_data": [], "left": [],
+        "left_with_lost_data": [], "changed": {}, "missing": [], "warnings": [],
     }
 
 
@@ -144,13 +174,13 @@ async def test_symbols_report_presence_moves_and_only_the_fields_that_changed():
 
     assert result["symbols"] == {
         "AAA": {
-            "in_since": True, "in_until": True, "entered": [], "left": [],
-            "changed": {"current_price": {"from": 10.0, "to": 10.5}, "rs_rating": {"from": 95, "to": 96}},
+            "in_since": True, "in_until": True, "entered": [], "entered_with_new_data": [], "left": [],
+            "left_with_lost_data": [], "changed": {"current_price": {"from": 10.0, "to": 10.5}, "rs_rating": {"from": 95, "to": 96}},
             "missing": NEVER_SET, "warnings": [],
         },
         "BBB": {
-            "in_since": True, "in_until": True, "entered": [], "left": ["minervini"],
-            "changed": {"rs_rating": {"from": 75, "to": 60}}, "missing": NEVER_SET, "warnings": [],
+            "in_since": True, "in_until": True, "entered": [], "entered_with_new_data": [], "left": ["minervini"],
+            "left_with_lost_data": [], "changed": {"rs_rating": {"from": 75, "to": 60}}, "missing": NEVER_SET, "warnings": [],
         },
         "NEW": absent(False, True),
         "ZZZ": absent(True, False),
@@ -214,8 +244,10 @@ async def test_symbols_are_limited_to_50():
 
 
 async def test_screen_narrows_the_screens_and_each_symbols_moves(fake_archive):
-    survivor = [archived("CCC", rs_rating=99, minervini_score=95, correction_survivor=True)]
-    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS[:2], *survivor, *UNTIL_ROWS[3:]])
+    since = [archived("CCC", rs_rating=99, minervini_score=95, stage=3, correction_survivor=False)]
+    until = [archived("CCC", rs_rating=99, minervini_score=95, correction_survivor=True)]
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS[:2], *since, *SINCE_ROWS[3:]])
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS[:2], *until, *UNTIL_ROWS[3:]])
     assert (await call(symbols=["CCC"]))["symbols"]["CCC"]["entered"] == ["correction_survivors", "minervini"]
 
     result = await call(screen=" MINERVINI ", symbols=["CCC"])

@@ -26,6 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
 from .data import MANIFEST_TTL_SECONDS
+from .screens import expression_fields, row_value
 
 DEFAULT_HISTORY_URL = "https://github.com/xang1234/stock-screener/releases/download/"
 SESSION_SCHEMA = "market-history-v1"
@@ -43,6 +44,9 @@ TRACKED_FIELDS = (
 # HK and JP rows can switch between a year-over-year and a quarter-over-quarter comparison.
 GROWTH_FIELDS = ("eps_growth_qq", "sales_growth_qq")
 BASIS = TRACKED_FIELDS.index("growth_metric_basis")
+# How a symbol with a row in both sessions can move through a screen. The _with_ moves are those where a field
+# the screen's rules read went from null to a value or back, so data coverage may have moved it, not the stock.
+MOVES = ("entered", "entered_with_new_data", "left", "left_with_lost_data")
 UPGRADE = (
     "Update the client's command to `uvx stockscreen-mcp@latest` and restart it, or install the latest bundle "
     "if you use one."
@@ -68,9 +72,10 @@ class Screen:
     name: str | None
     definition: str | None
     symbols: frozenset[str]
+    fields: frozenset[str]  # the fields its rules read
 
 
-ABSENT = Screen(name=None, definition=None, symbols=frozenset())
+ABSENT = Screen(name=None, definition=None, symbols=frozenset(), fields=frozenset())
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,8 @@ class Session:
     screens: dict[str, Screen]
     # symbol -> its TRACKED_FIELDS values in that order; every published row, so presence is known.
     rows: dict[str, tuple[Any, ...]]
+    # symbol -> the fields some screen's rules read that are null on its row.
+    nulls: dict[str, frozenset[str]]
 
 
 def _most_common(values: Any) -> Any:
@@ -112,6 +119,20 @@ def parse_session(document: Any, market: str, as_of_date: str) -> Session:
     rows = document["rows"]
     symbol = columns["symbol"]
     tracked = [columns.get(field) for field in TRACKED_FIELDS]
+    screens = {
+        preset: Screen(
+            entry["name"], entry["definition"], frozenset(entry["symbols"]),
+            frozenset(expression_fields(entry["filter_expression"])),
+        )
+        for preset, entry in document["presets"].items()
+    }
+    screened = sorted(set().union(*(screen.fields for screen in screens.values())))
+    shared: dict[frozenset[str], frozenset[str]] = {}
+
+    def nulls(row: list[Any]) -> frozenset[str]:
+        record = dict(zip(document["columns"], row))
+        found = frozenset(field for field in screened if row_value(record, field) is None)
+        return shared.setdefault(found, found)
 
     def column(name: str) -> list[Any]:
         return [] if name not in columns else [row[columns[name]] for row in rows]
@@ -122,11 +143,9 @@ def parse_session(document: Any, market: str, as_of_date: str) -> Session:
         origin=document["origin"],
         rs_universe_size=_most_common(column("rs_universe_size")),
         rs_formula_version=_most_common(column("rs_formula_version")),
-        screens={
-            preset: Screen(entry["name"], entry["definition"], frozenset(entry["symbols"]))
-            for preset, entry in document["presets"].items()
-        },
+        screens=screens,
         rows={row[symbol]: tuple(None if i is None else row[i] for i in tracked) for row in rows},
+        nulls={row[symbol]: nulls(row) for row in rows},
     )
 
 
@@ -257,15 +276,29 @@ def _side(session: Session) -> dict[str, Any]:
     }
 
 
+def _move(old: Session, new: Session, preset: str, symbol: str) -> str | None:
+    """One of MOVES, or None when the symbol stayed in or out; it needs a row in both sessions."""
+    before, after = old.screens.get(preset, ABSENT), new.screens.get(preset, ABSENT)
+    was, now = symbol in before.symbols, symbol in after.symbols
+    if was == now:
+        return None
+    if now:
+        return "entered_with_new_data" if (old.nulls[symbol] - new.nulls[symbol]) & after.fields else "entered"
+    return "left_with_lost_data" if (new.nulls[symbol] - old.nulls[symbol]) & before.fields else "left"
+
+
 def _screen_change(old: Session, new: Session, preset: str, limit: int) -> dict[str, Any]:
     before, after = old.screens.get(preset, ABSENT), new.screens.get(preset, ABSENT)
     was, now = before.symbols, after.symbols
+    moved: dict[str, set[str]] = {move: set() for move in MOVES}
+    # A symbol with no row on one side changed the publish, not its screens.
+    for symbol in now ^ was:
+        if symbol in old.rows and symbol in new.rows:
+            moved[_move(old, new, preset, symbol)].add(symbol)
     return {
         "name": after.name or before.name,
         "definition_changed": before.definition != after.definition,
-        # A symbol with no row on one side changed the publish, not its screens.
-        "entered": _listed({s for s in now - was if s in old.rows}, limit),
-        "left": _listed({s for s in was - now if s in new.rows}, limit),
+        **{move: _listed(symbols, limit) for move, symbols in moved.items()},
         "new_to_publish": _listed({s for s in now if s not in old.rows}, limit),
         "dropped_from_publish": _listed({s for s in was if s not in new.rows}, limit),
     }
@@ -274,16 +307,15 @@ def _screen_change(old: Session, new: Session, preset: str, limit: int) -> dict[
 def _symbol_change(old: Session, new: Session, symbol: str, presets: list[str]) -> dict[str, Any]:
     before, after = old.rows.get(symbol), new.rows.get(symbol)
     change: dict[str, Any] = {
-        "in_since": before is not None, "in_until": after is not None, "entered": [], "left": [], "changed": {},
-        "missing": [], "warnings": [],
+        "in_since": before is not None, "in_until": after is not None, **{move: [] for move in MOVES},
+        "changed": {}, "missing": [], "warnings": [],
     }
     if before is None or after is None:
         return change
     for preset in presets:
-        was = symbol in old.screens.get(preset, ABSENT).symbols
-        now = symbol in new.screens.get(preset, ABSENT).symbols
-        if now != was:
-            change["entered" if now else "left"].append(preset)
+        move = _move(old, new, preset, symbol)
+        if move is not None:
+            change[move].append(preset)
     basis = {"from_basis": before[BASIS], "to_basis": after[BASIS]}
     change["changed"] = {
         field: {"from": a, "to": b, **(basis if field in GROWTH_FIELDS else {})}
