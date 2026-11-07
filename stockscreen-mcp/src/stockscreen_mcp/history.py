@@ -26,7 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
 from .data import MANIFEST_TTL_SECONDS
-from .screens import expression_fields, row_value
+from .screens import evaluated_fields, row_value
 
 DEFAULT_HISTORY_URL = "https://github.com/xang1234/stock-screener/releases/download/"
 SESSION_SCHEMA = "market-history-v1"
@@ -72,7 +72,7 @@ class Screen:
     name: str | None
     definition: str | None
     symbols: frozenset[str]
-    fields: frozenset[str]  # the fields its rules read
+    fields: frozenset[str]  # the fields evaluating its rules reads
 
 
 ABSENT = Screen(name=None, definition=None, symbols=frozenset(), fields=frozenset())
@@ -88,7 +88,7 @@ class Session:
     screens: dict[str, Screen]
     # symbol -> its TRACKED_FIELDS values in that order; every published row, so presence is known.
     rows: dict[str, tuple[Any, ...]]
-    # symbol -> the fields some screen's rules read that are null on its row.
+    # symbol -> the fields evaluating some screen reads that are null on its row.
     nulls: dict[str, frozenset[str]]
 
 
@@ -122,7 +122,7 @@ def parse_session(document: Any, market: str, as_of_date: str) -> Session:
     screens = {
         preset: Screen(
             entry["name"], entry["definition"], frozenset(entry["symbols"]),
-            frozenset(expression_fields(entry["filter_expression"])),
+            frozenset(evaluated_fields(entry["filter_expression"])),
         )
         for preset, entry in document["presets"].items()
     }

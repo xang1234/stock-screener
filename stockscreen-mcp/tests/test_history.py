@@ -16,7 +16,7 @@ from stockscreen_mcp import server
 from stockscreen_mcp.data import MANIFEST_TTL_SECONDS
 from stockscreen_mcp.history import TRACKED_FIELDS, History
 
-from conftest import HISTORY, PRESETS, REPO, SINCE_ROWS, UNTIL_ROWS, archived, condition
+from conftest import HISTORY, PRESETS, REPO, SINCE_ROWS, UNTIL_ROWS, archived, condition, preset
 
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("use_fake_data", "use_fake_history")]
 
@@ -148,6 +148,16 @@ async def test_a_rule_field_gaining_or_losing_its_value_is_reported_apart_from_a
     }
 
 
+def either(*conditions, disabled=()):
+    """A preset that passes on any one of its conditions, beside a disabled group evaluation skips."""
+    screen = preset("either", "Either", [])
+    screen["filter_expression"]["groups"] = [
+        {"id": "any", "name": "Any", "enabled": True, "match": "any", "conditions": list(conditions)},
+        {"id": "off", "name": "Off", "enabled": False, "match": "all", "conditions": list(disabled)},
+    ]
+    return screen
+
+
 async def test_limit_cuts_each_list_and_says_so():
     minervini = (await call(screen="minervini", limit=1))["screens"]["minervini"]
 
@@ -225,6 +235,24 @@ async def test_a_growth_change_shows_each_sides_basis(fake_archive, since_basis,
         **({} if since_basis == until_basis else {"growth_metric_basis": {"from": since_basis, "to": until_basis}}),
     }
     assert gro["warnings"] == warnings
+
+
+async def test_a_disabled_group_does_not_classify_a_move(fake_archive):
+    presets = [*PRESETS, either(
+        condition("rs_rating", "range", min=90), disabled=[condition("ibd_group_rank", "range", max=10)],
+    )]
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, archived("RANK", rs_rating=60)], presets=presets)
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS, archived("RANK", rs_rating=95, ibd_group_rank=5)],
+                     presets=presets)
+
+    result = await call(screen="either", symbols=["RANK"])
+
+    assert (result["screens"]["either"]["entered"], result["screens"]["either"]["entered_with_new_data"]) == (
+        listed("RANK"), NOTHING,
+    )
+    assert {move: result["symbols"]["RANK"][move] for move in MOVES} == {
+        "entered": ["either"], "entered_with_new_data": [], "left": [], "left_with_lost_data": [],
+    }
 
 
 async def test_a_value_that_went_missing_is_a_change_to_null(fake_archive):
