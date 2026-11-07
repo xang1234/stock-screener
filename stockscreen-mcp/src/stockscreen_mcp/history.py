@@ -180,7 +180,9 @@ class History:
                 f"It records every publish from its first run on; try again after {market}'s next publish."
             )
         return ToolError(
-            f"The {market} history index is briefly unavailable while it is rewritten; try again in a minute."
+            f"The {market} history index is missing from its Release. A publish rewriting it is back within a minute, "
+            "but if a publish failed after creating the Release, the index stays missing until the next publish. Try "
+            "again in a few minutes, not in a tight loop."
         )
 
     def sessions(self, market: str) -> list[str]:
@@ -216,6 +218,8 @@ class History:
 
 def pick_sessions(market: str, archived: list[str], since: date | None, until: date | None) -> tuple[str, str]:
     """The newest session on or before `until`, and the newest before it on or before `since`."""
+    if since is not None and until is not None and since > until:
+        raise ToolError(f"since {since} is after until {until}. Pass the older date as since.")
     if not archived:
         raise ToolError(f"The {market} archive holds no session yet, so there is nothing to compare.")
     first = archived[0]
@@ -290,10 +294,16 @@ def _warnings(old: Session, new: Session, redefined: list[str], newest_publish: 
             f"The RS universe went from {a:,} to {b:,} stocks, a change of more than 10 percent, so RS ratings and "
             "the screens that use them moved partly because the universe changed."
         )
-    if old.rs_formula_version != new.rs_formula_version:
+    a, b = old.rs_formula_version, new.rs_formula_version
+    if a and b and a != b:
         warnings.append(
-            f"The RS formula changed from {old.rs_formula_version} to {new.rs_formula_version}, so RS ratings do not "
-            "compare across these sessions."
+            f"The RS formula changed from {a} to {b}, so RS ratings do not compare across these sessions."
+        )
+    elif bool(a) != bool(b):
+        side, session, other = ("since", old, "until") if b else ("until", new, "since")
+        warnings.append(
+            f"The RS formula is unknown in the {side} session, {session.as_of_date}, so its RS ratings may not "
+            f"compare with the {other} session's."
         )
     for side, session in (("since", old), ("until", new)):
         if session.origin != "live":

@@ -101,6 +101,12 @@ async def test_a_date_before_the_archive_names_its_first_session(arguments, mess
     assert await call_error(**arguments) == message
 
 
+async def test_since_after_until_is_refused():
+    assert await call_error(since="2026-10-09", until="2026-10-08") == (
+        "since 2026-10-09 is after until 2026-10-08. Pass the older date as since."
+    )
+
+
 async def test_one_archived_session_says_when_the_archive_started(fake_archive):
     fake_archive.add("HK", "2026-10-09", UNTIL_ROWS)
 
@@ -212,6 +218,16 @@ STAGE_FIX_WARNING = (
         "The RS formula changed from balanced-horizon-percentile-v2 to balanced-horizon-percentile-v3, so RS ratings "
         "do not compare across these sessions.",
     ]),
+    ({"until_rows": rows_with(UNTIL_ROWS, rs_formula_version=None)}, [
+        "The RS formula is unknown in the until session, 2026-10-09, so its RS ratings may not compare with the "
+        "since session's.",
+    ]),
+    ({"since_rows": rows_with(SINCE_ROWS, rs_formula_version=None)}, [
+        "The RS formula is unknown in the since session, 2026-10-08, so its RS ratings may not compare with the "
+        "until session's.",
+    ]),
+    ({"since_rows": rows_with(SINCE_ROWS, rs_formula_version=None),
+      "until_rows": rows_with(UNTIL_ROWS, rs_formula_version=None)}, []),
     ({"since_origin": "artifact"}, [ORIGIN_WARNING.format(side="since", date="2026-10-08", origin="artifact")]),
     ({"until_origin": "artifact"}, [ORIGIN_WARNING.format(side="until", date="2026-10-09", origin="artifact")]),
     ({"since_origin": "artifact_pre_stage_fix"}, [
@@ -231,7 +247,7 @@ STAGE_FIX_WARNING = (
     ({"newest_publish": "2026-10-08"}, []),
 ])
 async def test_each_warning_fires_only_when_its_condition_holds(fake_archive, fake_publish, change, warnings):
-    fake_archive.add("US", "2026-10-08", SINCE_ROWS, origin=change.get("since_origin", "live"))
+    fake_archive.add("US", "2026-10-08", change.get("since_rows", SINCE_ROWS), origin=change.get("since_origin", "live"))
     fake_archive.add(
         "US", "2026-10-09", change.get("until_rows", UNTIL_ROWS), presets=change.get("until_presets", PRESETS),
         origin=change.get("until_origin", "live"),
@@ -254,11 +270,13 @@ async def test_a_screen_on_one_side_only_counts_as_redefined(fake_archive):
     ]
 
 
-async def test_a_missing_index_in_an_existing_release_is_briefly_unavailable(fake_archive):
+async def test_a_missing_index_in_an_existing_release_can_last_until_the_next_publish(fake_archive):
     del fake_archive.files[fake_archive.url("US", "index.json")]
 
     assert await call_error() == (
-        "The US history index is briefly unavailable while it is rewritten; try again in a minute."
+        "The US history index is missing from its Release. A publish rewriting it is back within a minute, but if a "
+        "publish failed after creating the Release, the index stays missing until the next publish. Try again in a "
+        "few minutes, not in a tight loop."
     )
 
 
@@ -283,7 +301,10 @@ async def test_a_market_without_a_release_has_not_started():
 
 
 async def test_an_unknown_market_names_the_published_ones():
-    assert await call_error(market=" xx ") == "Unknown market 'XX'. Available markets: AU, HK, US."
+    assert await call_error(market=" xx ") == (
+        "Unknown market 'XX'. Available markets: AU, HK, US. Also accepted, for their archives, though missing from "
+        "this publish: IN."
+    )
 
 
 async def test_a_market_missing_from_this_publish_still_reads_its_archive(fake_archive):

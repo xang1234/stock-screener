@@ -695,8 +695,13 @@ def what_changed(
     code = market.strip().upper()
     manifest = data.manifest()
     # A market that failed this publish keeps its archive.
-    if code not in manifest["markets"] and code not in manifest.get("unavailable_markets", []):
-        raise ToolError(f"Unknown market {code!r}. Available markets: {', '.join(sorted(manifest['markets']))}.")
+    unavailable = manifest.get("unavailable_markets", [])
+    if code not in manifest["markets"] and code not in unavailable:
+        also = (
+            f" Also accepted, for their archives, though missing from this publish: {', '.join(sorted(unavailable))}."
+            if unavailable else ""
+        )
+        raise ToolError(f"Unknown market {code!r}. Available markets: {', '.join(sorted(manifest['markets']))}.{also}")
     archived = history.sessions(code)
     older, newer = pick_sessions(code, archived, since, until)
     newest_publish = manifest["markets"].get(code, {}).get("as_of_date")
