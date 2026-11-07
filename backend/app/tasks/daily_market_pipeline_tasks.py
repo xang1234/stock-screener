@@ -574,8 +574,9 @@ def release_daily_market_pipeline_claim(*, market: str, token: str) -> dict:
 
 
 # Backend states that end a chain. Every state other than these, PENDING and
-# SUCCESS means a worker holds the stage: STARTED, RETRY, and custom ones such
-# as the PROGRESS a running price refresh reports through update_state.
+# SUCCESS means a worker took the stage: STARTED, RETRY, and custom ones such
+# as the PROGRESS a running price refresh reports through update_state. That
+# worker may since have died, which the heartbeat checks separately.
 _CHAIN_DEAD_STATES = frozenset({"FAILURE", "REVOKED"})
 _CHAIN_IDLE_STATES = frozenset({"PENDING", "SUCCESS"})
 
@@ -663,8 +664,11 @@ def renew_daily_market_pipeline_claims() -> dict:
 
     A stage killed with its worker (OOM, SIGKILL), or whose retry message was
     lost, keeps its STARTED/PROGRESS/RETRY state until its result expires
-    (24h), so such a chain keeps its claim that long; the Operations console
-    can release it (#612).
+    (24h), so a state alone does not show a chain is alive: it also needs a
+    worker holding the stage or a message in the broker. With neither, it
+    counts as missing. If the workers cannot all be read, the claim is renewed.
+    A stage wedged on a live worker still holds its claim; the Operations
+    console can release it (#612).
 
     Heartbeats never overlap: one reads a chain's states seconds before it
     acts on them, so another acting on an older read could free a claim the
@@ -681,6 +685,7 @@ def renew_daily_market_pipeline_claims() -> dict:
 
 
 def _renew_pipeline_chain_claims(claims: Any, heartbeat: str) -> dict[str, str]:
+    from app.services.operations_job_service import held_task_ids
     from app.services.task_registry_service import still_in_broker
 
     outcomes: dict[str, str] = {}
@@ -703,16 +708,32 @@ def _renew_pipeline_chain_claims(claims: Any, heartbeat: str) -> dict[str, str]:
             )
             outcomes[market] = "error"
 
+    # Read before the broker: a message moving from queue to worker meanwhile
+    # reads as a miss at worst, which the next heartbeat must confirm.
+    held: set[str] | None = set()
+    if any(verdict == "alive" for _token, _task_ids, verdict in checks.values()):
+        try:
+            held = held_task_ids()
+        except Exception:
+            logger.warning("Could not read what the workers hold", exc_info=True)
+            held = None
+
+    def is_held(task_ids: list[str]) -> bool:
+        # None: the workers could not all be read, which proves nothing gone.
+        return held is None or bool(held.intersection(task_ids))
+
     undecided = [
-        task_id for _token, task_ids, verdict in checks.values() if verdict is None
+        task_id for _token, task_ids, verdict in checks.values()
+        if verdict is None or (verdict == "alive" and not is_held(task_ids))
         for task_id in task_ids
     ]
     # Fresh: a cached "not found" from before a stage was published would
     # read a live chain as missing.
     in_broker = still_in_broker(undecided, cache=False) if undecided else {}
     for market, (token, task_ids, verdict) in checks.items():
-        # None: the search ran out of budget or the broker was unreadable.
-        verdict = verdict or _broker_verdict(task_ids, in_broker) or "unknown"
+        if verdict is None or (verdict == "alive" and not is_held(task_ids)):
+            # None: the search ran out of budget or the broker was unreadable.
+            verdict = _broker_verdict(task_ids, in_broker) or "unknown"
         try:
             outcomes[market] = _apply_chain_verdict(claims, market, token, verdict, heartbeat)
         except Exception:

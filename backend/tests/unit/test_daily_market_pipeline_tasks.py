@@ -590,7 +590,7 @@ def test_release_task_takes_no_positional_args():
 # ── Heartbeat (#605): keep the claim while the chain lives ───────────────
 
 
-def _dispatched_chain(monkeypatch, states, live_ids=()):
+def _dispatched_chain(monkeypatch, states, live_ids=(), held_ids=()):
     """Dispatch a US chain, then report ``states`` for its stage ids (by
     index; unlisted stages read PENDING) and ``live_ids`` as found in the
     broker. Returns the set the broker search reads, to change between beats,
@@ -618,6 +618,10 @@ def _dispatched_chain(monkeypatch, states, live_ids=()):
     monkeypatch.setattr(
         "app.services.task_registry_service.still_in_broker", still_in_broker
     )
+    monkeypatch.setattr(
+        "app.services.operations_job_service.held_task_ids",
+        lambda: None if held_ids is None else {stage_ids[index] for index in held_ids},
+    )
     return module, claims, token, (live, searches)
 
 
@@ -634,16 +638,105 @@ def test_a_chain_queued_behind_a_backlog_keeps_its_claim(monkeypatch):
     assert module.queue_daily_market_pipeline.run("US")["reason"] == "market_pipeline_already_active"
 
 
-def test_a_running_or_retrying_stage_keeps_the_claim_without_reading_the_broker(monkeypatch):
+def test_a_stage_a_worker_holds_keeps_the_claim_without_reading_the_broker(monkeypatch):
     # PROGRESS: a running price refresh reports progress through update_state,
-    # and its acked message is in no queue, so only its state shows it runs.
+    # and its acked message is in no queue, so only a worker shows it runs.
     for state in ("STARTED", "RETRY", "PROGRESS"):
         module, claims, _token, (_live, searches) = _dispatched_chain(
-            monkeypatch, states={0: "SUCCESS", 1: state}
+            monkeypatch, states={0: "SUCCESS", 1: state}, held_ids=(1,)
         )
 
         assert module.renew_daily_market_pipeline_claims.run()["claims"] == {"US": "renewed"}
         assert searches == []
+
+
+def test_a_stage_killed_with_its_worker_frees_the_claim_once_confirmed(monkeypatch):
+    from app.tasks.workload_coordination import PIPELINE_CHAIN_HEARTBEAT_SECONDS
+
+    for state in ("STARTED", "RETRY", "PROGRESS"):
+        module, claims, token, _ = _dispatched_chain(
+            monkeypatch, states={0: "SUCCESS", 1: state}
+        )
+
+        assert module.renew_daily_market_pipeline_claims.run()["claims"] == {"US": "missing"}
+        assert claims.holders["US"]["task_id"] == token
+
+        claims.clock += PIPELINE_CHAIN_HEARTBEAT_SECONDS
+        assert module.renew_daily_market_pipeline_claims.run()["claims"] == {
+            "US": "released_missing"
+        }
+        assert "US" not in claims.holders
+
+
+def test_a_stage_seen_again_before_confirmation_keeps_the_claim(monkeypatch):
+    from app.tasks.workload_coordination import PIPELINE_CHAIN_HEARTBEAT_SECONDS
+
+    module, claims, token, (live, _searches) = _dispatched_chain(
+        monkeypatch, states={0: "SUCCESS", 1: "RETRY"}
+    )
+
+    assert module.renew_daily_market_pipeline_claims.run()["claims"] == {"US": "missing"}
+    # The retry message reached the broker after the first search.
+    live.add(claims.task_ids[token][1])
+    claims.clock += PIPELINE_CHAIN_HEARTBEAT_SECONDS
+    assert module.renew_daily_market_pipeline_claims.run()["claims"] == {"US": "renewed"}
+    assert claims.missing_since == {}
+    assert claims.holders["US"]["task_id"] == token
+
+
+def test_unreadable_workers_keep_a_running_stage_claim(monkeypatch):
+    from app.tasks.workload_coordination import PIPELINE_CHAIN_HEARTBEAT_SECONDS
+
+    module, claims, token, (_live, searches) = _dispatched_chain(
+        monkeypatch, states={0: "SUCCESS", 1: "STARTED"}, held_ids=None
+    )
+
+    for _beat in range(3):
+        assert module.renew_daily_market_pipeline_claims.run()["claims"] == {"US": "renewed"}
+        claims.clock += PIPELINE_CHAIN_HEARTBEAT_SECONDS
+    assert searches == []
+    assert claims.holders["US"]["task_id"] == token
+
+
+def test_a_failed_worker_read_keeps_a_running_stage_and_acts_on_other_markets(monkeypatch):
+    module, claims, token, _ = _dispatched_chain(
+        monkeypatch, states={0: "SUCCESS", 1: "STARTED"}, held_ids=None
+    )
+    other_stage = "hk-stage"
+    claims.holders["HK"] = {"task_id": "hk-token", "started_at": "x"}
+    claims.task_ids["hk-token"] = [other_stage]
+    real_async_result = module.celery_app.AsyncResult
+    monkeypatch.setattr(
+        module.celery_app,
+        "AsyncResult",
+        lambda task_id: SimpleNamespace(state="FAILURE")
+        if task_id == other_stage
+        else real_async_result(task_id),
+    )
+
+    def broken():
+        raise TimeoutError("broker stalled")
+
+    monkeypatch.setattr("app.services.operations_job_service.held_task_ids", broken)
+
+    assert module.renew_daily_market_pipeline_claims.run()["claims"] == {
+        "US": "renewed",
+        "HK": "released_dead",
+    }
+    assert claims.holders["US"]["task_id"] == token
+
+
+def test_an_unreadable_broker_keeps_a_running_stage_no_worker_holds(monkeypatch):
+    module, claims, token, _ = _dispatched_chain(
+        monkeypatch, states={0: "SUCCESS", 1: "STARTED"}
+    )
+    monkeypatch.setattr(
+        "app.services.task_registry_service.still_in_broker",
+        lambda task_ids, *, cache=True: {task_id: None for task_id in task_ids},
+    )
+
+    assert module.renew_daily_market_pipeline_claims.run()["claims"] == {"US": "renewed_unknown"}
+    assert claims.holders["US"]["task_id"] == token
 
 
 def test_a_revoked_stage_frees_the_claim_within_one_heartbeat(monkeypatch):

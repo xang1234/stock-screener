@@ -147,6 +147,52 @@ def run_worker_queue_heartbeat(worker: str, queues: list[str], stop: threading.E
             return
 
 
+def held_task_ids() -> set[str] | None:
+    """Ids of every task a worker is running or holding, or None when that
+    cannot be known: the inspect replies are missing, the roster is unreadable
+    or younger than one round of heartbeats, or a worker the roster has not
+    yet forgotten did not answer. A busy solo-pool worker answers nothing, so
+    on a solo pool this is usually None.
+
+    A worker killed with its task stops beating, so it stops counting after
+    WORKER_QUEUES_MEMORY. A worker frozen for longer than that reads as gone
+    while its task may still resume.
+    """
+    inspect = celery_app.control.inspect(timeout=1.0)
+    active, reserved, scheduled = inspect.active(), inspect.reserved(), inspect.scheduled()
+    if not active or reserved is None or scheduled is None:
+        return None
+    client = get_redis_client()
+    if client is None:
+        return None
+    now = _utcnow()
+    try:
+        client.set(WORKER_QUEUES_SINCE_KEY, now.isoformat(), nx=True)
+        since_raw = client.get(WORKER_QUEUES_SINCE_KEY)
+        stored = client.hgetall(WORKER_QUEUES_KEY)
+    except redis.RedisError:
+        logger.warning("Could not read the worker queue roster", exc_info=True)
+        return None
+    since = _parse_iso(since_raw.decode()) if since_raw else None
+    if since is None or now - since < WORKER_QUEUES_COMPLETE_AFTER:
+        return None
+    answered = active.keys() & reserved.keys() & scheduled.keys()
+    for raw_name, raw_entry in stored.items():
+        try:
+            seen_at = _parse_iso(json.loads(raw_entry)["seen_at"])
+        except (ValueError, TypeError, KeyError):
+            return None
+        if seen_at is None:
+            return None
+        if now - seen_at <= WORKER_QUEUES_MEMORY and raw_name.decode() not in answered:
+            return None
+    held = {task["id"] for reply in (active, reserved) for tasks in reply.values() for task in tasks}
+    held.update(
+        entry["request"]["id"] for entries in scheduled.values() for entry in entries
+    )
+    return held
+
+
 def start_worker_queue_heartbeat(worker: str, queues: list[str]) -> None:
     """Run the heartbeat in a daemon thread for the life of the worker."""
     threading.Thread(

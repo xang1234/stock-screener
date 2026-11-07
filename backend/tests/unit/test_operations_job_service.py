@@ -10,7 +10,9 @@ from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+import redis
 
+from app.services import operations_job_service
 from app.services.operations_job_service import OperationsJobService, _JobRecord
 from app.services.runtime_activity_contract import progress_mode
 
@@ -1184,3 +1186,107 @@ def test_a_corrupt_roster_entry_is_ignored():
     assert payload["jobs"][0]["wait_reason"] == "no_worker_for_queue"
 
 
+class _RosterRedis:
+    def __init__(self, *, since, roster):
+        self.since = since
+        self.roster = roster
+
+    def set(self, key, value, nx=False):
+        return None
+
+    def get(self, key):
+        return self.since.isoformat().encode() if self.since else None
+
+    def hgetall(self, key):
+        return {
+            name.encode(): json.dumps({"queues": ["q"], "seen_at": seen_at.isoformat()}).encode()
+            for name, seen_at in self.roster.items()
+        }
+
+
+_ALL_ANSWERED = object()
+
+
+def _held(
+    *,
+    active,
+    reserved=_ALL_ANSWERED,
+    scheduled=_ALL_ANSWERED,
+    roster=None,
+    roster_age_minutes=10,
+    client=None,
+):
+    now = datetime.now(timezone.utc)
+    answered = {} if active is None else {worker: [] for worker in active}
+    inspect = MagicMock()
+    inspect.active.return_value = active
+    inspect.reserved.return_value = answered if reserved is _ALL_ANSWERED else reserved
+    inspect.scheduled.return_value = answered if scheduled is _ALL_ANSWERED else scheduled
+    client = client or _RosterRedis(
+        since=now - timedelta(minutes=roster_age_minutes),
+        roster={
+            name: now - timedelta(seconds=age)
+            for name, age in ({} if roster is None else roster).items()
+        },
+    )
+    with patch(
+        "app.services.operations_job_service.celery_app.control.inspect", return_value=inspect
+    ), patch("app.services.operations_job_service.get_redis_client", return_value=client):
+        return operations_job_service.held_task_ids()
+
+
+def test_held_task_ids_reads_running_reserved_and_scheduled_tasks():
+    assert _held(
+        active={"a@1": [{"id": "running"}]},
+        reserved={"a@1": [{"id": "reserved"}]},
+        scheduled={"a@1": [{"request": {"id": "retrying"}}]},
+        roster={"a@1": 10},
+    ) == {"running", "reserved", "retrying"}
+
+
+def test_held_task_ids_ignores_a_worker_that_stopped_beating():
+    assert _held(active={"a@1": []}, roster={"a@1": 10, "killed@2": 301}) == set()
+
+
+def test_held_task_ids_is_unknown_while_a_beating_worker_is_silent():
+    assert _held(active={"a@1": []}, roster={"a@1": 10, "busy-solo@2": 30}) is None
+
+
+def test_held_task_ids_is_unknown_while_a_stalled_worker_is_remembered():
+    assert _held(active={"a@1": []}, roster={"a@1": 10, "stalled@2": 299}) is None
+
+
+def test_held_task_ids_is_unknown_while_the_roster_is_young():
+    assert _held(active={"a@1": []}, roster={"a@1": 10}, roster_age_minutes=1) is None
+
+
+def test_held_task_ids_is_unknown_when_no_worker_answers():
+    assert _held(active=None) is None
+
+
+def test_held_task_ids_is_unknown_when_a_later_inspect_call_gets_no_reply():
+    assert _held(active={"a@1": []}, reserved=None) is None
+    assert _held(active={"a@1": []}, scheduled=None) is None
+
+
+def test_held_task_ids_is_unknown_when_a_beating_worker_skips_one_inspect_call():
+    assert _held(
+        active={"a@1": [], "b@2": []},
+        reserved={"a@1": []},
+        scheduled={"a@1": [], "b@2": []},
+        roster={"a@1": 10, "b@2": 10},
+    ) is None
+
+
+def test_held_task_ids_is_unknown_with_a_corrupt_roster_entry():
+    client = _RosterRedis(since=datetime.now(timezone.utc) - timedelta(minutes=10), roster={})
+    client.hgetall = lambda key: {b"a@1": b"not json"}
+
+    assert _held(active={"a@1": []}, client=client) is None
+
+
+def test_held_task_ids_is_unknown_when_the_roster_cannot_be_read():
+    client = _RosterRedis(since=datetime.now(timezone.utc) - timedelta(minutes=10), roster={})
+    client.hgetall = MagicMock(side_effect=redis.ConnectionError("down"))
+
+    assert _held(active={"a@1": []}, client=client) is None
