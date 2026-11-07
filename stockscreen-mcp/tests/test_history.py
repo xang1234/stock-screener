@@ -2,9 +2,11 @@
 
 import copy
 import gzip
+import http.client
 import json
 import re
 import threading
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -291,6 +293,53 @@ async def test_other_http_failures_report_their_status(fake_archive, failing, me
     fake_archive.errors[failing] = 500
 
     assert await call_error() == message
+
+
+INDEX_URL = "https://example.test/releases/download/market-history-us-v1/index.json"
+SESSION_URL = "https://example.test/releases/download/market-history-us-v1/us-2026-10-09.json.gz"
+
+
+@pytest.mark.parametrize(("error", "shown"), [
+    (urllib.error.URLError("connection refused"), "URLError("),
+    (TimeoutError("timed out"), "TimeoutError("),
+    (http.client.IncompleteRead(b""), "IncompleteRead("),
+])
+async def test_a_network_failure_says_it_could_not_reach_the_archive(fake_archive, error, shown):
+    fake_archive.errors[INDEX_URL] = error
+
+    assert (await call_error()).startswith(f"Could not reach the market history at {INDEX_URL}: {shown}")
+
+
+async def test_a_malformed_history_url_says_it_could_not_reach_the_archive(monkeypatch):
+    monkeypatch.setattr(server, "history", History(base_url="example.test/releases/download"))
+
+    assert (await call_error()).startswith(
+        "Could not reach the market history at example.test/releases/download/market-history-us-v1/index.json: "
+        "ValueError("
+    )
+
+
+def gzip_body(text):
+    return gzip.compress(text.encode(), mtime=0)
+
+
+@pytest.mark.parametrize(("url", "body", "shown"), [
+    (INDEX_URL, b"\x1f\x8bnot gzip", "BadGzipFile("),
+    (INDEX_URL, gzip_body('{"schema_version": "market-history-index-v1"}')[:-8], "EOFError("),
+    (INDEX_URL, gzip_body("{}")[:10] + b"\xff\xff\xff\xff", "error("),
+    (INDEX_URL, b"not json", "JSONDecodeError("),
+    (INDEX_URL, b'{"schema_version": "market-history-index-v1"}', "KeyError("),
+    (INDEX_URL, b'{"schema_version": "market-history-index-v1", "sessions": 5}', "TypeError("),
+    (INDEX_URL, b"[]", "AttributeError("),
+    (SESSION_URL, json.dumps({
+        "schema_version": "market-history-v1", "market": "US", "as_of_date": "2026-10-09", "published_at": "x",
+        "origin": "live", "presets": {}, "columns": ["rs_universe_size", "symbol"], "rows": [[]],
+    }).encode(), "IndexError("),
+])
+async def test_a_corrupt_file_says_it_could_not_be_read(fake_archive, url, body, shown):
+    fake_archive.files[url] = body
+
+    assert (await call_error()).startswith(f"Could not read the market history file {url}: {shown}")
 
 
 async def test_a_market_without_a_release_has_not_started():

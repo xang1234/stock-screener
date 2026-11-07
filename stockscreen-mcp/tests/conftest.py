@@ -377,7 +377,7 @@ class FakeArchive:
         self.writer = writer
         self.files = {}
         self.dates = {}
-        self.errors = {}  # url -> HTTP status to fail with
+        self.errors = {}  # url -> HTTP status, or an exception, to fail with
         self.calls = []
 
     def url(self, market, asset):
@@ -396,8 +396,11 @@ class FakeArchive:
 
     def __call__(self, url):
         self.calls.append(url)
-        if url in self.errors:
-            raise urllib.error.HTTPError(url, self.errors[url], "Error", {}, io.BytesIO())
+        error = self.errors.get(url)
+        if isinstance(error, BaseException):
+            raise error
+        if error is not None:
+            raise urllib.error.HTTPError(url, error, "Error", {}, io.BytesIO())
         if url in self.files:
             return self.files[url]
         # GitHub's Release page, which exists once any asset does.
