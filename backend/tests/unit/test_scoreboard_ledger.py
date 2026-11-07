@@ -1263,9 +1263,26 @@ def test_recover_with_no_retained_artifact_reports_the_gap(tmp_path, release, ca
     assert release.uploads() == []
 
 
-def test_recover_skips_a_damaged_artifact_and_uses_the_next(tmp_path, release, capsys) -> None:
+def write_damaged_deflate(path: Path) -> None:
+    name = "manifest.market.json"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(name, json.dumps({"entry": list(range(500))}))
+    data = bytearray(path.read_bytes())
+    start = 30 + len(name)
+    data[start : start + 20] = bytes(byte ^ 0xFF for byte in data[start : start + 20])
+    path.write_bytes(bytes(data))
+
+
+@pytest.mark.parametrize(
+    ("damage", "warning"),
+    [("not-a-zip", "BadZipFile"), ("damaged-deflate", "while decompressing data")],
+)
+def test_recover_skips_a_damaged_artifact_and_uses_the_next(tmp_path, release, capsys, damage, warning) -> None:
     release.create(**{US: ""})
-    (release.state / "10.zip").write_bytes(b"not a zip")
+    if damage == "not-a-zip":
+        (release.state / "10.zip").write_bytes(b"not a zip")
+    else:
+        write_damaged_deflate(release.state / "10.zip")
     write_artifact(release, tmp_path, 11, "2026-10-23")
     (release.state / "artifacts.json").write_text(
         json.dumps(
@@ -1281,7 +1298,9 @@ def test_recover_skips_a_damaged_artifact_and_uses_the_next(tmp_path, release, c
 
     assert ledger.main(["recover", "--market", "US", "--date", "2026-10-23", "--i-paused-publishing"]) == 0
 
-    assert "::warning::Skipping artifact 10" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "::warning::Skipping artifact 10" in output
+    assert warning in output
     assert ledger.parse_line(release.asset_lines(US)[0]).published_at == datetime(
         2026, 10, 24, 5, tzinfo=timezone.utc
     )

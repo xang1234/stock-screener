@@ -709,6 +709,16 @@ def write_artifact(release: FakeRelease, tmp_path: Path, artifact_id: int, as_of
                 archive.write(path, path.relative_to(built).as_posix())
 
 
+def write_damaged_deflate(path: Path) -> None:
+    name = "manifest.market.json"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(name, json.dumps({"entry": list(range(500))}))
+    data = bytearray(path.read_bytes())
+    start = 30 + len(name)
+    data[start : start + 20] = bytes(byte ^ 0xFF for byte in data[start : start + 20])
+    path.write_bytes(bytes(data))
+
+
 def artifact_listing(rows: list[tuple[int, str]]) -> list[dict]:
     return [
         {
@@ -775,6 +785,7 @@ def test_backfill_skips_a_date_already_listed_and_heals_the_index(tmp_path, rele
     ("damage", "warning"),
     [
         pytest.param("not-a-zip", "BadZipFile", id="not-a-zip"),
+        pytest.param("damaged-deflate", "while decompressing data", id="damaged-deflate"),
         pytest.param("no-presets", "has zero presets", id="no-presets"),
         pytest.param("no-rows", "has zero rows", id="no-rows"),
         pytest.param("after-publication", "is after the day following publication", id="after-publication"),
@@ -785,6 +796,8 @@ def test_backfill_skips_a_bad_artifact_with_a_warning_and_the_next_one_takes_the
 ) -> None:
     if damage == "not-a-zip":
         (release.state / "10.zip").write_bytes(b"not a zip")
+    elif damage == "damaged-deflate":
+        write_damaged_deflate(release.state / "10.zip")
     elif damage == "no-presets":
         write_artifact(release, tmp_path, 10, "2026-10-23", presets=[])
     elif damage == "after-publication":

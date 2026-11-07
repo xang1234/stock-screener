@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable, Iterable, Iterator
 from datetime import date, datetime
 from operator import itemgetter
@@ -281,7 +282,7 @@ def artifact_documents(market: str, artifacts: list[dict[str, Any]]) -> Iterator
                 created_at = parse_timestamp(artifact["created_at"])
                 document = build_document(market, data["scan"], data["rows"], evaluate_expression)
                 check_document(document, market, created_at)
-            except (zipfile.BadZipFile, OSError, KeyError, TypeError, ValueError, AttributeError, LedgerError) as exc:
+            except (zipfile.BadZipFile, zlib.error, OSError, KeyError, TypeError, ValueError, AttributeError, LedgerError) as exc:
                 print(f"::warning::Skipping artifact {artifact['id']}: {exc!r}", flush=True)
                 continue
         usable += 1

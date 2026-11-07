@@ -610,7 +610,7 @@ def find_artifact_day(market: str, target: date) -> LedgerDay:
             download_artifact(artifact["id"], zip_path)
             try:
                 day = artifact_day(zip_path, market, artifact["created_at"], Path(tmp))
-            except (zipfile.BadZipFile, OSError, KeyError, TypeError, ValueError) as exc:
+            except (zipfile.BadZipFile, zlib.error, OSError, KeyError, TypeError, ValueError) as exc:
                 print(f"::warning::Skipping artifact {artifact['id']}: {exc!r}", flush=True)
                 continue
         if day.as_of_date == target:
