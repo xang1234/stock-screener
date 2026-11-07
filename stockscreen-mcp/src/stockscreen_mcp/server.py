@@ -711,10 +711,14 @@ def what_changed(
     `screen`, a lower `limit` or fewer `symbols`.
     """
     code = market.strip().upper()
-    manifest = data.manifest()
+    try:
+        manifest = data.manifest()
+    except ToolError:
+        # The archive is on Releases, not Pages, so it can still answer; only the market check and freshness go.
+        manifest = None
     # A market that failed this publish keeps its archive.
-    unavailable = manifest.get("unavailable_markets", [])
-    if code not in manifest["markets"] and code not in unavailable:
+    unavailable = [] if manifest is None else manifest.get("unavailable_markets", [])
+    if manifest is not None and code not in manifest["markets"] and code not in unavailable:
         also = (
             f" Also accepted, for their archives, though missing from this publish: {', '.join(sorted(unavailable))}."
             if unavailable else ""
@@ -722,7 +726,7 @@ def what_changed(
         raise ToolError(f"Unknown market {code!r}. Available markets: {', '.join(sorted(manifest['markets']))}.{also}")
     archived = history.sessions(code)
     older, newer = pick_sessions(code, archived, since, until)
-    newest_publish = manifest["markets"].get(code, {}).get("as_of_date")
+    newest_publish = None if manifest is None else manifest["markets"].get(code, {}).get("as_of_date")
     result = {
         "market": code,
         **diff(
@@ -731,6 +735,11 @@ def what_changed(
         ),
         "how_to_read": WHAT_CHANGED_NOTES,
     }
+    if manifest is None:
+        result["warnings"].append(
+            "The site's current manifest could not be read, so whether the site holds a newer session than the "
+            "archive was not checked."
+        )
     size = _response_chars(result)
     if size > MAX_RESPONSE_CHARS:
         raise ToolError(

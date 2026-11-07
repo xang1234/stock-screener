@@ -123,7 +123,6 @@ def parse_session(document: Any, market: str, as_of_date: str) -> Session:
     columns = {name: i for i, name in enumerate(document["columns"])}
     rows = document["rows"]
     symbol = columns["symbol"]
-    tracked = [columns.get(field) for field in TRACKED_FIELDS]
     screens = {
         preset: Screen(
             entry["name"], entry["definition"], frozenset(entry["symbols"]),
@@ -134,10 +133,17 @@ def parse_session(document: Any, market: str, as_of_date: str) -> Session:
     screened = sorted(set().union(*(screen.fields for screen in screens.values())))
     shared: dict[frozenset[str], frozenset[str]] = {}
 
-    def nulls(row: list[Any]) -> frozenset[str]:
-        record = dict(zip(document["columns"], row))
+    def nulls(record: dict[str, Any]) -> frozenset[str]:
         found = frozenset(field for field in screened if row_value(record, field) is None)
         return shared.setdefault(found, found)
+
+    tracked: dict[str, tuple[Any, ...]] = {}
+    row_nulls: dict[str, frozenset[str]] = {}
+    for row in rows:
+        key, record = row[symbol], dict(zip(document["columns"], row))
+        # Read as the screens read them, so market_cap_usd falls back to market_cap on a USD row that lacks it.
+        tracked[key] = tuple(row_value(record, field) for field in TRACKED_FIELDS)
+        row_nulls[key] = nulls(record)
 
     def column(name: str) -> list[Any]:
         return [] if name not in columns else [row[columns[name]] for row in rows]
@@ -149,8 +155,8 @@ def parse_session(document: Any, market: str, as_of_date: str) -> Session:
         rs_universe_size=_most_common(column("rs_universe_size")),
         rs_formula_version=_most_common(column("rs_formula_version")),
         screens=screens,
-        rows={row[symbol]: tuple(None if i is None else row[i] for i in tracked) for row in rows},
-        nulls={row[symbol]: nulls(row) for row in rows},
+        rows=tracked,
+        nulls=row_nulls,
     )
 
 

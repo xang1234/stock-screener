@@ -3,6 +3,7 @@
 import copy
 import gzip
 import http.client
+import io
 import json
 import re
 import threading
@@ -504,6 +505,31 @@ async def test_each_warning_fires_only_when_its_condition_holds(fake_archive, fa
     fake_publish.manifest["markets"]["US"]["as_of_date"] = change.get("newest_publish", "2026-10-09")
 
     assert (await call())["warnings"] == warnings
+
+
+async def test_market_cap_falls_back_as_the_screens_read_it(fake_archive):
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, archived("CAP", market_cap=1_000, currency="USD")])
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS, archived("CAP", market_cap=2_000, currency="USD")])
+
+    changed = (await call(symbols=["CAP"]))["symbols"]["CAP"]["changed"]
+
+    assert changed == {"market_cap_usd": {"from": 1_000, "to": 2_000}}
+
+
+async def test_an_unreadable_manifest_still_compares_the_archive_and_says_so(fake_archive, fake_publish):
+    def down(url):
+        if url.endswith("manifest.json"):
+            raise urllib.error.HTTPError(url, 503, "Unavailable", {}, io.BytesIO())
+
+    fake_publish.on_fetch = down
+
+    result = await call(screen="minervini")
+
+    assert result["screens"]["minervini"]["entered"] == listed("CCC", "DDD")
+    assert result["warnings"] == [
+        "The site's current manifest could not be read, so whether the site holds a newer session than the archive "
+        "was not checked."
+    ]
 
 
 async def test_a_screen_on_one_side_only_counts_as_redefined(fake_archive):
