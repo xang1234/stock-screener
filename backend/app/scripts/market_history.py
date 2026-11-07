@@ -52,6 +52,9 @@ RUNBOOK = "docs/runbooks/market-history.md"
 # The docs' enum names uploaded and open, and a failed upload leaves starter, so
 # anything but uploaded may be an empty file.
 UPLOADED = "uploaded"
+# What gh says when another run's --clobber deleted the index after this run listed
+# it: before gh reads the Release, then after.
+INDEX_GONE = ("no assets match the file pattern", "HTTP 404")
 # stockscreen_mcp.data imports the MCP SDK, which this job cannot install.
 HEAVY_FIELDS = frozenset({"price_sparkline_data", "rs_sparkline_data", "field_availability"})
 
@@ -155,24 +158,38 @@ def create_release(market: str) -> None:
             raise
 
 
-def upload_session(path: Path, tag: str) -> None:
+def stuck_asset(market: str, name: str, state: str) -> str:
+    return (
+        f"{market} {name} is {state}: an upload is running or died part way. If none is running, "
+        f"gh release delete-asset {release_tag(market)} {name} --yes; see {RUNBOOK}"
+    )
+
+
+def upload_session(path: Path, tag: str) -> str:
     try:
         upload_asset(path, tag, clobber=False)
     except GhError:
         # gh refuses a name that exists, which is how a concurrent backfill shows up here.
         if (release_asset_states(tag) or {}).get(path.name) != UPLOADED:
             raise
-        print(f"{path.name} was uploaded by another run, keeping that one", flush=True)
+        return "kept, another run uploaded it first"
+    return "uploaded"
 
 
-def publish(path: Path, market: str, dry_run: Path | None, upload: Callable[[Path, str], None]) -> None:
+def upload_index(path: Path, tag: str) -> str:
+    upload_asset(path, tag)
+    return "uploaded"
+
+
+def publish(path: Path, market: str, dry_run: Path | None, upload: Callable[[Path, str], str]) -> str:
+    """Upload ``path``, or copy it under ``dry_run``; returns what happened, for the log."""
     if dry_run is None:
-        upload(path, release_tag(market))
-        return
+        return upload(path, release_tag(market))
     # Every market has an index.json, so one flat directory would overwrite them.
     directory = dry_run / market.lower()
     directory.mkdir(parents=True, exist_ok=True)
     shutil.copy(path, directory)
+    return f"written to {directory / path.name}, the Release is unchanged"
 
 
 def index_bytes(market: str, sessions: list[str]) -> bytes:
@@ -180,18 +197,31 @@ def index_bytes(market: str, sessions: list[str]) -> bytes:
     return json.dumps(index, separators=(",", ":")).encode("utf-8")
 
 
+def published_index(market: str, directory: Path) -> bytes | None:
+    """The index the Release holds, or None when it went missing after the listing."""
+    try:
+        run_gh("release", "download", release_tag(market), "--pattern", INDEX_ASSET, "--dir", str(directory))
+    except GhError as exc:
+        if not any(words in str(exc) for words in INDEX_GONE):
+            raise
+        return None
+    return (directory / INDEX_ASSET).read_bytes()
+
+
 def heal_index(market: str, listing: dict[str, str], dry_run: Path | None) -> None:
+    # The index is rewritten below whatever its state, so only other assets need a person.
+    for name, state in sorted(listing.items()):
+        if state != UPLOADED and name != INDEX_ASSET:
+            print(f"::warning::{stuck_asset(market, name, state)}", flush=True)
     sessions = session_dates(listing, market)
     wanted = index_bytes(market, sessions)
     with tempfile.TemporaryDirectory() as tmp:
+        if listing.get(INDEX_ASSET) == UPLOADED and published_index(market, Path(tmp)) == wanted:
+            return
         path = Path(tmp) / INDEX_ASSET
-        if listing.get(INDEX_ASSET) == UPLOADED:
-            run_gh("release", "download", release_tag(market), "--pattern", INDEX_ASSET, "--dir", tmp)
-            if path.read_bytes() == wanted:
-                return
         path.write_bytes(wanted)
-        publish(path, market, dry_run, upload_asset)
-    print(f"{market}: index now lists {len(sessions)} sessions", flush=True)
+        outcome = publish(path, market, dry_run, upload_index)
+    print(f"{market}: index of {len(sessions)} sessions {outcome}", flush=True)
 
 
 def archive(market: str, documents: Iterable[dict[str, Any]], dry_run: Path | None) -> None:
@@ -212,16 +242,13 @@ def archive(market: str, documents: Iterable[dict[str, Any]], dry_run: Path | No
         if state is not None:
             # ponytail: a person deletes it, so no job here ever holds a delete call on
             # history. Add an age-based delete if these turn up more than rarely.
-            raise LedgerError(
-                f"{market} {name} is {state}: an upload is running or died part way. If none is running, "
-                f"gh release delete-asset {tag} {name} --yes and run this again; see {RUNBOOK}"
-            )
+            raise LedgerError(stuck_asset(market, name, state))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / name
             path.write_bytes(session_bytes(document))
-            publish(path, market, dry_run, upload_session)
+            outcome = publish(path, market, dry_run, upload_session)
         listing[name] = UPLOADED
-        print(f"{market}: added {as_of_date} ({document['origin']})", flush=True)
+        print(f"{market}: {as_of_date} ({document['origin']}) {outcome}", flush=True)
     # Listed again because a backfill runs for minutes and publishes can land meanwhile.
     heal_index(market, {**listing, **(release_asset_states(tag) or {})}, dry_run)
 

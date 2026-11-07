@@ -235,6 +235,8 @@ elif args[:2] == ["release", "create"]:
     release(args[2]).mkdir(parents=True)
 elif args[:2] == ["release", "download"]:
     name = args[args.index("--pattern") + 1]
+    if name in faults.get("download", {}):
+        fail(faults["download"][name])
     shutil.copy(release(args[2]) / name, pathlib.Path(args[args.index("--dir") + 1]) / name)
 elif args[:2] == ["release", "upload"]:
     source = pathlib.Path(args[3])
@@ -255,6 +257,8 @@ elif args[:2] == ["release", "upload"]:
     if source.name in faults.get("appears", {}):
         (release(args[2]) / faults["appears"][source.name]).write_text("another run")
     states.pop(source.name, None)
+    if source.name in faults.get("listed_as", {}):
+        states[source.name] = faults["listed_as"][source.name]
     (state / "states.json").write_text(json.dumps(states))
 elif args[:2] == ["api", "repos/{owner}/{repo}"]:
     print("main")
@@ -355,12 +359,15 @@ def index_body(*sessions: str, market: str = "US") -> bytes:
     ).encode()
 
 
-def test_record_stamps_publication_and_origin_on_the_extracted_document(tmp_path, release) -> None:
+def test_record_stamps_publication_and_origin_on_the_extracted_document(tmp_path, release, capsys) -> None:
     release.create()
     days = write_days(tmp_path / "days", document_for())
 
     assert record(days) == 0
 
+    output = capsys.readouterr().out
+    assert "US: 2026-11-06 (live) uploaded\n" in output
+    assert "US: index of 1 sessions uploaded\n" in output
     assert release.session() == {**EXTRACTED_US, "published_at": "2026-11-07T02:03:30Z", "origin": "live"}
     assert release.assets() == ["index.json", NAME_1106]
 
@@ -469,13 +476,15 @@ def put_index(release: FakeRelease, damage: str) -> None:
 
 
 @pytest.mark.parametrize("damage", ["missing", "stale", "garbled", "incomplete"])
-def test_a_listed_session_heals_an_index_that_does_not_match_the_listing(tmp_path, release, damage) -> None:
+def test_a_listed_session_heals_an_index_that_does_not_match_the_listing(tmp_path, release, capsys, damage) -> None:
     release.create()
     release.put(NAME_1106, b"first publication")
     put_index(release, damage)
     days = write_days(tmp_path / "days", document_for())
 
     assert record(days) == 0
+
+    assert "::warning::" not in capsys.readouterr().out
 
     assert release.read("index.json") == index_body("2026-11-06")
     assert release.uploads() == ["index.json"]
@@ -594,12 +603,16 @@ def test_a_truncated_file_is_refused_with_its_name(tmp_path, release, capsys) ->
     assert release.calls() == []
 
 
-def test_a_session_a_concurrent_run_uploaded_first_counts_as_present(tmp_path, release) -> None:
+def test_a_session_a_concurrent_run_uploaded_first_counts_as_present(tmp_path, release, capsys) -> None:
     release.create()
     release.set_faults(race={NAME_1106: "the concurrent backfill's bytes"})
     days = write_days(tmp_path / "days", document_for())
 
     assert record(days) == 0
+
+    output = capsys.readouterr().out
+    assert "US: 2026-11-06 (live) kept, another run uploaded it first\n" in output
+    assert "2026-11-06 (live) uploaded" not in output
 
     assert release.read(NAME_1106) == b"the concurrent backfill's bytes"
     assert release.read("index.json") == index_body("2026-11-06")
@@ -657,9 +670,28 @@ def test_an_upload_that_died_midway_blocks_only_its_date_until_the_asset_is_dele
     assert release.session()["as_of_date"] == "2026-11-06"
 
 
-def test_the_index_never_names_an_incomplete_asset(tmp_path, release) -> None:
+def test_the_index_never_names_an_incomplete_asset_and_each_run_warns_about_it(tmp_path, release, capsys) -> None:
     release.create()
     release.put("us-2026-11-05.json.gz", b"", state="starter")
+    release.put("us-2026-11-04.json.gz", b"", state="open")
+    days = write_days(tmp_path / "days", document_for())
+
+    assert record(days) == 0
+
+    assert release.read("index.json") == index_body("2026-11-06")
+    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("::warning::")]
+    assert warnings == [
+        "::warning::US us-2026-11-04.json.gz is open: an upload is running or died part way. If none is running, "
+        f"gh release delete-asset {TAG} us-2026-11-04.json.gz --yes; see docs/runbooks/market-history.md",
+        "::warning::US us-2026-11-05.json.gz is starter: an upload is running or died part way. If none is running, "
+        f"gh release delete-asset {TAG} us-2026-11-05.json.gz --yes; see docs/runbooks/market-history.md",
+    ]
+
+
+def test_only_an_exact_session_name_counts_as_a_session(tmp_path, release) -> None:
+    release.create()
+    for name in ("us-2026-11-05.json.gz.bak", "old-us-2026-11-04.json.gz", "hk-2026-11-03.json.gz"):
+        release.put(name, b"not a US session")
     days = write_days(tmp_path / "days", document_for())
 
     assert record(days) == 0
@@ -667,7 +699,50 @@ def test_the_index_never_names_an_incomplete_asset(tmp_path, release) -> None:
     assert release.read("index.json") == index_body("2026-11-06")
 
 
-def test_record_dry_run_writes_each_markets_files_and_changes_nothing(tmp_path, release) -> None:
+def test_a_fresh_listing_wins_over_what_this_run_assumed_it_uploaded(tmp_path, release) -> None:
+    release.create()
+    release.set_faults(listed_as={NAME_1106: "open"})
+    days = write_days(tmp_path / "days", document_for())
+
+    assert record(days) == 0
+
+    assert release.read("index.json") == index_body()
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        pytest.param("no assets match the file pattern", id="gone-before-gh-listed"),
+        pytest.param("HTTP 404: Not Found (https://api.github.com/repos/o/r/releases/assets/1)", id="gone-after"),
+    ],
+)
+def test_an_index_another_run_is_replacing_is_rewritten(tmp_path, release, stderr) -> None:
+    release.create()
+    release.put(NAME_1106, b"first publication")
+    release.put("index.json", index_body("2026-11-06"))
+    release.put("us-2026-11-05.json.gz", b"older")
+    release.set_faults(download={"index.json": stderr})
+    days = write_days(tmp_path / "days", document_for())
+
+    assert record(days) == 0
+
+    assert release.read("index.json") == index_body("2026-11-05", "2026-11-06")
+
+
+def test_any_other_index_download_failure_is_red_and_uploads_nothing(tmp_path, release, capsys) -> None:
+    release.create()
+    release.put(NAME_1106, b"first publication")
+    release.put("index.json", index_body("2026-11-05"))
+    release.set_faults(download={"index.json": "HTTP 500: Internal Server Error"})
+    days = write_days(tmp_path / "days", document_for())
+
+    assert record(days) == 1
+
+    assert "::error::US: gh release download failed: HTTP 500" in capsys.readouterr().out
+    assert release.uploads() == []
+
+
+def test_record_dry_run_writes_each_markets_files_and_changes_nothing(tmp_path, release, capsys) -> None:
     release.create()
     release.put("us-2026-11-05.json.gz", b"older")
     days = write_days(tmp_path / "days", document_for(), document_for("SG"))
@@ -684,6 +759,10 @@ def test_record_dry_run_writes_each_markets_files_and_changes_nothing(tmp_path, 
     assert (output / "us" / "index.json").read_bytes() == index_body("2026-11-05", "2026-11-06")
     assert (output / "sg" / "index.json").read_bytes() == index_body("2026-11-06", market="SG")
     assert json.loads(gzip.decompress((output / "us" / NAME_1106).read_bytes()))["origin"] == "live"
+    log = capsys.readouterr().out
+    assert f"US: 2026-11-06 (live) written to {output / 'us' / NAME_1106}, the Release is unchanged\n" in log
+    assert f"US: index of 2 sessions written to {output / 'us' / 'index.json'}, the Release is unchanged\n" in log
+    assert " uploaded\n" not in log
 
 
 def test_an_extracted_site_records_end_to_end(tmp_path, release) -> None:
