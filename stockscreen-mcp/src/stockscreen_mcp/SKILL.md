@@ -17,8 +17,9 @@ Work from the market down, and skip steps the question does not need.
 4. **Find candidates.** Call `run_screen` with a screen, your own filters, or both. total_matches counts every match, even when the rows stop at the limit.
 5. **Confirm leadership.** Call `group_rankings` for strong and improving groups, then check each candidate's `ibd_group_rank`. Rank 1 is strongest. Some markets publish no groups.
 6. **Review positions.** Call `audit_stocks` with a watchlist or holdings. It returns the screens each stock passes and its near_misses. Check short_by before calling a miss close.
-7. **Look up one name.** Call `get_stock` for every field on one symbol.
-8. **Define before quoting.** Call `describe_fields` before quoting or filtering on a field you have not used. Pass group or fields to keep the answer short. It also counts this market's rows: rows_with_value, true_rows on flags, and values on text and list labels. The stockscreen://fields resource holds the same definitions without the counts.
+7. **See what changed.** Call `what_changed` for "what changed since yesterday" or since a date. It compares two archived sessions and returns the stocks that entered and left each screen. For symbols you pass, it adds the screens they moved into and out of and the fields that changed. Read its warnings before attributing a move to the stock, because a rule change, an RS universe or formula change, the stage fix or a session from a retained build can move a stock that did nothing. A symbol under new_to_publish or dropped_from_publish changed the publish, not the screen. Prices are not split-adjusted across sessions. A market with fewer than two archived sessions returns an error, which says nothing about its stocks.
+8. **Look up one name.** Call `get_stock` for every field on one symbol.
+9. **Define before quoting.** Call `describe_fields` before quoting or filtering on a field you have not used. Pass group or fields to keep the answer short. It also counts this market's rows: rows_with_value, true_rows on flags, and values on text and list labels. The stockscreen://fields resource holds the same definitions without the counts.
 
 ## Reading rules
 
