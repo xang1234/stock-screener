@@ -335,6 +335,31 @@ async def test_a_growth_move_across_a_change_of_basis_is_reported_apart_from_a_m
     assert result["warnings"] == [BASIS_WARNING]
 
 
+async def test_a_move_with_new_data_and_a_basis_change_is_listed_under_new_data(fake_archive):
+    presets = [*PRESETS, preset("growth_rs", "Growth RS", [
+        condition("eps_growth_qq", "range", min=25), condition("rs_rating", "range", min=50),
+    ])]
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, grower("BOTH", 10.0, "comparable_period_yoy", rs_rating=None)],
+                     presets=presets)
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS, grower("BOTH", 40.0, "quarterly_qoq", rs_rating=80)],
+                     presets=presets)
+
+    screen = (await call(screen="growth_rs"))["screens"]["growth_rs"]
+
+    assert (screen["entered_with_new_data"], screen["entered_with_basis_change"]) == (listed("BOTH"), NOTHING)
+
+
+async def test_a_screen_with_only_basis_exits_still_warns(fake_archive):
+    presets = [*PRESETS, GROWTH_SCREEN]
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, grower("B2", 40.0, "quarterly_qoq")], presets=presets)
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS, grower("B2", 10.0, "comparable_period_yoy")], presets=presets)
+
+    result = await call(screen="growth")
+
+    assert result["screens"]["growth"]["left_with_basis_change"] == listed("B2")
+    assert result["warnings"] == [BASIS_WARNING]
+
+
 async def test_a_basis_change_cuts_its_lists_at_the_limit(fake_archive):
     presets = [*PRESETS, GROWTH_SCREEN]
     fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, *(grower(s, 10.0, "comparable_period_yoy") for s in ("B1", "B2"))],
