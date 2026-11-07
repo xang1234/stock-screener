@@ -212,28 +212,38 @@ async def test_a_field_null_in_both_sessions_is_missing_not_unchanged(fake_archi
     ]
 
 
-@pytest.mark.parametrize(("since_basis", "until_basis", "warnings"), [
-    ("comparable_period_yoy", "quarterly_qoq", [
-        "growth_metric_basis went from comparable_period_yoy to quarterly_qoq, so eps_growth_qq and sales_growth_qq "
-        "measure different comparisons in the two sessions, so their change can come from the comparison rather than "
-        "the stock.",
+@pytest.mark.parametrize(("since", "until", "warnings"), [
+    (("comparable_period_yoy", 10.0), ("quarterly_qoq", 20.0), [
+        "growth_metric_basis went from comparable_period_yoy to quarterly_qoq, so the two values of eps_growth_qq "
+        "measure different comparisons, and the change can come from the comparison rather than the stock.",
     ]),
-    ("quarterly_qoq", "quarterly_qoq", []),
+    ((None, 10.0), ("quarterly_qoq", 20.0), [
+        "growth_metric_basis is null in the since session, so the comparison behind eps_growth_qq is unknown on that "
+        "side, and the change may not compare.",
+    ]),
+    (("quarterly_qoq", 10.0), ("unavailable", 20.0), [
+        "growth_metric_basis is unavailable in the until session, so the comparison behind eps_growth_qq is unknown "
+        "on that side, and the change may not compare.",
+    ]),
+    ((None, 10.0), ("unavailable", 20.0), []),
+    (("comparable_period_yoy", 10.0), ("quarterly_qoq", 10.0), []),
+    (("comparable_period_yoy", None), ("quarterly_qoq", 20.0), []),
+    (("quarterly_qoq", 10.0), ("quarterly_qoq", 20.0), []),
 ])
-async def test_a_growth_change_shows_each_sides_basis(fake_archive, since_basis, until_basis, warnings):
+async def test_a_growth_change_shows_each_sides_basis_and_warns_when_they_differ(fake_archive, since, until, warnings):
+    (since_basis, since_eps), (until_basis, until_eps) = since, until
     fake_archive.add("US", "2026-10-08", [
-        archived("GRO", eps_growth_qq=10.0, sales_growth_qq=5.0, growth_metric_basis=since_basis), *SINCE_ROWS,
+        archived("GRO", eps_growth_qq=since_eps, sales_growth_qq=5.0, growth_metric_basis=since_basis), *SINCE_ROWS,
     ])
     fake_archive.add("US", "2026-10-09", [
-        archived("GRO", eps_growth_qq=20.0, sales_growth_qq=5.0, growth_metric_basis=until_basis), *UNTIL_ROWS,
+        archived("GRO", eps_growth_qq=until_eps, sales_growth_qq=5.0, growth_metric_basis=until_basis), *UNTIL_ROWS,
     ])
 
     gro = (await call(symbols=["GRO"]))["symbols"]["GRO"]
 
-    assert gro["changed"] == {
-        "eps_growth_qq": {"from": 10.0, "to": 20.0, "from_basis": since_basis, "to_basis": until_basis},
-        **({} if since_basis == until_basis else {"growth_metric_basis": {"from": since_basis, "to": until_basis}}),
-    }
+    assert gro["changed"].get("eps_growth_qq") == (None if since_eps == until_eps else {
+        "from": since_eps, "to": until_eps, "from_basis": since_basis, "to_basis": until_basis,
+    })
     assert gro["warnings"] == warnings
 
 

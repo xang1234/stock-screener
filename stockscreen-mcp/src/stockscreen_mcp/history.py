@@ -43,7 +43,9 @@ TRACKED_FIELDS = (
 )
 # HK and JP rows can switch between a year-over-year and a quarter-over-quarter comparison.
 GROWTH_FIELDS = ("eps_growth_qq", "sales_growth_qq")
+GROWTH = [TRACKED_FIELDS.index(field) for field in GROWTH_FIELDS]
 BASIS = TRACKED_FIELDS.index("growth_metric_basis")
+UNKNOWN_BASES = (None, "unavailable")
 # How a symbol with a row in both sessions can move through a screen. The _with_ moves are those where a field
 # the screen's rules read went from null to a value or back, so data coverage may have moved it, not the stock.
 MOVES = ("entered", "entered_with_new_data", "left", "left_with_lost_data")
@@ -276,6 +278,18 @@ def _side(session: Session) -> dict[str, Any]:
     }
 
 
+def _regrown(before: tuple[Any, ...], after: tuple[Any, ...]) -> list[str]:
+    """The growth fields valued in both rows whose value changed while growth_metric_basis changed. A null and an
+    unavailable basis are both unknown, so going from one to the other is no change."""
+    a, b = before[BASIS], after[BASIS]
+    if a == b or (a in UNKNOWN_BASES and b in UNKNOWN_BASES):
+        return []
+    return [
+        field for field, i in zip(GROWTH_FIELDS, GROWTH)
+        if before[i] is not None and after[i] is not None and before[i] != after[i]
+    ]
+
+
 def _move(old: Session, new: Session, preset: str, symbol: str) -> str | None:
     """One of MOVES, or None when the symbol stayed in or out; it needs a row in both sessions."""
     before, after = old.screens.get(preset, ABSENT), new.screens.get(preset, ABSENT)
@@ -322,13 +336,23 @@ def _symbol_change(old: Session, new: Session, symbol: str, presets: list[str]) 
         for field, a, b in zip(TRACKED_FIELDS, before, after) if a != b
     }
     change["missing"] = [field for field, a, b in zip(TRACKED_FIELDS, before, after) if a is None and b is None]
-    if before[BASIS] != after[BASIS]:
-        change["warnings"].append(
-            f"growth_metric_basis went from {before[BASIS]} to {after[BASIS]}, so {' and '.join(GROWTH_FIELDS)} "
-            "measure different comparisons in the two sessions, so their change can come from the comparison rather "
-            "than the stock."
-        )
+    regrown = " and ".join(_regrown(before, after))
+    if regrown:
+        change["warnings"].append(_basis_warning(before[BASIS], after[BASIS], regrown))
     return change
+
+
+def _basis_warning(a: str | None, b: str | None, regrown: str) -> str:
+    if a not in UNKNOWN_BASES and b not in UNKNOWN_BASES:
+        return (
+            f"growth_metric_basis went from {a} to {b}, so the two values of {regrown} measure different "
+            "comparisons, and the change can come from the comparison rather than the stock."
+        )
+    side, unknown = ("since", a) if a in UNKNOWN_BASES else ("until", b)
+    return (
+        f"growth_metric_basis is {unknown or 'null'} in the {side} session, so the comparison behind {regrown} is "
+        "unknown on that side, and the change may not compare."
+    )
 
 
 def _warnings(old: Session, new: Session, redefined: list[str], newest_publish: str | None, newest: str) -> list[str]:
