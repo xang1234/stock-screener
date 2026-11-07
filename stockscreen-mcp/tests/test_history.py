@@ -125,6 +125,20 @@ async def test_limit_cuts_each_list_and_says_so():
     assert minervini["left"] == {"count": 1, "symbols": ["BBB"], "truncated": False}
 
 
+# The tracked fields the fixture rows never set, so null in both sessions.
+NEVER_SET = [
+    "rs_rating_1m", "rs_rating_3m", "rs_rating_12m", "canslim_score", "ibd_industry_group", "ibd_group_rank",
+    "eps_growth_qq", "sales_growth_qq", "growth_metric_basis", "week_52_high_distance", "market_cap_usd",
+]
+
+
+def absent(in_since, in_until):
+    return {
+        "in_since": in_since, "in_until": in_until, "entered": [], "left": [], "changed": {}, "missing": [],
+        "warnings": [],
+    }
+
+
 async def test_symbols_report_presence_moves_and_only_the_fields_that_changed():
     result = await call(symbols=["aaa", " BBB ", "NEW", "ZZZ", "NOPE", "AAA"])
 
@@ -132,15 +146,54 @@ async def test_symbols_report_presence_moves_and_only_the_fields_that_changed():
         "AAA": {
             "in_since": True, "in_until": True, "entered": [], "left": [],
             "changed": {"current_price": {"from": 10.0, "to": 10.5}, "rs_rating": {"from": 95, "to": 96}},
+            "missing": NEVER_SET, "warnings": [],
         },
         "BBB": {
             "in_since": True, "in_until": True, "entered": [], "left": ["minervini"],
-            "changed": {"rs_rating": {"from": 75, "to": 60}},
+            "changed": {"rs_rating": {"from": 75, "to": 60}}, "missing": NEVER_SET, "warnings": [],
         },
-        "NEW": {"in_since": False, "in_until": True, "entered": [], "left": [], "changed": {}},
-        "ZZZ": {"in_since": True, "in_until": False, "entered": [], "left": [], "changed": {}},
-        "NOPE": {"in_since": False, "in_until": False, "entered": [], "left": [], "changed": {}},
+        "NEW": absent(False, True),
+        "ZZZ": absent(True, False),
+        "NOPE": absent(False, False),
     }
+
+
+async def test_a_field_null_in_both_sessions_is_missing_not_unchanged(fake_archive):
+    fake_archive.add("US", "2026-10-08", [archived("AAA", rs_rating=None, minervini_score=90), *SINCE_ROWS[1:]])
+    fake_archive.add("US", "2026-10-09", [archived("AAA", rs_rating=None, minervini_score=91), *UNTIL_ROWS[1:]])
+
+    aaa = (await call(symbols=["AAA"]))["symbols"]["AAA"]
+
+    assert aaa["changed"] == {"minervini_score": {"from": 90, "to": 91}}
+    assert aaa["missing"] == [
+        "rs_rating", "rs_rating_1m", "rs_rating_3m", "rs_rating_12m", "composite_score", "canslim_score",
+        "ibd_industry_group", "ibd_group_rank", "eps_growth_qq", "sales_growth_qq", "growth_metric_basis",
+        "week_52_high_distance", "market_cap_usd",
+    ]
+
+
+@pytest.mark.parametrize(("since_basis", "until_basis", "warnings"), [
+    ("comparable_period_yoy", "quarterly_qoq", [
+        "growth_metric_basis went from comparable_period_yoy to quarterly_qoq, so eps_growth_qq and sales_growth_qq "
+        "measure different comparisons in the two sessions and their change is not a move by the stock.",
+    ]),
+    ("quarterly_qoq", "quarterly_qoq", []),
+])
+async def test_a_growth_change_shows_each_sides_basis(fake_archive, since_basis, until_basis, warnings):
+    fake_archive.add("US", "2026-10-08", [
+        archived("GRO", eps_growth_qq=10.0, sales_growth_qq=5.0, growth_metric_basis=since_basis), *SINCE_ROWS,
+    ])
+    fake_archive.add("US", "2026-10-09", [
+        archived("GRO", eps_growth_qq=20.0, sales_growth_qq=5.0, growth_metric_basis=until_basis), *UNTIL_ROWS,
+    ])
+
+    gro = (await call(symbols=["GRO"]))["symbols"]["GRO"]
+
+    assert gro["changed"] == {
+        "eps_growth_qq": {"from": 10.0, "to": 20.0, "from_basis": since_basis, "to_basis": until_basis},
+        **({} if since_basis == until_basis else {"growth_metric_basis": {"from": since_basis, "to": until_basis}}),
+    }
+    assert gro["warnings"] == warnings
 
 
 async def test_a_value_that_went_missing_is_a_change_to_null(fake_archive):
@@ -433,13 +486,15 @@ async def test_the_limit_measures_the_text_the_client_gets(monkeypatch):
     )
 
 
-async def test_the_note_names_every_field_it_returns():
+async def test_the_note_names_every_field_it_returns(fake_archive):
+    fake_archive.add("US", "2026-10-09", [archived("AAA", rs_rating=96, eps_growth_qq=1.0), *UNTIL_ROWS[1:]])
     result = await call(symbols=["AAA"])
 
     screen = result["screens"]["minervini"]
+    aaa = result["symbols"]["AAA"]
     returned = {
-        *result, *result["since"], *screen, *screen["entered"], *result["symbols"]["AAA"],
-        *result["symbols"]["AAA"]["changed"]["rs_rating"],
+        *result, *result["since"], *screen, *screen["entered"], *aaa, *aaa["changed"]["rs_rating"],
+        *aaa["changed"]["eps_growth_qq"],
     }
     assert sorted(returned - {"market", "how_to_read"} - set(re.findall(r"\w+", result["how_to_read"]))) == []
 

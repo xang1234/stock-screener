@@ -155,8 +155,11 @@ WHAT_CHANGED_NOTES = (
     "count is the full number, symbols holds up to the limit in symbol order, and truncated says some were cut. "
     "Each entry in symbols has in_since and in_until, which say whether the symbol had a row, entered and left, which "
     "name the screens it moved into and out of, and changed, which holds each tracked field whose value differs as "
-    "from and to. For a symbol missing from either session, entered, left and changed are empty. A null is a missing "
-    "value, not a zero. "
+    "from and to. A growth field in changed also has from_basis and to_basis, its growth_metric_basis in each "
+    "session. missing lists the tracked fields null in both sessions, which are unknown, not unchanged. A tracked "
+    "field in neither changed nor missing held the same value in both. The symbol's own warnings flag a change of "
+    "growth_metric_basis, after which the growth fields compare different periods. For a symbol missing from either "
+    "session, entered, left, changed, missing and warnings are empty. A null is a missing value, not a zero. "
     f"Tracked fields: {', '.join(TRACKED_FIELDS)}. "
     "Prices are not split-adjusted across sessions, so a split shows as a price move. "
     "rs_universe_size is how many stocks the market's RS ranking held, and rs_formula_version the RS formula. "
@@ -678,7 +681,8 @@ def what_changed(
     )] = 25,
 ) -> dict[str, Any]:
     """What changed in a market between two archived sessions. It lists the stocks that entered and left each
-    preset screen, and for named symbols the screens they moved into and out of and the tracked fields that changed.
+    preset screen, and for named symbols the screens they moved into and out of, the tracked fields that changed,
+    and the tracked fields null in both sessions.
 
     Use it for "what changed since yesterday" or since a date. Use run_screen and get_stock for the newest
     publish, and screen_track_record for how entries did afterwards. With no dates it compares the two newest

@@ -38,8 +38,11 @@ PRE_STAGE_FIX = "artifact_pre_stage_fix"
 TRACKED_FIELDS = (
     "current_price", "rs_rating", "rs_rating_1m", "rs_rating_3m", "rs_rating_12m", "stage", "composite_score",
     "minervini_score", "canslim_score", "ibd_industry_group", "ibd_group_rank", "eps_growth_qq",
-    "sales_growth_qq", "week_52_high_distance", "market_cap_usd",
+    "sales_growth_qq", "growth_metric_basis", "week_52_high_distance", "market_cap_usd",
 )
+# HK and JP rows can switch between a year-over-year and a quarter-over-quarter comparison.
+GROWTH_FIELDS = ("eps_growth_qq", "sales_growth_qq")
+BASIS = TRACKED_FIELDS.index("growth_metric_basis")
 UPGRADE = (
     "Update the client's command to `uvx stockscreen-mcp@latest` and restart it, or install the latest bundle "
     "if you use one."
@@ -272,6 +275,7 @@ def _symbol_change(old: Session, new: Session, symbol: str, presets: list[str]) 
     before, after = old.rows.get(symbol), new.rows.get(symbol)
     change: dict[str, Any] = {
         "in_since": before is not None, "in_until": after is not None, "entered": [], "left": [], "changed": {},
+        "missing": [], "warnings": [],
     }
     if before is None or after is None:
         return change
@@ -280,9 +284,17 @@ def _symbol_change(old: Session, new: Session, symbol: str, presets: list[str]) 
         now = symbol in new.screens.get(preset, ABSENT).symbols
         if now != was:
             change["entered" if now else "left"].append(preset)
+    basis = {"from_basis": before[BASIS], "to_basis": after[BASIS]}
     change["changed"] = {
-        field: {"from": a, "to": b} for field, a, b in zip(TRACKED_FIELDS, before, after) if a != b
+        field: {"from": a, "to": b, **(basis if field in GROWTH_FIELDS else {})}
+        for field, a, b in zip(TRACKED_FIELDS, before, after) if a != b
     }
+    change["missing"] = [field for field, a, b in zip(TRACKED_FIELDS, before, after) if a is None and b is None]
+    if before[BASIS] != after[BASIS]:
+        change["warnings"].append(
+            f"growth_metric_basis went from {before[BASIS]} to {after[BASIS]}, so {' and '.join(GROWTH_FIELDS)} "
+            "measure different comparisons in the two sessions and their change is not a move by the stock."
+        )
     return change
 
 
