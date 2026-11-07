@@ -681,10 +681,14 @@ def test_the_index_never_names_an_incomplete_asset_and_each_run_warns_about_it(t
     assert release.read("index.json") == index_body("2026-11-06")
     warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("::warning::")]
     assert warnings == [
-        "::warning::US us-2026-11-04.json.gz is open: an upload is running or died part way. If none is running, "
-        f"gh release delete-asset {TAG} us-2026-11-04.json.gz --yes; see docs/runbooks/market-history.md",
-        "::warning::US us-2026-11-05.json.gz is starter: an upload is running or died part way. If none is running, "
-        f"gh release delete-asset {TAG} us-2026-11-05.json.gz --yes; see docs/runbooks/market-history.md",
+        (
+            "::warning::US us-2026-11-04.json.gz is open: an upload is running or died part way. If none is running, "
+            f"gh release delete-asset {TAG} us-2026-11-04.json.gz --yes; see docs/runbooks/market-history.md"
+        ),
+        (
+            "::warning::US us-2026-11-05.json.gz is starter: an upload is running or died part way. If none is "
+            f"running, gh release delete-asset {TAG} us-2026-11-05.json.gz --yes; see docs/runbooks/market-history.md"
+        ),
     ]
 
 
