@@ -76,4 +76,16 @@ Reuse from `scoreboard_ledger.py` rather than copying: `Origin`, `artifact_origi
 
 ## Tool, for the second PR
 
-`what_changed(market, since=None, until=None, symbols=None, screen=None, limit=...)`, reading `index.json` and two session assets. Screen entries and exits per preset, a flag where `definition` differs, and rows absent from one side reported apart from rows that failed the rule. `symbols` adds per-stock field changes from a fixed tracked-field table. The result names both dates, how many archived sessions lie between them, both origins, and whether `rs_formula_version` differs.
+`what_changed` in `stockscreen-mcp`, released as 0.4.0. It reads `index.json` and two session assets from `https://github.com/xang1234/stock-screener/releases/download/market-history-<m>-v1/`, overridable with `STOCKSCREEN_HISTORY_URL`. Session assets are gzip files served as plain bytes, not with `Content-Encoding: gzip`, so the reader gunzips by content.
+
+```
+what_changed(market="US", since=None, until=None, symbols=None, screen=None, limit=25)
+```
+
+- **Dates.** `until` picks the newest archived session on or before it, default the newest. `since` picks the newest archived session before `until` and on or before `since`, default the session just before `until`. A date with no session on or before it is an error naming the first archived session. Fewer than two sessions is an error saying when the archive started.
+- **Screens.** For each preset in either session: `entered` and `left` counts and up to `limit` symbols each, sorted by symbol, with a `truncated` flag. A symbol whose row is absent on one side is reported under `new_to_publish` or `dropped_from_publish`, never as entering or leaving. `definition_changed` is true when the two definitions differ, because then a move can come from the rule rather than the stock. `screen` narrows to one preset.
+- **Symbols.** Up to 50. For each: present on each side, the screens it entered and left, and each tracked field whose value changed, as `from` and `to`. Tracked fields are a fixed table in the code, and a test checks each is in `contracts/scan_field_dictionary.json`.
+- **Context, always returned.** Both dates with `published_at` and `origin`, how many archived sessions lie between them, `rs_universe_size` and `rs_formula_version` on each side, and `warnings`. A warning is raised when the RS universe size differs by more than 10 percent, when the RS formula differs, when either side is `artifact` or `artifact_pre_stage_fix`, when the two sides straddle 2026-10-21 (`artifact_pre_stage_fix` era), when a definition changed, and when the newest publish is newer than the newest archived session.
+- **how_to_read.** One fixed note, like `screen_track_record`'s, saying moves can come from data coverage, not only from the stocks, and that prices are not split-adjusted across sessions.
+- **Limits.** Responses over `MAX_RESPONSE_CHARS` are refused with a hint, as in `screen_track_record`.
+- **Caching.** Session files never change, so they are cached by market and date; keep at most four in memory. The index is fetched with the manifest's TTL. A 404 on `index.json` is reported as the archive being briefly unavailable, because a `--clobber` replace deletes before it uploads.

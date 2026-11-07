@@ -1,6 +1,7 @@
 """Every tool against the real publish on GitHub Pages. Opt in: STOCKSCREEN_LIVE=1 pytest -m live."""
 
 import bisect
+import gzip
 import json
 import math
 import os
@@ -10,10 +11,13 @@ from importlib.resources import files
 
 import pytest
 from mcp import Client
+from mcp.server.mcpserver.exceptions import ToolError
 
 from stockscreen_mcp import data as data_module
+from stockscreen_mcp import history as history_module
 from stockscreen_mcp import server
 from stockscreen_mcp.data import HEAVY_FIELDS, StaticData
+from stockscreen_mcp.history import History
 
 pytestmark = [
     pytest.mark.anyio,
@@ -39,6 +43,7 @@ IS_TYPE = {
 @pytest.fixture(autouse=True)
 def real_data(monkeypatch):
     monkeypatch.setattr(server, "data", StaticData())
+    monkeypatch.setattr(server, "history", History())
 
 
 @pytest.fixture(scope="module")
@@ -91,6 +96,36 @@ async def test_all_tools_against_the_live_publish():
             assert "The current publish has no track record for US" in track_record.content[0].text
         else:
             assert track_record.structured_content["horizon_sessions"] == 5
+
+
+async def test_what_changed_against_the_live_archive():
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("what_changed", {"market": "US", "symbols": ["NVDA"]})
+    if result.is_error:
+        message = result.content[0].text
+        if "has not started for US" in message or "holds one session" in message:
+            pytest.skip(f"the US archive cannot compare two sessions yet: {message}")
+        pytest.fail(message)
+    changed = result.structured_content
+
+    assert changed["since"]["as_of_date"] < changed["until"]["as_of_date"]
+    assert {"minervini", "canslim", "vcp"} <= changed["screens"].keys()
+    assert changed["symbols"]["NVDA"]["in_until"] is True
+    assert len(result.content[0].text) <= server.MAX_RESPONSE_CHARS
+
+
+def test_every_tracked_field_is_a_column_of_the_newest_archived_session():
+    history = History()
+    try:
+        newest = history.sessions("US")[-1]
+    except ToolError as exc:
+        if "has not started for US" not in str(exc):
+            raise
+        pytest.skip(f"the US archive has no session yet: {exc}")
+    url = f"{history.base_url}{history_module.release_tag('US')}/{history_module.session_asset('US', newest)}"
+    columns = json.loads(gzip.decompress(history_module.fetch_bytes(url)))["columns"]
+
+    assert sorted(set(history_module.TRACKED_FIELDS) - set(columns)) == []
 
 
 async def test_describe_fields_against_the_live_publish():

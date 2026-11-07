@@ -41,6 +41,7 @@ uvx stockscreen-mcp screen minervini --tradingview        # save a TradingView w
 - "Find Hong Kong stocks with RS above 90, in stage 2, with quarterly EPS growth over 25%."
 - "Check my watchlist of NVDA, AMD and TSLA against the screens. Which rules does each one fail, and which are one rule away from passing?"
 - "How have stocks done 20 sessions after entering the US Minervini screen, and is the sample big enough to trust?"
+- "Which stocks entered or left the US Minervini screen since yesterday, and how did NVDA's RS rating change?"
 
 ## Tools
 
@@ -55,6 +56,7 @@ All tools are read-only.
 | `get_stock` | One stock: RS ratings (overall, 1M, 3M, 12M), stage, screener scores, growth, group rank, setup and pattern fields, and the screens it passes |
 | `audit_stocks` | A watchlist of up to 50 symbols against the preset screens: the screens each stock passes, and near misses that fail exactly one of several rules, as the field and how far short it is (the field alone when the rule is not numeric or the value is missing). `detail` also returns every failed rule per failing screen; responses over 80,000 characters are refused with a hint of how many symbols fit |
 | `screen_track_record` | What happened after stocks newly entered each preset screen, for one holding period per call (5, 20 or 60 sessions): median return, median excess over the benchmark, positive rate and sample counts. Not every market publishes one |
+| `what_changed` | Which stocks entered and left each preset screen between two archived sessions, by default the two newest. Moves where a field the rules read gained or lost its value are listed apart, as `entered_with_new_data` and `left_with_lost_data`, and so are moves where a growth field the rules read changed across a change of growth basis, as `entered_with_basis_change` and `left_with_basis_change`. For up to 50 symbols it adds the screens each moved into and out of, every tracked field that changed, as from and to, and the tracked fields null in both sessions. A growth change carries each side's growth basis. Warnings flag moves that can come from the data rather than the stock, such as a rule change or a change of RS universe. A market needs two archived sessions |
 | `market_overview` | Exposure score and stance, distribution days, follow-through day, StockBee-style breadth (4% movers, 5/10-day ratios, T2108, 52-week highs/lows), key index moves, top groups |
 | `group_rankings` | IBD-style industry groups ranked by relative strength, with 1W/1M/3M/6M rank changes and weekly movers. Pass a group for its rank history and strongest stocks |
 
@@ -63,6 +65,7 @@ All tools are read-only.
 - **RS ratings** (`rs_rating`, `rs_rating_1m/3m/12m`) are percentiles from 1 to 99 *within the stock's own market*, where 99 is the strongest.
 - **Group rank 1** is the strongest group.
 - **Track records** have one row per screen definition and origin. Compare the rows separately and don't rank `thin` ones. Each result's `how_to_read` note explains the numbers.
+- **What changed** compares sessions as they were first published. Read its `warnings` before blaming a move on the stock, and remember that prices are not split-adjusted across sessions.
 - **Every result has an `as_of_date`:** the last completed session the publish covers. This is end-of-day data with nothing intraday, and it is never fetched live from price providers.
 
 ### For agents
@@ -118,6 +121,7 @@ To run the newest version from `main` rather than the latest release, replace `s
 - **Data source:** the server reads the JSON that the static site publishes to GitHub Pages. The root `manifest.json` points at the current publish.
 - **Download and caching:** each market's scan is downloaded once, on first use (US is about 7 MB compressed), and kept in memory. The two most recently used markets stay cached, and the cache refreshes when a new publish appears.
 - **Data URL:** set `STOCKSCREEN_DATA_URL` to read from another publish, such as a fork's GitHub Pages site.
+- **History:** `what_changed` reads the market history archive, a GitHub Release per market (`market-history-<m>-v1`) that holds one file per published session and an `index.json`. A US session is about 2.3 MB compressed. The index is cached for 10 minutes, and the four most recently used sessions stay in memory. Set `STOCKSCREEN_HISTORY_URL` to read another repository's Releases, such as `https://github.com/<owner>/stock-screener/releases/download/`.
 
 ## Development
 

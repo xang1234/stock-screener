@@ -180,8 +180,15 @@ def explain_expression(row: dict[str, Any], expression: dict[str, Any]) -> dict[
 
 
 def expression_fields(expression: dict[str, Any]) -> list[str]:
+    """Every field the rules name, disabled groups included, as opportunityCapabilityPolicy.js counts them."""
     groups = [expression["required"], *(expression.get("groups") or [])]
     return [c["field"] for g in groups for c in g.get("conditions") or []]
+
+
+def evaluated_fields(expression: dict[str, Any]) -> list[str]:
+    """The fields evaluate_expression reads, which skips disabled groups."""
+    groups = [expression["required"], *(expression.get("groups") or [])]
+    return [c["field"] for g in groups if g.get("enabled") is not False for c in g.get("conditions") or []]
 
 
 def preset_requires_opportunity_state(preset: dict[str, Any]) -> bool:
