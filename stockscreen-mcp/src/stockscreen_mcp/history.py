@@ -46,9 +46,12 @@ GROWTH_FIELDS = ("eps_growth_qq", "sales_growth_qq")
 GROWTH = [TRACKED_FIELDS.index(field) for field in GROWTH_FIELDS]
 BASIS = TRACKED_FIELDS.index("growth_metric_basis")
 UNKNOWN_BASES = (None, "unavailable")
-# How a symbol with a row in both sessions can move through a screen. The _with_ moves are those where a field
-# the screen's rules read went from null to a value or back, so data coverage may have moved it, not the stock.
-MOVES = ("entered", "entered_with_new_data", "left", "left_with_lost_data")
+# How a symbol with a row in both sessions can move into and out of a screen: a plain move, one where a field the
+# screen reads went from null to a value or back, and one where a growth field it reads changed value across a change
+# of growth_metric_basis. The last two can come from data coverage or the comparison rather than the stock.
+ENTRY_MOVES = ("entered", "entered_with_new_data", "entered_with_basis_change")
+EXIT_MOVES = ("left", "left_with_lost_data", "left_with_basis_change")
+MOVES = ENTRY_MOVES + EXIT_MOVES
 UPGRADE = (
     "Update the client's command to `uvx stockscreen-mcp@latest` and restart it, or install the latest bundle "
     "if you use one."
@@ -296,9 +299,18 @@ def _move(old: Session, new: Session, preset: str, symbol: str) -> str | None:
     was, now = symbol in before.symbols, symbol in after.symbols
     if was == now:
         return None
+    # A move reads the rules of the session the symbol matched in.
     if now:
-        return "entered_with_new_data" if (old.nulls[symbol] - new.nulls[symbol]) & after.fields else "entered"
-    return "left_with_lost_data" if (new.nulls[symbol] - old.nulls[symbol]) & before.fields else "left"
+        (plain, coverage, basis), rules = ENTRY_MOVES, after.fields
+        coverage_changed = old.nulls[symbol] - new.nulls[symbol]
+    else:
+        (plain, coverage, basis), rules = EXIT_MOVES, before.fields
+        coverage_changed = new.nulls[symbol] - old.nulls[symbol]
+    if coverage_changed & rules:
+        return coverage
+    if rules.intersection(_regrown(old.rows[symbol], new.rows[symbol])):
+        return basis
+    return plain
 
 
 def _screen_change(old: Session, new: Session, preset: str, limit: int) -> dict[str, Any]:
@@ -355,7 +367,9 @@ def _basis_warning(a: str | None, b: str | None, regrown: str) -> str:
     )
 
 
-def _warnings(old: Session, new: Session, redefined: list[str], newest_publish: str | None, newest: str) -> list[str]:
+def _warnings(
+    old: Session, new: Session, screens: dict[str, dict[str, Any]], newest_publish: str | None, newest: str,
+) -> list[str]:
     warnings = []
     a, b = old.rs_universe_size, new.rs_universe_size
     if a and b and abs(b - a) > a / 10:
@@ -385,10 +399,21 @@ def _warnings(old: Session, new: Session, redefined: list[str], newest_publish: 
             "One session was built before the 2026-10-21 stage fix and the other after it, so stage changes between "
             "them can come from the fix rather than the stocks."
         )
+    redefined = [preset for preset, change in screens.items() if change["definition_changed"]]
     if redefined:
         warnings.append(
-            f"The rules of {', '.join(redefined)} differ between the sessions, so their entered and left lists can "
-            "come from the rules rather than the stocks."
+            f"The rules of {', '.join(redefined)} differ between the sessions, so their moves can come from the rules "
+            "rather than the stocks."
+        )
+    rebased = [
+        preset for preset, change in screens.items()
+        if change["entered_with_basis_change"]["count"] or change["left_with_basis_change"]["count"]
+    ]
+    if rebased:
+        warnings.append(
+            f"Some moves in {', '.join(rebased)} are under entered_with_basis_change or left_with_basis_change, where a "
+            "growth field the screen reads changed value while growth_metric_basis changed, so those moves can come "
+            "from the comparison rather than the stocks."
         )
     if newest_publish is not None and newest_publish > newest:
         warnings.append(
@@ -416,12 +441,11 @@ def diff(
         if not presets:
             raise ToolError(f"Unknown screen {screen!r}. Screens in these sessions: {', '.join(known)}.")
     screens = {preset: _screen_change(old, new, preset, limit) for preset in presets}
-    redefined = [preset for preset, change in screens.items() if change["definition_changed"]]
     result = {
         "since": _side(old),
         "until": _side(new),
         "sessions_between": sum(old.as_of_date < s < new.as_of_date for s in archived),
-        "warnings": _warnings(old, new, redefined, newest_publish, archived[-1]),
+        "warnings": _warnings(old, new, screens, newest_publish, archived[-1]),
         "screens": screens,
     }
     if symbols:

@@ -149,14 +149,17 @@ WHAT_CHANGED_NOTES = (
     "Read warnings before attributing a move to a stock. "
     "Each entry in screens is one preset id. name is its display name and definition_changed is true when its rules "
     "differ between the sessions, so its moves can come from the rules. "
-    "entered and left hold symbols with a row in both sessions that moved into or out of the screen. "
+    "Six lists hold the symbols with a row in both sessions that moved into or out of the screen, each symbol in one. "
     "entered_with_new_data and left_with_lost_data hold the moves where a field the screen's rules read went from "
     "null to a value, or from a value to null, such as a stock joining or leaving the RS ranking. Data coverage may "
-    "have moved those, not the stock, so they are not in entered and left. "
+    "have moved those, not the stock. entered_with_basis_change and left_with_basis_change hold the other moves where "
+    "a growth field the rules read held a value in both sessions and changed while growth_metric_basis changed, such "
+    "as from comparable_period_yoy to quarterly_qoq or from null to a basis. The comparison may have moved those, not "
+    "the stock. entered and left hold the remaining moves. "
     "new_to_publish holds symbols matching it in until with no row in since, and dropped_from_publish symbols matching "
     "it in since with no row in until. Those changed the publish, not the screen. "
     "count is the full number, symbols holds up to the limit in symbol order, and truncated says some were cut. "
-    "Each entry in symbols has in_since and in_until, which say whether the symbol had a row, the same four move "
+    "Each entry in symbols has in_since and in_until, which say whether the symbol had a row, the same six move "
     "lists naming the screens it moved into and out of, and changed, which holds each tracked field whose value "
     "differs as from and to. A growth field in changed also has from_basis and to_basis, its growth_metric_basis in each "
     "session. missing lists the tracked fields null in both sessions, which are unknown, not unchanged. A tracked "
@@ -695,7 +698,9 @@ def what_changed(
     archived sessions.
 
     Moves where a field the screen's rules read went from null to a value, or back, are listed apart as
-    entered_with_new_data and left_with_lost_data, since data coverage may have moved them.
+    entered_with_new_data and left_with_lost_data, since data coverage may have moved them. Moves where a growth
+    field the rules read changed across a change of growth_metric_basis are listed apart as
+    entered_with_basis_change and left_with_basis_change, since the comparison may have moved them.
 
     Read `warnings` before attributing a move to a stock, because a rule change, an RS universe or formula change,
     the stage fix or a session read from a retained build can move a stock that did nothing. how_to_read in each

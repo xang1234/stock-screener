@@ -21,7 +21,10 @@ from conftest import HISTORY, PRESETS, REPO, SINCE_ROWS, UNTIL_ROWS, archived, c
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("use_fake_data", "use_fake_history")]
 
 NOTHING = {"count": 0, "symbols": [], "truncated": False}
-MOVES = ("entered", "entered_with_new_data", "left", "left_with_lost_data")
+MOVES = (
+    "entered", "entered_with_new_data", "entered_with_basis_change", "left", "left_with_lost_data",
+    "left_with_basis_change",
+)
 RS_FORMULA = "balanced-horizon-percentile-v2"
 
 
@@ -63,19 +66,17 @@ async def test_defaults_compare_the_two_newest_sessions_screen_by_screen():
         "warnings": [],
         "screens": {
             "correction_survivors": {
-                "name": "Correction Survivors", "definition_changed": False, "entered": NOTHING, "entered_with_new_data": NOTHING,
-                "left": NOTHING, "left_with_lost_data": NOTHING, "new_to_publish": NOTHING,
-                "dropped_from_publish": NOTHING,
+                "name": "Correction Survivors", "definition_changed": False, **{move: NOTHING for move in MOVES},
+                "new_to_publish": NOTHING, "dropped_from_publish": NOTHING,
             },
             "minervini": {
-                "name": "Minervini Trend Template", "definition_changed": False, "entered": listed("CCC", "DDD"),
-                "entered_with_new_data": NOTHING, "left": listed("BBB"), "left_with_lost_data": NOTHING,
-                "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
+                "name": "Minervini Trend Template", "definition_changed": False, **{move: NOTHING for move in MOVES},
+                "entered": listed("CCC", "DDD"), "left": listed("BBB"), "new_to_publish": listed("NEW"),
+                "dropped_from_publish": listed("ZZZ"),
             },
             "se_cup_handle": {
-                "name": "Cup with Handle", "definition_changed": False, "entered": NOTHING, "entered_with_new_data": NOTHING,
-                "left": NOTHING, "left_with_lost_data": NOTHING, "new_to_publish": NOTHING,
-                "dropped_from_publish": NOTHING,
+                "name": "Cup with Handle", "definition_changed": False, **{move: NOTHING for move in MOVES},
+                "new_to_publish": NOTHING, "dropped_from_publish": NOTHING,
             },
         },
     }
@@ -122,6 +123,11 @@ async def test_one_archived_session_says_when_the_archive_started(fake_archive):
     )
 
 
+def moves(**named):
+    """Every move list of a symbol, empty but for the screens named per move."""
+    return {move: named.get(move, []) for move in MOVES}
+
+
 async def test_a_rule_field_gaining_or_losing_its_value_is_reported_apart_from_a_move(fake_archive):
     fake_archive.add("US", "2026-10-08", [
         *SINCE_ROWS, archived("GAIN", rs_rating=None, minervini_score=80),
@@ -138,13 +144,13 @@ async def test_a_rule_field_gaining_or_losing_its_value_is_reported_apart_from_a
     assert result["screens"]["minervini"] == {
         "name": "Minervini Trend Template", "definition_changed": False,
         "entered": listed("CCC", "DDD", "OTH"), "entered_with_new_data": listed("GAIN"),
-        "left": listed("BBB"), "left_with_lost_data": listed("LOSS"),
-        "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
+        "entered_with_basis_change": NOTHING, "left": listed("BBB"), "left_with_lost_data": listed("LOSS"),
+        "left_with_basis_change": NOTHING, "new_to_publish": listed("NEW"), "dropped_from_publish": listed("ZZZ"),
     }
     assert {symbol: {move: change[move] for move in MOVES} for symbol, change in result["symbols"].items()} == {
-        "GAIN": {"entered": [], "entered_with_new_data": ["minervini"], "left": [], "left_with_lost_data": []},
-        "LOSS": {"entered": [], "entered_with_new_data": [], "left": [], "left_with_lost_data": ["minervini"]},
-        "OTH": {"entered": ["minervini"], "entered_with_new_data": [], "left": [], "left_with_lost_data": []},
+        "GAIN": moves(entered_with_new_data=["minervini"]),
+        "LOSS": moves(left_with_lost_data=["minervini"]),
+        "OTH": moves(entered=["minervini"]),
     }
 
 
@@ -173,10 +179,7 @@ NEVER_SET = [
 
 
 def absent(in_since, in_until):
-    return {
-        "in_since": in_since, "in_until": in_until, "entered": [], "entered_with_new_data": [], "left": [],
-        "left_with_lost_data": [], "changed": {}, "missing": [], "warnings": [],
-    }
+    return {"in_since": in_since, "in_until": in_until, **moves(), "changed": {}, "missing": [], "warnings": []}
 
 
 async def test_symbols_report_presence_moves_and_only_the_fields_that_changed():
@@ -184,13 +187,13 @@ async def test_symbols_report_presence_moves_and_only_the_fields_that_changed():
 
     assert result["symbols"] == {
         "AAA": {
-            "in_since": True, "in_until": True, "entered": [], "entered_with_new_data": [], "left": [],
-            "left_with_lost_data": [], "changed": {"current_price": {"from": 10.0, "to": 10.5}, "rs_rating": {"from": 95, "to": 96}},
+            "in_since": True, "in_until": True, **moves(),
+            "changed": {"current_price": {"from": 10.0, "to": 10.5}, "rs_rating": {"from": 95, "to": 96}},
             "missing": NEVER_SET, "warnings": [],
         },
         "BBB": {
-            "in_since": True, "in_until": True, "entered": [], "entered_with_new_data": [], "left": ["minervini"],
-            "left_with_lost_data": [], "changed": {"rs_rating": {"from": 75, "to": 60}}, "missing": NEVER_SET, "warnings": [],
+            "in_since": True, "in_until": True, **moves(left=["minervini"]),
+            "changed": {"rs_rating": {"from": 75, "to": 60}}, "missing": NEVER_SET, "warnings": [],
         },
         "NEW": absent(False, True),
         "ZZZ": absent(True, False),
@@ -247,6 +250,57 @@ async def test_a_growth_change_shows_each_sides_basis_and_warns_when_they_differ
     assert gro["warnings"] == warnings
 
 
+GROWTH_SCREEN = preset("growth", "Growth", [condition("eps_growth_qq", "range", min=25)])
+BASIS_WARNING = (
+    "Some moves in growth are under entered_with_basis_change or left_with_basis_change, where a growth field the "
+    "screen reads changed value while growth_metric_basis changed, so those moves can come from the comparison rather "
+    "than the stocks."
+)
+
+
+def grower(symbol, eps, basis, **fields):
+    return archived(symbol, eps_growth_qq=eps, growth_metric_basis=basis, minervini_score=80, **fields)
+
+
+async def test_a_growth_move_across_a_change_of_basis_is_reported_apart_from_a_move(fake_archive):
+    presets = [*PRESETS, GROWTH_SCREEN]
+    # B1 also enters minervini, which reads no growth field.
+    fake_archive.add("US", "2026-10-08", [
+        *SINCE_ROWS, grower("B1", 10.0, "comparable_period_yoy", rs_rating=60), grower("B2", 40.0, "quarterly_qoq"),
+        grower("B3", 10.0, None), grower("B4", 10.0, None), grower("B5", 10.0, "quarterly_qoq"),
+    ], presets=presets)
+    fake_archive.add("US", "2026-10-09", [
+        *UNTIL_ROWS, grower("B1", 40.0, "quarterly_qoq", rs_rating=80), grower("B2", 10.0, "comparable_period_yoy"),
+        grower("B3", 40.0, "quarterly_qoq"), grower("B4", 40.0, "unavailable"), grower("B5", 40.0, "quarterly_qoq"),
+    ], presets=presets)
+
+    result = await call(symbols=["B1", "B2"])
+
+    growth = result["screens"]["growth"]
+    assert {move: growth[move] for move in MOVES} == {
+        **{move: NOTHING for move in MOVES},
+        "entered": listed("B4", "B5"), "entered_with_basis_change": listed("B1", "B3"),
+        "left_with_basis_change": listed("B2"),
+    }
+    assert {symbol: {move: change[move] for move in MOVES} for symbol, change in result["symbols"].items()} == {
+        "B1": moves(entered=["minervini"], entered_with_basis_change=["growth"]),
+        "B2": moves(left_with_basis_change=["growth"]),
+    }
+    assert result["warnings"] == [BASIS_WARNING]
+
+
+async def test_a_basis_change_cuts_its_lists_at_the_limit(fake_archive):
+    presets = [*PRESETS, GROWTH_SCREEN]
+    fake_archive.add("US", "2026-10-08", [*SINCE_ROWS, *(grower(s, 10.0, "comparable_period_yoy") for s in ("B1", "B2"))],
+                     presets=presets)
+    fake_archive.add("US", "2026-10-09", [*UNTIL_ROWS, *(grower(s, 40.0, "quarterly_qoq") for s in ("B1", "B2"))],
+                     presets=presets)
+
+    growth = (await call(screen="growth", limit=1))["screens"]["growth"]
+
+    assert growth["entered_with_basis_change"] == {"count": 2, "symbols": ["B1"], "truncated": True}
+
+
 async def test_a_disabled_group_does_not_classify_a_move(fake_archive):
     presets = [*PRESETS, either(
         condition("rs_rating", "range", min=90), disabled=[condition("ibd_group_rank", "range", max=10)],
@@ -260,9 +314,7 @@ async def test_a_disabled_group_does_not_classify_a_move(fake_archive):
     assert (result["screens"]["either"]["entered"], result["screens"]["either"]["entered_with_new_data"]) == (
         listed("RANK"), NOTHING,
     )
-    assert {move: result["symbols"]["RANK"][move] for move in MOVES} == {
-        "entered": ["either"], "entered_with_new_data": [], "left": [], "left_with_lost_data": [],
-    }
+    assert {move: result["symbols"]["RANK"][move] for move in MOVES} == moves(entered=["either"])
 
 
 async def test_a_value_that_went_missing_is_a_change_to_null(fake_archive):
@@ -364,8 +416,8 @@ STAGE_FIX_WARNING = (
         ORIGIN_WARNING.format(side="until", date="2026-10-09", origin="artifact_pre_stage_fix"),
     ]),
     ({"until_presets": stricter_minervini()}, [
-        "The rules of minervini differ between the sessions, so their entered and left lists can come from the rules "
-        "rather than the stocks.",
+        "The rules of minervini differ between the sessions, so their moves can come from the rules rather than the "
+        "stocks.",
     ]),
     ({"newest_publish": "2026-10-12"}, [
         "The site now shows 2026-10-12, which the archive has not recorded yet. Its newest session is 2026-10-09.",
@@ -391,8 +443,8 @@ async def test_a_screen_on_one_side_only_counts_as_redefined(fake_archive):
     assert result["screens"]["canslim"]["definition_changed"] is True
     assert result["screens"]["canslim"]["entered"] == listed("AAA", "CCC", "DDD")
     assert result["warnings"] == [
-        "The rules of canslim differ between the sessions, so their entered and left lists can come from the rules "
-        "rather than the stocks.",
+        "The rules of canslim differ between the sessions, so their moves can come from the rules rather than the "
+        "stocks.",
     ]
 
 
