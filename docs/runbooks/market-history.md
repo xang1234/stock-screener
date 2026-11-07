@@ -68,7 +68,7 @@ GitHub's [REST documentation](https://docs.github.com/en/rest/releases/assets) s
 ::error::US: US us-2026-11-06.json.gz is starter: an upload is running or died part way. If none is running, gh release delete-asset market-history-us-v1 us-2026-11-06.json.gz --yes; see docs/runbooks/market-history.md
 ```
 
-`record-history` records one date per market, so the publishes of later dates still go green. Each of those runs prints the same text as a `::warning::` until you delete the asset. A backfill stops at that date, so it adds no later date for that market until you delete the asset.
+`record-history` records one date per market, so the publishes of later dates still go green. Each of those runs prints the same message, without the leading `US: `, as a `::warning::` until you delete the asset. A backfill whose retained artifacts include that date stops there and adds no later date for that market until you delete the asset. Once no retained artifact holds the date, a backfill only warns about it.
 
 1. Confirm that no publish or backfill is running, because a running upload may show the same state.
 2. Delete the asset:
