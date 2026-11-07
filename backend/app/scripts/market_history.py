@@ -49,6 +49,7 @@ SCHEMA_VERSION = "market-history-v1"
 INDEX_SCHEMA_VERSION = "market-history-index-v1"
 INDEX_ASSET = "index.json"
 RUNBOOK = "docs/runbooks/market-history.md"
+_DEFINITION = re.compile(r"[0-9a-f]{16}")
 # The docs' enum names uploaded and open, and a failed upload leaves starter, so
 # anything but uploaded may be an empty file.
 UPLOADED = "uploaded"
@@ -119,6 +120,21 @@ def check_document(document: dict[str, Any], market: str, published_at: datetime
         raise LedgerError(f"{market} {as_of_date} has zero rows")
     if not document["presets"]:
         raise LedgerError(f"{market} {as_of_date} has zero presets")
+    columns, rows = document["columns"], document["rows"]
+    if columns != sorted(set(columns)) or "symbol" not in columns or any(len(row) != len(columns) for row in rows):
+        raise LedgerCorrupt(f"{market} {as_of_date} rows do not match its columns")
+    symbols = [row[columns.index("symbol")] for row in rows]
+    if symbols != sorted(set(symbols)):
+        raise LedgerCorrupt(f"{market} {as_of_date} does not hold one row per symbol in symbol order")
+    for preset, entry in document["presets"].items():
+        matches = entry["symbols"]
+        if (
+            not _DEFINITION.fullmatch(entry["definition"])
+            or not isinstance(entry["filter_expression"], dict)
+            or matches != sorted(set(matches))
+            or not set(symbols).issuperset(matches)
+        ):
+            raise LedgerCorrupt(f"{market} {as_of_date} preset {preset} is malformed")
     check_publishable(market, as_of_date, published_at)
 
 
@@ -249,8 +265,16 @@ def archive(market: str, documents: Iterable[dict[str, Any]], dry_run: Path | No
             outcome = publish(path, market, dry_run, upload_session)
         listing[name] = UPLOADED
         print(f"{market}: {as_of_date} ({document['origin']}) {outcome}", flush=True)
-    # Listed again because a backfill runs for minutes and publishes can land meanwhile.
-    heal_index(market, {**listing, **(release_asset_states(tag) or {})}, dry_run)
+    if dry_run is not None:
+        heal_index(market, listing, dry_run)
+        return
+    # Listed again because a backfill runs for minutes and other runs or a person can
+    # change the Release meanwhile. Only the fresh listing counts, so the index can miss
+    # a session until the next run but never names one that is gone.
+    fresh = release_asset_states(tag)
+    if fresh is None:
+        raise LedgerError(f"Release {tag} disappeared during the run; see {RUNBOOK}")
+    heal_index(market, fresh, dry_run)
 
 
 def cmd_extract(args: argparse.Namespace) -> int:

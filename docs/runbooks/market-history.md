@@ -6,7 +6,7 @@ Run every command from `backend/` in a checkout of this repository. The commands
 
 ## Backfill a market
 
-Retained artifacts expire after 30 days, so a backfill cannot reach a session older than that. Dispatch the workflow once per market:
+A backfill reads only retained artifacts, which expire 30 days after they are built. It can reach a session only while some retained artifact holds it, and that can include a session older than 30 days when a market's data was stale. Dispatch the workflow once per market:
 
 ```bash
 gh workflow run market-history-backfill.yml -f market=US

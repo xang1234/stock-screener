@@ -245,6 +245,9 @@ elif args[:2] == ["release", "upload"]:
         target.write_text(faults["race"].pop(source.name))
     if target.exists() and "--clobber" not in args:
         fail(f"asset under the same name already exists: [{source.name}]")
+    # gh deletes the existing asset before it uploads the new one.
+    if "--clobber" in args:
+        target.unlink(missing_ok=True)
     if source.name in faults.get("died_midway", []):
         faults["died_midway"].remove(source.name)
         target.write_bytes(b"")
@@ -256,6 +259,9 @@ elif args[:2] == ["release", "upload"]:
     shutil.copy(source, target)
     if source.name in faults.get("appears", {}):
         (release(args[2]) / faults["appears"][source.name]).write_text("another run")
+    if source.name in faults.get("vanishes", {}):
+        gone = release(args[2]) / faults["vanishes"][source.name]
+        shutil.rmtree(gone) if gone.is_dir() else gone.unlink()
     states.pop(source.name, None)
     if source.name in faults.get("listed_as", {}):
         states[source.name] = faults["listed_as"][source.name]
@@ -510,7 +516,7 @@ def test_a_crash_between_the_session_and_the_index_heals_on_the_next_run(tmp_pat
     release.set_faults(upload={"index.json": 3})
 
     assert record(days) == 1
-    assert release.read("index.json") == index_body("2026-11-05")
+    assert "index.json" not in release.assets()
     session = release.read(NAME_1106)
 
     release.set_faults()
@@ -711,6 +717,77 @@ def test_a_fresh_listing_wins_over_what_this_run_assumed_it_uploaded(tmp_path, r
     assert record(days) == 0
 
     assert release.read("index.json") == index_body()
+
+
+def test_the_index_never_names_a_session_deleted_during_the_run(tmp_path, release) -> None:
+    release.create()
+    release.put("us-2026-11-05.json.gz", b"bad build a person deletes")
+    release.put("index.json", index_body("2026-11-05"))
+    release.set_faults(vanishes={NAME_1106: "us-2026-11-05.json.gz"})
+    days = write_days(tmp_path / "days", document_for())
+
+    assert record(days) == 0
+
+    assert release.read("index.json") == index_body("2026-11-06")
+
+
+def test_a_release_deleted_during_the_run_is_red(tmp_path, release, capsys) -> None:
+    release.create()
+    release.set_faults(vanishes={NAME_1106: "."})
+    days = write_days(tmp_path / "days", document_for())
+
+    assert record(days) == 1
+
+    assert "Release market-history-us-v1 disappeared during the run" in capsys.readouterr().out
+
+
+def _rows(*rows: list) -> dict:
+    return {"rows": list(rows)}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        pytest.param(_rows([91.0, "Tech", None]), "rows do not match its columns", id="short-row"),
+        pytest.param({"columns": ["stage", "symbol", "rs_rating", "sector"]}, "rows do not match its columns", id="unsorted-columns"),
+        pytest.param(
+            {"columns": ["rs_rating", "sector", "stage", "ticker"]}, "rows do not match its columns", id="no-symbol-column"
+        ),
+        pytest.param(
+            _rows([91.0, "Tech", None, "AAA"], [91.0, "Tech", None, "AAA"]),
+            "does not hold one row per symbol in symbol order",
+            id="duplicate-symbol",
+        ),
+        pytest.param(
+            _rows([95.0, None, 2, "ZZZ"], [91.0, "Tech", None, "AAA"]),
+            "does not hold one row per symbol in symbol order",
+            id="rows-out-of-order",
+        ),
+        pytest.param(
+            {"presets": {"high_rs": {**EXTRACTED_US["presets"]["high_rs"], "symbols": ["AAA", "QQQ"]}}},
+            "preset high_rs is malformed",
+            id="preset-names-a-missing-row",
+        ),
+        pytest.param(
+            {"presets": {"high_rs": {**EXTRACTED_US["presets"]["high_rs"], "definition": "not-a-hash"}}},
+            "preset high_rs is malformed",
+            id="bad-definition",
+        ),
+        pytest.param(
+            {"presets": {"high_rs": {**EXTRACTED_US["presets"]["high_rs"], "symbols": ["ZZZ", "AAA"]}}},
+            "preset high_rs is malformed",
+            id="unsorted-matches",
+        ),
+    ],
+)
+def test_a_malformed_session_is_refused_and_nothing_is_uploaded(tmp_path, release, capsys, overrides, message) -> None:
+    release.create()
+    days = write_days(tmp_path / "days", document_for(**overrides))
+
+    assert record(days) == 1
+
+    assert message in capsys.readouterr().out
+    assert release.uploads() == []
 
 
 @pytest.mark.parametrize(
