@@ -1,0 +1,46 @@
+name: Market History Backfill
+
+# Adds the sessions a market's archive lacks from retained artifacts. See
+# docs/runbooks/market-history.md.
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: Market to backfill
+        required: true
+        type: choice
+        options: [US, CA, HK, JP, TW, IN, KR, CN, DE, AU, SG, MY]
+
+concurrency:
+  # Not the publisher's group: session assets are immutable and the index heals
+  # itself, so overlapping record-history is safe, and sharing the group would let a
+  # pending backfill replace a pending publish. Per market, because each market has
+  # its own Release, and one shared group would cancel all but the first and last
+  # runs of a dispatch loop.
+  group: market-history-backfill-${{ inputs.market }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # Holds contents:write, so it installs nothing and runs only stdlib Python and gh.
+  backfill:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Backfill the market
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MARKET: ${{ inputs.market }}
+        run: |
+          cd backend
+          python3 -m app.scripts.market_history backfill --market "$MARKET"

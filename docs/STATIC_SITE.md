@@ -92,6 +92,53 @@ Each horizon block has `sample_size`, `signal_dates`, `effective_dates`, `pendin
 
 `missing_sessions` counts completed sessions between `recording_since` and `ledger_through` with no ledger line. To seed the release, recover a lost day or repair a corrupt asset, see the [scoreboard ledger runbook](runbooks/scoreboard-ledger.md).
 
+## Market History Archive
+
+The site publishes only the newest session, and past fundamentals, ratings and screen matches cannot be rebuilt later. So each market has a Release, `market-history-<m>-v1`, that holds one immutable file per published session. The Release is a prerelease created with `--latest=false`.
+
+Each session file is `<m>-<YYYY-MM-DD>.json.gz`, gzip with `mtime=0`:
+
+```json
+{
+  "as_of_date": "2026-11-06",
+  "columns": ["rs_rating", "symbol"],
+  "market": "US",
+  "origin": "live",
+  "presets": {
+    "minervini": {
+      "definition": "241a0f65f493c25e",
+      "filter_expression": {},
+      "name": "Minervini",
+      "symbols": ["AAA"]
+    }
+  },
+  "published_at": "2026-11-07T02:03:30Z",
+  "rows": [[83.0, "AAA"]],
+  "schema_version": "market-history-v1"
+}
+```
+
+- `columns` is sorted and always holds `symbol`. A row that lacks a field holds `null` there.
+- `rows` is sorted by symbol. Rows keep every published field except `price_sparkline_data`, `rs_sparkline_data` and `field_availability`.
+- `origin` takes the scoreboard ledger's values: `live`, `artifact` or `artifact_pre_stage_fix`.
+- `definition` is the ledger's hash of `filter_expression`, so a reader can see a rule change.
+
+`index.json` lists the sessions, for example `{"schema_version":"market-history-index-v1","market":"US","sessions":["2026-11-05","2026-11-06"]}`. It is derived from the Release listing and never authoritative. Every run compares it with the listing and rewrites it when they differ, so a crash between the two uploads heals on the next run. `gh release upload --clobber` deletes before it uploads, so a reader can briefly find no index.
+
+These rules decide what the archive holds:
+
+- **The first publication of a session wins.** No job overwrites a session asset, so `published_at` and the content mean what the site first showed. A later correction to the same session does not appear.
+- **Any absent date can be added**, including one older than the newest, because each session is its own file.
+- **Failures are per market.** One market going red does not stop the others, and the archive never affects the deploy or the ledger.
+- **Mid-session behavior.** The archive reads the built site only. It fetches no prices and calls no provider, so a session means whatever the site published for that `as_of_date`.
+
+Two workflows write the Releases:
+
+- The `build` job in `static-site-publish.yml` extracts the session from the built site and uploads it as the `market-history-days` artifact for 7 days. Both steps are `continue-on-error`. The `record-history` job then runs after `deploy`, with the same `if`, using the deploy's finish time as `published_at`. It holds `contents: write`, installs nothing and runs `backend/app/scripts/market_history.py`, which is stdlib only.
+- `market-history-backfill.yml` adds absent sessions from retained artifacts. It is dispatched by hand, one market at a time, from the default branch. It has its own concurrency group, because a shared group would let a pending backfill replace a pending publish.
+
+To run a backfill, delete a bad session or clear an incomplete asset, see the [market history runbook](runbooks/market-history.md).
+
 ## Maintaining Static Assets
 
 - Keep the static page tour GIF aligned with the exported static routes.
