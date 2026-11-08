@@ -12,7 +12,7 @@ The MCP server exposes 8 tools:
 |------|-------------|
 | `market_overview` | Current market state snapshot (breadth, sentiment, key indices) |
 | `compare_feature_runs` | Diff two published feature runs to identify biggest movers |
-| `find_candidates` | Query stocks with opinionated filters; a `market` argument selects that market's published run ([details](MCP_MARKET_SELECTION.md)) |
+| `find_candidates` | Query stocks with opinionated filters; a `market` argument pins that market's published run (see [Selecting a candidate market](#selecting-a-candidate-market)) |
 | `explain_symbol` | Explain a stock's rating (brief or full depth) |
 | `watchlist_snapshot` | Summary of a named watchlist with current data |
 | `theme_state` | Inspect theme rankings, momentum, and lifecycle |
@@ -34,6 +34,21 @@ Combine `watchlist_snapshot` with `explain_symbol` to audit your watchlist. The 
 
 ### Theme Scouting
 Use `theme_state` to review trending and emerging themes, then `find_candidates` to discover stocks associated with high-momentum themes.
+
+### Selecting a candidate market
+`find_candidates` takes an optional top-level `market` argument:
+
+```json
+{"market":"DE","filters":{"min_rs_rating":80,"stage":2},"limit":100}
+```
+
+The server normalizes the code, validates it against the supported-market registry and resolves `latest_published_market:<MARKET>`, then verifies that the referenced run is published and that its stored market metadata agrees with the request. It fails closed: there is no global-pointer or other-market fallback. Errors are `market_run_unavailable` (missing pointer, unpublished run, custom universe, missing or conflicting market evidence) and `invalid_arguments` (bad market code); a stored row with an unknown status or run type returns `invalid_stored_data`, because the request was valid and the row is not.
+
+A successful response keeps the candidate projection and adds the verified `market`, `universe_type: "market"` and `pointer_key` to `run`, plus `scope.market`. A valid empty result still carries that provenance, which distinguishes it from an unavailable publication. The one exception is an unknown watchlist name: it returns the existing not-found envelope with empty `symbols` and no `run`/`scope`, because it reports a bad scope rather than a missing publication.
+
+Omitting `market` preserves the previous global latest-run behaviour and response shape. `universe` keeps its own meaning (`all`, `latest_published`, or a watchlist name) and is not a market selector, although it may be combined with an explicit market. The limit remains 100, so clients collecting a full universe must detect truncation and pin every query for one market to the same run identity; market-specific freshness must use that market's own calendar.
+
+This argument changes nothing else: scoring, strategy rules, earnings collection, calendar calculation, authentication and write permissions are untouched, and the lookup creates or changes no pointer.
 
 ## Configuration
 
