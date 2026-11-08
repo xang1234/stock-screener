@@ -7,7 +7,7 @@ import json
 import math
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from importlib.resources import files
 from typing import Annotated, Any
 
@@ -17,6 +17,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 from .data import HEAVY_FIELDS, StaticData
+from .history import TRACKED_FIELDS, History, diff, pick_sessions
 from .screens import (
     evaluate_expression,
     explain_expression,
@@ -44,6 +45,8 @@ Daily stock-screening data from the open-source stock-screener project
   for market health and breadth, group_rankings for leading groups.
 - screen_track_record reports how stocks did after newly entering a screen, one holding
   period per call. Follow its how_to_read note when quoting the numbers.
+- what_changed compares two archived sessions, listing the stocks that entered and left each
+  screen and the field changes of named stocks. Read its warnings before attributing a move to a stock.
 - Call describe_fields before quoting or filtering on an unfamiliar field. Names mislead, and what
   rows hold varies by market.
 - The stockscreen://skill resource teaches the full workflow and reading rules.
@@ -52,6 +55,7 @@ Daily stock-screening data from the open-source stock-screener project
 
 mcp = MCPServer("stockscreen", instructions=INSTRUCTIONS)
 data = StaticData()
+history = History()
 
 
 def _packaged_text(name: str) -> str:
@@ -135,6 +139,42 @@ TRACK_RECORD_NOTES = (
     "suppressed_overlapping counts re-entries while that stock's earlier window is open, possibly in another row. "
     "skipped_missing_history counts picks with no usable price, including stocks that later delist, which can "
     "flatter results. "
+    "This is a record of past screens, not a forecast or investment advice."
+)
+WHAT_CHANGED_NOTES = (
+    "since and until are two archived sessions, each the site's publish for its as_of_date as first published. "
+    "sessions_between counts the archived sessions strictly between them. "
+    "Moves can come from data coverage, not only from the stocks, such as a value that became available or missing, "
+    "a symbol the publish gained or lost, a rule change, or a change of RS universe. "
+    "Read warnings before attributing a move to a stock. "
+    "Each entry in screens is one preset id. name is its display name and definition_changed is true when its rules "
+    "differ between the sessions, so its moves can come from the rules. "
+    "Six lists hold the symbols with a row in both sessions that moved into or out of the screen, each symbol in one. "
+    "entered_with_new_data and left_with_lost_data hold the moves where a field the screen's rules read went from "
+    "null to a value, or from a value to null, such as a stock joining or leaving the RS ranking. Data coverage may "
+    "have moved those, not the stock. entered_with_basis_change and left_with_basis_change hold the other moves where "
+    "a growth field the rules read held a value in both sessions and changed while growth_metric_basis changed, such "
+    "as from comparable_period_yoy to quarterly_qoq or from null to a basis. The comparison may have moved those, not "
+    "the stock. entered and left hold the remaining moves. "
+    "new_to_publish holds symbols matching it in until with no row in since, and dropped_from_publish symbols matching "
+    "it in since with no row in until. Those changed the publish, not the screen. "
+    "count is the full number, symbols holds up to the limit in symbol order, and truncated says some were cut. "
+    "Each entry in symbols has in_since and in_until, which say whether the symbol had a row, the same six move "
+    "lists naming the screens it moved into and out of, and changed, which holds each tracked field whose value "
+    "differs as from and to. A growth field in changed also has from_basis and to_basis, its growth_metric_basis in each "
+    "session. missing lists the tracked fields null in both sessions, which are unknown, not unchanged. A tracked "
+    "field in neither changed nor missing held the same value in both. The symbol's own warnings flag a growth field "
+    "that held a value in both sessions and changed while growth_metric_basis changed. When both bases are known, the "
+    "two values measure different comparisons. When one side's basis is null or unavailable, its comparison is "
+    "unknown, so the change may not compare. null and unavailable both mean unknown, so a change between them is not "
+    "flagged. For a symbol missing from either "
+    "session, every list and changed are empty. A null is a missing value, not a zero. "
+    f"Tracked fields: {', '.join(TRACKED_FIELDS)}. "
+    "Prices are not split-adjusted across sessions, so a split shows as a price move. "
+    "rs_universe_size is how many stocks the market's RS ranking held, and rs_formula_version the RS formula. "
+    "published_at is when the session was first published. "
+    "origin live was recorded at publication, artifact was read from a retained build whose time only approximates "
+    "publication, and artifact_pre_stage_fix is a retained build from before a stage fix. "
     "This is a record of past screens, not a forecast or investment advice."
 )
 
@@ -624,6 +664,87 @@ def screen_track_record(
         raise ToolError(
             f"{len(cohorts)} rows would return {size:,} characters; the limit is {MAX_RESPONSE_CHARS:,}. "
             f"Pass `screen` for one screen's rows. Recorded: {recorded}."
+        )
+    return result
+
+
+@mcp.tool(annotations=READ_ONLY)
+def what_changed(
+    market: Market = "US",
+    since: Annotated[date | None, Field(
+        description=(
+            "Older date, YYYY-MM-DD. Picks the newest archived session on or before it and before until; defaults to "
+            "the session just before until."
+        ),
+    )] = None,
+    until: Annotated[date | None, Field(
+        description="Newer date, YYYY-MM-DD. Picks the newest archived session on or before it; defaults to the newest.",
+    )] = None,
+    symbols: Annotated[list[str] | None, Field(
+        min_length=1, max_length=50,
+        description="Tickers to report one by one, with the screens each entered and left and its changed fields.",
+    )] = None,
+    screen: Annotated[str | None, Field(description="Preset id, e.g. minervini, to report only that screen.")] = None,
+    limit: Annotated[int, Field(
+        ge=1, le=100, description="Symbols listed per list in each screen, such as entered or new_to_publish.",
+    )] = 25,
+) -> dict[str, Any]:
+    """What changed in a market between two archived sessions. It lists the stocks that entered and left each
+    preset screen, and for named symbols the screens they moved into and out of, the tracked fields that changed,
+    and the tracked fields null in both sessions.
+
+    Use it for "what changed since yesterday" or since a date. Use run_screen and get_stock for the newest
+    publish, and screen_track_record for how entries did afterwards. With no dates it compares the two newest
+    archived sessions.
+
+    Moves where a field the screen's rules read went from null to a value, or back, are listed apart as
+    entered_with_new_data and left_with_lost_data, since data coverage may have moved them. Moves where a growth
+    field the rules read changed across a change of growth_metric_basis are listed apart as
+    entered_with_basis_change and left_with_basis_change, since the comparison may have moved them.
+
+    Read `warnings` before attributing a move to a stock, because a rule change, an RS universe or formula change,
+    the stage fix or a session read from a retained build can move a stock that did nothing. how_to_read in each
+    result defines the fields.
+
+    The archive holds each session as first published, from when recording started. A date before the first
+    archived session is an error that names it. Any response over 80,000 characters of JSON is refused; pass
+    `screen`, a lower `limit` or fewer `symbols`.
+    """
+    code = market.strip().upper()
+    try:
+        manifest = data.manifest()
+    except ToolError:
+        # The archive is on Releases, not Pages, so it can still answer; only the market check and freshness go.
+        manifest = None
+    # A market that failed this publish keeps its archive.
+    unavailable = [] if manifest is None else manifest.get("unavailable_markets", [])
+    if manifest is not None and code not in manifest["markets"] and code not in unavailable:
+        also = (
+            f" Also accepted, for their archives, though missing from this publish: {', '.join(sorted(unavailable))}."
+            if unavailable else ""
+        )
+        raise ToolError(f"Unknown market {code!r}. Available markets: {', '.join(sorted(manifest['markets']))}.{also}")
+    archived = history.sessions(code)
+    older, newer = pick_sessions(code, archived, since, until)
+    newest_publish = None if manifest is None else manifest["markets"].get(code, {}).get("as_of_date")
+    result = {
+        "market": code,
+        **diff(
+            history.session(code, older), history.session(code, newer), archived, newest_publish,
+            screen=screen, symbols=symbols, limit=limit,
+        ),
+        "how_to_read": WHAT_CHANGED_NOTES,
+    }
+    if manifest is None:
+        result["warnings"].append(
+            "The site's current manifest could not be read, so whether the site holds a newer session than the "
+            "archive was not checked."
+        )
+    size = _response_chars(result)
+    if size > MAX_RESPONSE_CHARS:
+        raise ToolError(
+            f"{len(result['screens'])} screens would return {size:,} characters; the limit is {MAX_RESPONSE_CHARS:,}. "
+            "Pass `screen` for one screen, a lower `limit`, or fewer `symbols`."
         )
     return result
 

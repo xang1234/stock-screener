@@ -2,14 +2,21 @@
 
 import copy
 import io
+import sys
 import urllib.error
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from stockscreen_mcp import data as data_module
 from stockscreen_mcp import server
+from stockscreen_mcp.history import History
+from stockscreen_mcp.screens import evaluate_expression
 
 BASE = "https://example.test/static-data/"
+HISTORY = "https://example.test/releases/download/"
+REPO = Path(__file__).resolve().parents[2]
 
 
 def stock(symbol, **fields):
@@ -334,3 +341,96 @@ def use_fake_data(monkeypatch, static_data):
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def archived(symbol, **fields):
+    return stock(symbol, **{
+        "rs_universe_size": 5000, "rs_formula_version": "balanced-horizon-percentile-v2", "stage": 2,
+        "ma_alignment": True, **fields,
+    })
+
+
+# Minervini moves from SINCE_ROWS to UNTIL_ROWS: CCC and DDD enter, BBB leaves, NEW is new to the
+# publish and ZZZ dropped from it.
+SINCE_ROWS = [
+    archived("AAA", rs_rating=95, minervini_score=90, composite_score=80, se_pattern_primary="cup_handle"),
+    archived("BBB", rs_rating=75, minervini_score=72, composite_score=60),
+    archived("CCC", rs_rating=99, minervini_score=95, stage=3),
+    archived("DDD", rs_rating=65, minervini_score=80),
+    archived("ZZZ", rs_rating=90, minervini_score=85),
+]
+UNTIL_ROWS = [
+    archived("AAA", rs_rating=96, minervini_score=90, composite_score=80, se_pattern_primary="cup_handle",
+             current_price=10.5),
+    archived("BBB", rs_rating=60, minervini_score=72, composite_score=60),
+    archived("CCC", rs_rating=99, minervini_score=95),
+    archived("DDD", rs_rating=72, minervini_score=80),
+    archived("NEW", rs_rating=91, minervini_score=88),
+]
+
+
+class FakeArchive:
+    """Serves archive Releases under the names backend/app/scripts/market_history.py gives them, built with its
+    own functions, and records every fetch."""
+
+    def __init__(self, writer):
+        self.writer = writer
+        self.files = {}
+        self.dates = {}
+        self.errors = {}  # url -> HTTP status, or an exception, to fail with
+        self.calls = []
+
+    def url(self, market, asset):
+        return f"{HISTORY}{self.writer.release_tag(market)}/{asset}"
+
+    def add(self, market, as_of_date, rows, presets=PRESETS, origin="live"):
+        scan = {"as_of_date": as_of_date, "preset_screens": copy.deepcopy(presets)}
+        document = self.writer.build_document(market, scan, copy.deepcopy(rows), evaluate_expression)
+        published_at = datetime.fromisoformat(f"{as_of_date}T22:00:00").replace(tzinfo=timezone.utc)
+        self.writer.check_document(document, market, published_at)
+        stamped = self.writer.stamped(document, published_at, self.writer.Origin(origin))
+        self.files[self.url(market, self.writer.session_asset(market, as_of_date))] = self.writer.session_bytes(stamped)
+        self.dates.setdefault(market, set()).add(as_of_date)
+        index = self.writer.index_bytes(market, sorted(self.dates[market]))
+        self.files[self.url(market, self.writer.INDEX_ASSET)] = index
+
+    def __call__(self, url):
+        self.calls.append(url)
+        error = self.errors.get(url)
+        if isinstance(error, BaseException):
+            raise error
+        if error is not None:
+            raise urllib.error.HTTPError(url, error, "Error", {}, io.BytesIO())
+        if url in self.files:
+            return self.files[url]
+        # GitHub's Release page, which exists once any asset does.
+        tag = url.removeprefix("https://example.test/releases/tag/")
+        if tag != url and any(name.startswith(f"{HISTORY}{tag}/") for name in self.files):
+            return b"<!DOCTYPE html>"
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b"Not Found"))
+
+
+@pytest.fixture(scope="session")
+def writer():
+    if not (REPO / "backend" / "app" / "scripts" / "market_history.py").exists():
+        pytest.skip("not inside the repository checkout, so the archive writer is absent")
+    sys.path.append(str(REPO / "backend"))
+    from app.scripts import market_history
+
+    return market_history
+
+
+@pytest.fixture
+def fake_archive(writer):
+    archive = FakeArchive(writer)
+    for as_of_date in ("2026-10-05", "2026-10-07", "2026-10-08"):
+        archive.add("US", as_of_date, SINCE_ROWS)
+    archive.add("US", "2026-10-09", UNTIL_ROWS)
+    return archive
+
+
+@pytest.fixture
+def use_fake_history(monkeypatch, fake_archive, clock):
+    history = History(base_url=HISTORY, fetch=fake_archive, clock=clock)
+    monkeypatch.setattr(server, "history", history)
+    return history
