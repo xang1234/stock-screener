@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.feature_store.models import FeatureRunDomain, RunStatus
+from app.domain.feature_store.run_metadata import feature_run_market
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
@@ -1638,12 +1639,19 @@ class MarketCopilotService:
         universe = config.get("universe")
         if universe is not None and not isinstance(universe, dict):
             raise CandidateMarketRunUnavailable("Market publication has invalid universe metadata")
-        evidence = [config.get("market"), (universe or {}).get("market")]
-        evidence = [value for value in evidence if value is not None]
-        if not evidence or any(
-            not isinstance(value, str) or value.strip().upper() != market
-            for value in evidence
-        ):
+        # One definition of "which market a run belongs to": the run-metadata
+        # helper normalizes ``universe.market``. The flat ``market`` key is a
+        # legacy marker that must agree when present, so both are checked
+        # instead of re-parsing the universe layout here.
+        run_market = feature_run_market(run)
+        flat_market = config.get("market")
+        normalized_flat = (
+            flat_market.strip().upper() if isinstance(flat_market, str) else flat_market
+        )
+        evidence = [
+            value for value in (run_market, normalized_flat) if value is not None
+        ]
+        if not evidence or any(value != market for value in evidence):
             raise CandidateMarketRunUnavailable("Stored publication market is missing or inconsistent")
         return run
 
