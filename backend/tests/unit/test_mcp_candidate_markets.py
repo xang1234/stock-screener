@@ -134,8 +134,13 @@ def test_broken_pointer_never_uses_global_or_other_market(markets, failure):
     {"market": "US", "universe_type": "custom"},
     {"universe_type": "market"},
     {"market": 1, "universe_type": "market"},
+    # A flat marker alone does not identify the universe, so it cannot stand in
+    # for universe.market evidence.
+    {"market": "US", "universe_type": "market"},
+    {"market": "US", "universe_type": "market", "universe": {}},
     {"market": "US", "universe_type": "market", "universe": "invalid"},
     {"market": "US", "universe_type": "market", "universe": {"market": "DE"}},
+    {"market": "US", "universe_type": "market", "universe": {"market": None}},
 ])
 def test_missing_or_conflicting_market_evidence_fails_closed(markets, config):
     service, factory, _ = markets

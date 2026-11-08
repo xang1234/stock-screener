@@ -1640,18 +1640,17 @@ class MarketCopilotService:
         if universe is not None and not isinstance(universe, dict):
             raise CandidateMarketRunUnavailable("Market publication has invalid universe metadata")
         # One definition of "which market a run belongs to": the run-metadata
-        # helper normalizes ``universe.market``. The flat ``market`` key is a
-        # legacy marker that must agree when present, so both are checked
-        # instead of re-parsing the universe layout here.
+        # helper normalizes ``universe.market`` and is the evidence that makes
+        # the run verifiable. A flat ``market`` key alone does not identify the
+        # universe, so it can only contradict, never substitute.
         run_market = feature_run_market(run)
         flat_market = config.get("market")
         normalized_flat = (
             flat_market.strip().upper() if isinstance(flat_market, str) else flat_market
         )
-        evidence = [
-            value for value in (run_market, normalized_flat) if value is not None
-        ]
-        if not evidence or any(value != market for value in evidence):
+        if run_market != market or (
+            normalized_flat is not None and normalized_flat != market
+        ):
             raise CandidateMarketRunUnavailable("Stored publication market is missing or inconsistent")
         return run
 
