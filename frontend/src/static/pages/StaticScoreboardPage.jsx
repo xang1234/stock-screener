@@ -100,7 +100,7 @@ const sampleLines = (cohort, horizon) => {
   ];
   if (horizon.sample_size === 0) {
     return {
-      primary: `${count(horizon.pending_windows)} pending`,
+      primary: horizon.pending_windows > 0 ? `${count(horizon.pending_windows)} pending` : 'No closed windows',
       secondary: [
         horizon.oldest_open_sessions != null && `oldest ${horizon.oldest_open_sessions} of ${horizon.horizon_sessions} sessions`,
         ...dropped,

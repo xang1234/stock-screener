@@ -302,7 +302,7 @@ describe('StaticScoreboardPage', () => {
     expect(within(live).queryByRole('progressbar')).not.toBeInTheDocument();
     expect(within(live).queryByText(/All screens/)).not.toBeInTheDocument();
     expect(rowFor(live, 'Momentum').closest('details')).toBeNull();
-    expect(sampleOf(rowFor(live, 'Momentum'))).toEqual(['0 pending', '3 no price · 6 overlapping']);
+    expect(sampleOf(rowFor(live, 'Momentum'))).toEqual(['No closed windows', '3 no price · 6 overlapping']);
   });
 
   it('shows no pending strip and an unfolded table once a window has closed', async () => {
