@@ -316,7 +316,7 @@ function OriginSection({ market, section, cohorts, sessions, sort, onSort, defau
       {summary && table ? (
         <Box component="details">
           <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary', py: 0.5 }}>
-            {`Pending by screen (${count(cohorts.length)})`}
+            {`All screens (${count(cohorts.length)})`}
           </Box>
           {table}
         </Box>

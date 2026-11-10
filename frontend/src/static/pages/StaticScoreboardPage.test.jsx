@@ -285,7 +285,7 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard?market=HK');
     const live = (await screen.findByText('Recorded live')).closest('section');
 
-    const details = within(live).getByText('Pending by screen (2)').closest('details');
+    const details = within(live).getByText('All screens (2)').closest('details');
     expect(details).not.toHaveAttribute('open');
     expect(details).toContainElement(rowFor(live, 'Minervini'));
   });
@@ -297,7 +297,7 @@ describe('StaticScoreboardPage', () => {
     expect(rowFor(live, 'Minervini').closest('details')).toBeNull();
     expect(within(live).queryByRole('progressbar')).not.toBeInTheDocument();
     expect(within(live).queryByText(/picks pending across/)).not.toBeInTheDocument();
-    expect(within(live).queryByText(/Pending by screen/)).not.toBeInTheDocument();
+    expect(within(live).queryByText(/All screens/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '20 sessions' }));
     expect(within(live).getByText('60 picks pending across 1 screen · oldest window 12 of 20 sessions')).toBeInTheDocument();
