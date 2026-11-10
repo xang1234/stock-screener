@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ...tasks.market_queues import market_suffix
+from ..runtime_activity_staleness import parse_activity_timestamp
 from ...theme_platform.contracts import WarmupHeartbeatState, WarmupStateSnapshot
 
 
@@ -242,7 +243,7 @@ class PriceCacheWarmupStore:
                 "status": status,
                 "count": count,
                 "total": total,
-                "completed_at": datetime.now().isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
                 "error": error,
                 "market": (market or "shared").lower(),
             }
@@ -269,7 +270,7 @@ class PriceCacheWarmupStore:
                 "current": current,
                 "total": total,
                 "percent": percent if percent is not None else (round((current / total) * 100, 1) if total > 0 else 0),
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "market": (market or "shared").lower(),
             }
             self._redis_client.setex(self._hb_key(market), 3600, json.dumps(heartbeat))
@@ -288,11 +289,8 @@ class PriceCacheWarmupStore:
             hb_status = heartbeat.get("status", "running")
             ts_field = "completed_at" if hb_status in ("completed", "failed") else "updated_at"
             ts_str = heartbeat.get(ts_field, heartbeat.get("updated_at", ""))
-            if ts_str:
-                ts = datetime.fromisoformat(ts_str)
-                minutes = (datetime.now() - ts).total_seconds() / 60
-            else:
-                minutes = None
+            ts = parse_activity_timestamp(ts_str)
+            minutes = None if ts is None else (datetime.now(timezone.utc) - ts).total_seconds() / 60
             return {**heartbeat, "minutes": minutes, "status": hb_status}
         except Exception as exc:
             self._logger.error("Error getting heartbeat info: %s", exc)
@@ -346,7 +344,7 @@ class PriceCacheWarmupStore:
                 "total": previous.get("total"),
                 "percent": 100.0 if terminal_status == "completed" else previous.get("percent"),
                 "status": terminal_status,
-                "completed_at": datetime.now().isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
                 "market": (market or "shared").lower(),
             }
             self._redis_client.setex(self._hb_key(market), 3600, json.dumps(heartbeat))

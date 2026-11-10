@@ -14,7 +14,7 @@ import json
 import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Dict, List, Callable, Mapping
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import pandas as pd
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
 from ..database import SessionLocal
 from ..domain.markets.cn_symbols import cn_price_symbol_for_native_provider
 from ..models.stock import StockPrice
+from .runtime_activity_staleness import parse_activity_timestamp
 from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from ..config import settings
 from ..utils.market_hours import (
@@ -1162,14 +1163,12 @@ class PriceCacheService:
 
                 else:
                     # No heartbeat at all — use lock-age grace period
-                    started_at_str = current_holder.get('started_at')
-                    lock_age_minutes = None
-                    if started_at_str:
-                        try:
-                            started_at = datetime.fromisoformat(started_at_str)
-                            lock_age_minutes = (datetime.now() - started_at).total_seconds() / 60
-                        except (ValueError, TypeError):
-                            pass
+                    started_at = parse_activity_timestamp(current_holder.get('started_at'))
+                    lock_age_minutes = (
+                        None
+                        if started_at is None
+                        else (datetime.now(timezone.utc) - started_at).total_seconds() / 60
+                    )
 
                     if lock_age_minutes is not None and lock_age_minutes < 2:
                         # Lock acquired < 2 min ago, task is initializing
