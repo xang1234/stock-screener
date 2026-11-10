@@ -160,12 +160,24 @@ def test_list_jobs_surfaces_stuck_lock_holder_without_worker_inspect():
     assert stuck_job["queue"] == "data_fetch_us"
 
 
+def _minutes_ago(minutes):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+
+
 @pytest.mark.parametrize(
-    ("minutes_since_progress", "expected_state", "expected_strategy"),
-    [(45, "stuck", "force_cancel_refresh"), (1, "running", "unsupported")],
+    ("activity_status", "minutes_since_progress", "heartbeat", "expected_state", "expected_strategy"),
+    [
+        ("running", 45, None, "stuck", "force_cancel_refresh"),
+        ("running", 1, None, "running", "unsupported"),
+        # A retry keeps its task id, and the reducer drops its running writes
+        # after a failed one, so a failed record's age says nothing.
+        ("failed", 45, None, "running", "unsupported"),
+        # A killed price refresh can leave its heartbeat for the next holder.
+        ("running", 1, _minutes_ago(150), "running", "unsupported"),
+    ],
 )
 def test_lock_holder_without_price_heartbeat_is_judged_by_its_activity_progress(
-    minutes_since_progress, expected_state, expected_strategy
+    activity_status, minutes_since_progress, heartbeat, expected_state, expected_strategy
 ):
     service = OperationsJobService()
     service._broker = lambda: _FakeBroker({})
@@ -174,12 +186,10 @@ def test_lock_holder_without_price_heartbeat_is_judged_by_its_activity_progress(
         {
             "market": "US",
             "stage_key": "fundamentals",
-            "status": "running",
+            "status": activity_status,
             "task_name": "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
             "task_id": "fundamentals-us",
-            "updated_at": (
-                datetime.now(timezone.utc) - timedelta(minutes=minutes_since_progress)
-            ).isoformat(),
+            "updated_at": _minutes_ago(minutes_since_progress),
         }
     ]
     service._job_backend.get_status = MagicMock(return_value=None)
@@ -188,7 +198,8 @@ def test_lock_holder_without_price_heartbeat_is_judged_by_its_activity_progress(
     lock.get_current_task.side_effect = lambda market=None: {
         "task_id": "fundamentals-us",
         "task_name": "refresh_all_fundamentals",
-        "started_at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+        "started_at": _minutes_ago(120),
+        "last_heartbeat": heartbeat,
         "lock_key": "data_fetch_job_lock:us",
     } if market == "US" else None
 
