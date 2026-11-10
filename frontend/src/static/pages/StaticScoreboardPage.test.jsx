@@ -143,13 +143,13 @@ describe('StaticScoreboardPage', () => {
     const section = sectionFor(PRE_FIX_TITLE);
 
     expect(sampleOf(rowFor(section, 'VCP'))).toEqual(['540 closed · 13 dates', 'effective 9.0 · 0 pending · 80 overlapping']);
-    expect(rowFor(section, 'VCP')).toHaveTextContent('+0.4%');
+    expect(rowFor(section, 'VCP')).toHaveTextContent('+0.5%');
 
     fireEvent.click(screen.getByRole('button', { name: '20 sessions' }));
 
     expect(sampleOf(rowFor(section, 'VCP'))).toEqual(['26 closed · 6 dates', 'effective 4.8 · 300 pending · 294 overlapping']);
     expect(rowFor(section, 'VCP')).toHaveTextContent('-2.3%');
-    expect(rowFor(section, 'VCP')).not.toHaveTextContent('+0.4%');
+    expect(rowFor(section, 'VCP')).not.toHaveTextContent('+0.5%');
   });
 
   it('renders the sample cell and the median, positive, beat and excess numbers at 5 sessions', async () => {
@@ -379,6 +379,16 @@ describe('StaticScoreboardPage', () => {
     expect(statCell(rowFor(section, 'Minervini'), 'Median excess')).toHaveStyle({ color: DARK_TEXT.secondary });
     expect(statCell(rowFor(section, 'CANSLIM'), 'Median excess')).toHaveTextContent('-0.9%');
     expect(statCell(rowFor(section, 'CANSLIM'), 'Median excess')).toHaveStyle({ color: DARK_TEXT.secondary });
+  });
+
+  it('tints by the shown number, so a median of 0.46 shown as +0.5% is green', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+    openSection(PRE_FIX_TITLE);
+
+    const vcpMedian = statCell(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP'), 'Median');
+    expect(vcpMedian).toHaveTextContent('+0.5%');
+    expect(vcpMedian).toHaveStyle({ color: DARK.success.main });
   });
 
   it('labels a retired preset', async () => {

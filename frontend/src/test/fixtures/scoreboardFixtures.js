@@ -155,7 +155,7 @@ const preStageFixCohort = {
   events: 620,
   signal_dates: 13,
   horizons: [
-    horizon(5, closed(540, 13, 9, 0.52, 0.44, 0.44, -0.36, { suppressed_overlapping: 80 })),
+    horizon(5, closed(540, 13, 9, 0.52, 0.44, 0.46, -0.36, { suppressed_overlapping: 80 })),
     horizon(20, closed(26, 6, 4.8, 0.46, 0.42, -2.27, -3.05, pending(300, 19, { suppressed_overlapping: 294 }))),
     horizon(60, pending(326, 22, { suppressed_overlapping: 294 })),
   ],

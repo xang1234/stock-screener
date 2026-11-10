@@ -70,7 +70,7 @@ const DEFAULT_SORT = { label: 'Median excess', direction: 'desc' };
 const FLAT_BAND_PCT = 0.5;
 
 const toneOf = (value) => {
-  if (value == null || Math.abs(value) < FLAT_BAND_PCT) return 'text.secondary';
+  if (value == null || Math.abs(Number(value.toFixed(1))) < FLAT_BAND_PCT) return 'text.secondary';
   return value > 0 ? 'success.main' : 'error.main';
 };
 
