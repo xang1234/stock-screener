@@ -160,6 +160,57 @@ def test_list_jobs_surfaces_stuck_lock_holder_without_worker_inspect():
     assert stuck_job["queue"] == "data_fetch_us"
 
 
+@pytest.mark.parametrize(
+    ("minutes_since_progress", "expected_state", "expected_strategy"),
+    [(45, "stuck", "force_cancel_refresh"), (1, "running", "unsupported")],
+)
+def test_lock_holder_without_price_heartbeat_is_judged_by_its_activity_progress(
+    minutes_since_progress, expected_state, expected_strategy
+):
+    service = OperationsJobService()
+    service._broker = lambda: _FakeBroker({})
+    service._inspect = lambda: _FakeInspect()
+    service._runtime_activity_records = lambda _db: [
+        {
+            "market": "US",
+            "stage_key": "fundamentals",
+            "status": "running",
+            "task_name": "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
+            "task_id": "fundamentals-us",
+            "updated_at": (
+                datetime.now(timezone.utc) - timedelta(minutes=minutes_since_progress)
+            ).isoformat(),
+        }
+    ]
+    service._job_backend.get_status = MagicMock(return_value=None)
+
+    lock = MagicMock()
+    lock.get_current_task.side_effect = lambda market=None: {
+        "task_id": "fundamentals-us",
+        "task_name": "refresh_all_fundamentals",
+        "started_at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+        "lock_key": "data_fetch_job_lock:us",
+    } if market == "US" else None
+
+    with patch("app.services.operations_job_service.get_workload_coordination") as mock_get_coordination, patch(
+        "app.services.operations_job_service.get_data_fetch_lock",
+        return_value=lock,
+    ):
+        mock_get_coordination.return_value.get_external_fetch_holder.return_value = None
+        mock_get_coordination.return_value.get_market_workload_holders.return_value = {
+            "US": None,
+            "HK": None,
+            "JP": None,
+            "TW": None,
+        }
+
+        payload = service.list_jobs(MagicMock())
+
+    job = next(job for job in payload["jobs"] if job["task_id"] == "fundamentals-us")
+    assert job["state"] == expected_state
+    assert job["cancel_strategy"] == expected_strategy
+
+
 def _list_jobs_with_market_holders(service, market_holders):
     lock = MagicMock()
     lock.get_current_task.return_value = None

@@ -88,10 +88,12 @@ From the repository root:
 ```powershell
 py -3.11 -m venv .\backend\venv
 .\backend\venv\Scripts\Activate.ps1
-pip install -r .\backend\requirements.txt
+pip install -r .\backend\requirements-runtime.lock
 Copy-Item .\backend\.env.example .\backend\.env
 notepad .\backend\.env
 ```
+
+`requirements-runtime.lock` pins every package with hashes, the same set the Docker images install, so an install today matches one made last month. Theme embeddings are optional. To enable them, also run `pip install -r .\backend\requirements-theme-ml.txt`.
 
 Configure at least:
 

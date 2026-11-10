@@ -629,11 +629,21 @@ class OperationsJobService:
                     jobs.append(record)
         return jobs
 
-    def _lock_holder_record(self, market: str) -> _JobRecord | None:
+    def _lock_holder_record(
+        self,
+        market: str,
+        runtime_records: dict[str, dict[str, Any]],
+    ) -> _JobRecord | None:
         current_task = get_data_fetch_lock().get_current_task(market=market)
         if not current_task:
             return None
-        heartbeat_lag = _age_seconds_from(current_task.get("last_heartbeat"))
+        # Only price refreshes write the warmup heartbeat; other lock holders
+        # such as the fundamentals refresh report progress through their
+        # runtime activity record.
+        last_progress = current_task.get("last_heartbeat") or runtime_records.get(
+            current_task.get("task_id"), {}
+        ).get("updated_at")
+        heartbeat_lag = _age_seconds_from(last_progress)
         state = "stuck" if heartbeat_lag is not None and heartbeat_lag >= HEARTBEAT_STUCK_AFTER_SECONDS else "running"
         record = _JobRecord(
             task_id=current_task.get("task_id") or "unknown",
@@ -787,7 +797,7 @@ class OperationsJobService:
         }
 
         for market in SUPPORTED_MARKETS:
-            lock_record = self._lock_holder_record(market)
+            lock_record = self._lock_holder_record(market, runtime_records)
             if lock_record and lock_record.task_id not in records:
                 records[lock_record.task_id] = lock_record
 
