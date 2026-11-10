@@ -218,8 +218,12 @@ def test_scoreboard_cells_say_too_few_pending_and_none_rather_than_a_number(dist
     render(dist)
     html = page(dist, "scoreboard/us")
     live = "Recorded live"
-    artifact = "Recovered from retained build artifacts, not recorded live"
-    pre_fix = f"{artifact}, from before the Stage calculation fix (#671)"
+    artifact = "Recovered"
+    pre_fix = "Recovered, pre-Stage fix"
+    assert (f"<h2>{artifact}</h2><p class=muted>Recovered from retained build artifacts, not recorded live.</p>"
+            in html)
+    assert (f"<h2>{pre_fix}</h2><p class=muted>Recovered from retained build artifacts, not recorded live, "
+            "from before the Stage calculation fix (#671).</p>") in html
 
     pending_row = scoreboard_row(html, live, "Minervini")
     assert "pending" in pending_row and "357 pending" in pending_row and "%" not in pending_row

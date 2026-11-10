@@ -5,7 +5,9 @@ import {
   AccordionSummary,
   Alert,
   Box,
+  Chip,
   CircularProgress,
+  LinearProgress,
   Paper,
   Stack,
   Table,
@@ -30,12 +32,16 @@ const ORIGIN_SECTIONS = [
   { origin: 'live', title: 'Recorded live', collapsed: false },
   {
     origin: 'artifact',
-    title: 'Recovered from retained build artifacts, not recorded live',
+    title: 'Recovered',
+    badge: 'Not live',
+    detail: 'Recovered from retained build artifacts, not recorded live.',
     collapsed: true,
   },
   {
     origin: 'artifact_pre_stage_fix',
-    title: 'Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)',
+    title: 'Recovered, pre-Stage fix',
+    badge: 'Not live',
+    detail: 'Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671).',
     collapsed: true,
   },
 ];
@@ -153,13 +159,46 @@ const VISUALLY_HIDDEN = {
 const SAMPLE_COLUMN_SX = { display: { xs: 'none', sm: 'table-cell' } };
 const CAPTION_SX = { display: 'block', color: 'text.secondary' };
 
-const noResultNote = (cohorts, sessions) => {
-  if (cohorts.some((cohort) => horizonOf(cohort, sessions).sample_size > 0)) return null;
-  const closedElsewhere = cohorts.some((cohort) => cohort.horizons.some((horizon) => horizon.sample_size > 0));
-  return closedElsewhere
-    ? `No ${sessions}-session window has closed yet. Nothing here is a result.`
-    : 'No window has closed yet. Nothing here is a result.';
+const hasClosedWindow = (cohort) => cohort.horizons.some((horizon) => horizon.sample_size > 0);
+
+// Null once any window in the section has closed at this horizon, so the table is the result.
+const pendingSummary = (cohorts, sessions) => {
+  const horizons = cohorts.map((cohort) => horizonOf(cohort, sessions));
+  if (horizons.some((horizon) => horizon.sample_size > 0)) return null;
+  const open = horizons.filter((horizon) => horizon.pending_windows > 0);
+  const oldest = open.map((horizon) => horizon.oldest_open_sessions).filter((value) => value != null);
+  return {
+    note: cohorts.some(hasClosedWindow)
+      ? `No ${sessions}-session window has closed yet. Nothing here is a result.`
+      : 'No window has closed yet. Nothing here is a result.',
+    pending: open.reduce((total, horizon) => total + horizon.pending_windows, 0),
+    screens: open.length,
+    oldest: oldest.length > 0 ? Math.max(...oldest) : null,
+  };
 };
+
+function PendingStrip({ summary: { note, pending, screens, oldest }, sessions }) {
+  const oldestText = oldest != null && `${oldest} of ${sessions} sessions`;
+  return (
+    <Alert severity="info" sx={{ '& .MuiAlert-message': { flexGrow: 1 } }}>
+      <Box>{note}</Box>
+      {pending > 0 && (
+        <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+          {[`${plural(pending, 'pick')} pending across ${plural(screens, 'screen')}`, oldestText && `oldest window ${oldestText}`]
+            .filter(Boolean).join(' · ')}
+        </Typography>
+      )}
+      {oldestText && (
+        <LinearProgress
+          variant="determinate"
+          value={(100 * oldest) / sessions}
+          aria-label={`Oldest window: ${oldestText}`}
+          sx={{ mt: 1 }}
+        />
+      )}
+    </Alert>
+  );
+}
 
 function CohortRow({ cohort, sessions, showRange }) {
   const horizon = horizonOf(cohort, sessions);
@@ -195,8 +234,6 @@ function CohortRow({ cohort, sessions, showRange }) {
   );
 }
 
-const hasClosedWindow = (cohort) => cohort.horizons.some((horizon) => horizon.sample_size > 0);
-
 const defaultView = (cohorts) => {
   const closedIn = (origin) => cohorts.some((cohort) => cohort.origin === origin && hasClosedWindow(cohort));
   const openOrigin = closedIn('live')
@@ -207,13 +244,32 @@ const defaultView = (cohorts) => {
   return { openOrigin, sessions: onlyShorterClosed ? 5 : 20 };
 };
 
+function HeadingText({ id, title, badge, detail }) {
+  return (
+    <Box component="span" sx={{ display: 'block' }}>
+      <Box component="span" sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+        <Typography id={`${id}-title`} component="span" variant="subtitle1" sx={{ fontWeight: 600 }}>{title}</Typography>
+        {badge && <Chip id={`${id}-badge`} component="span" label={badge} size="small" variant="outlined" color="warning" />}
+      </Box>
+      {detail && <Typography id={`${id}-detail`} component="span" variant="caption" sx={CAPTION_SX}>{detail}</Typography>}
+    </Box>
+  );
+}
+
 // Accordion reads id and aria-controls off the props of its first child to build the panel, so that child
-// has to accept them and pass them on to the button rather than be the h2 itself.
-function AccordionHeading({ title, ...toggleProps }) {
+// has to accept them and pass them on to the button rather than be the h2 itself. The button and the h2 take
+// their name from the title and badge alone; the detail sentence is the description.
+function AccordionHeading({ title, badge, detail, ...toggleProps }) {
+  const { id } = toggleProps;
   return (
     <Box component="h2" sx={{ m: 0 }}>
-      <AccordionSummary expandIcon={<ExpandMoreIcon />} {...toggleProps}>
-        <Typography component="span" variant="subtitle1" sx={{ fontWeight: 600 }}>{title}</Typography>
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon />}
+        aria-labelledby={[`${id}-title`, badge && `${id}-badge`].filter(Boolean).join(' ')}
+        aria-describedby={detail ? `${id}-detail` : undefined}
+        {...toggleProps}
+      >
+        <HeadingText id={id} title={title} badge={badge} detail={detail} />
       </AccordionSummary>
     </Box>
   );
@@ -232,37 +288,48 @@ function SortableHeader({ column, sort, onSort }) {
 }
 
 function OriginSection({ market, section, cohorts, sessions, sort, onSort, defaultExpanded }) {
-  const note = noResultNote(cohorts, sessions);
+  const summary = pendingSummary(cohorts, sessions);
   const range = sharedRange(cohorts);
+  const table = cohorts.length > 0 && (
+    <TableContainer>
+      <Table size="small" sx={TABLE_SX}>
+        <caption>{[`${sessions}-session windows`, range].filter(Boolean).join(' · ')}</caption>
+        <TableHead>
+          <TableRow>
+            <TableCell sx={STICKY_SCREEN_SX}>Screen</TableCell>
+            <TableCell sx={SAMPLE_COLUMN_SX}>Sample</TableCell>
+            {STAT_COLUMNS.map((column) => <SortableHeader key={column.label} column={column} sort={sort} onSort={onSort} />)}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {sortCohorts(cohorts, sessions, sort).map((cohort) => (
+            <CohortRow key={`${cohort.preset}-${cohort.definition}`} cohort={cohort} sessions={sessions} showRange={!range} />
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+  const sectionId = `scoreboard-${market}-${section.origin}`;
   const body = (
     <Stack spacing={1}>
-      {note && <Alert severity="info">{note}</Alert>}
-      {cohorts.length > 0 && (
-        <TableContainer>
-          <Table size="small" sx={TABLE_SX}>
-            <caption>{[`${sessions}-session windows`, range].filter(Boolean).join(' · ')}</caption>
-            <TableHead>
-              <TableRow>
-                <TableCell sx={STICKY_SCREEN_SX}>Screen</TableCell>
-                <TableCell sx={SAMPLE_COLUMN_SX}>Sample</TableCell>
-                {STAT_COLUMNS.map((column) => <SortableHeader key={column.label} column={column} sort={sort} onSort={onSort} />)}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {sortCohorts(cohorts, sessions, sort).map((cohort) => (
-                <CohortRow key={`${cohort.preset}-${cohort.definition}`} cohort={cohort} sessions={sessions} showRange={!range} />
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
+      {summary && <PendingStrip summary={summary} sessions={sessions} />}
+      {summary?.pending > 0 && table ? (
+        <Box component="details">
+          <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary', py: 0.5 }}>
+            {`All screens (${count(cohorts.length)})`}
+          </Box>
+          {table}
+        </Box>
+      ) : table}
     </Stack>
   );
 
   if (!section.collapsed) {
     return (
       <Paper component="section" elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
-        <Typography component="h2" variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>{section.title}</Typography>
+        <Box component="h2" sx={{ m: 0, mb: 1 }}>
+          <HeadingText id={sectionId} title={section.title} badge={section.badge} detail={section.detail} />
+        </Box>
         {body}
       </Paper>
     );
@@ -273,8 +340,10 @@ function OriginSection({ market, section, cohorts, sessions, sort, onSort, defau
       <Accordion defaultExpanded={defaultExpanded} disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
         <AccordionHeading
           title={section.title}
-          id={`scoreboard-${market}-${section.origin}-toggle`}
-          aria-controls={`scoreboard-${market}-${section.origin}-panel`}
+          badge={section.badge}
+          detail={section.detail}
+          id={`${sectionId}-toggle`}
+          aria-controls={`${sectionId}-panel`}
         />
         <AccordionDetails sx={{ p: 1.5 }}>{body}</AccordionDetails>
       </Accordion>

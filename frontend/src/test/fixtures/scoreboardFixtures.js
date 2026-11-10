@@ -266,3 +266,23 @@ export const nullBenchmarkScoreboardFixture = {
     },
   ],
 };
+
+const liveAllDroppedCohort = {
+  ...liveAllPendingCohort,
+  preset: 'momentum',
+  name: 'Momentum',
+  definition: '4d2a9f0c7e1b5386',
+  events: 9,
+  signal_dates: 2,
+  horizons: [
+    horizon(5, { skipped_missing_history: 3, suppressed_overlapping: 6 }),
+    horizon(20, { skipped_missing_history: 3, suppressed_overlapping: 6 }),
+    horizon(60, { skipped_missing_history: 3, suppressed_overlapping: 6 }),
+  ],
+};
+
+export const nothingPendingScoreboardFixture = {
+  ...scoreboardFixture,
+  market: 'KR',
+  cohorts: [liveAllDroppedCohort, liveZeroMatchCohort],
+};
