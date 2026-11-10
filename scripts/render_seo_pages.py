@@ -252,7 +252,7 @@ def render_scoreboard(site: Site, code: str, name: str, scoreboard: dict[str, An
              "Returns are price only, in local currency, with no costs." + (f" Excess is against {benchmark}." if benchmark else ""),
              "Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.",
              "Funds that match a screen are included.",
-             "A stock counts once per screen until its window ends. A repeat that enters earlier is left out.",
+             "A stock counts once per screen until its window ends. A repeat that enters earlier is left out and shown as overlapping.",
              "Effective dates count each date by how many picks it holds, so one busy day counts as about one.",
              "Stocks that later delist can drop out as no price, which can flatter results.")
     scored_since = scoreboard["scored_since"]
