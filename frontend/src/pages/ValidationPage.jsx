@@ -50,7 +50,7 @@ function ValidationPage() {
       <Paper sx={{ p: 2 }}>
         <Stack spacing={1.5}>
           <Typography variant="h5" sx={{ fontWeight: 700 }}>
-            Validation
+            Backtest
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Deterministic scorecard for published scan picks, theme alerts, and replayed Minervini picks using cached price history only.

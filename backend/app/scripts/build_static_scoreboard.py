@@ -14,7 +14,7 @@ import argparse
 import json
 import os
 from bisect import bisect_left, bisect_right
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -54,8 +54,6 @@ from app.services.validation_service import (
     summarize_horizon,
 )
 
-THIN_SAMPLE_SIZE = 20
-THIN_EFFECTIVE_DATES = 5
 # ponytail: a year bounds time and memory and stays inside the 730 days of bundled
 # prices. Ceiling: older picks leave the page, while their days stay in the ledger, so
 # a longer history only needs this raised alongside the bundle.
@@ -66,8 +64,7 @@ PRICE_QUERY_CHUNK = 250
 class StockPriceTable:
     """``stock_prices`` between two dates, for the calculator's price source.
 
-    No provider and no 50-bar minimum: PriceCacheService would report a recent IPO
-    as missing history. The date bounds replace ``period``.
+    No provider, and the date bounds replace ``period``.
     """
 
     def __init__(self, db: Session, *, start: date, through: date) -> None:
@@ -75,7 +72,9 @@ class StockPriceTable:
         self._start = start
         self._through = through
 
-    def get_many_cached_only(self, symbols: list[str], period: str = "") -> dict[str, pd.DataFrame | None]:
+    def get_many_cached_only(
+        self, symbols: list[str], period: str = "", *, minimum_rows: int = 1
+    ) -> dict[str, pd.DataFrame | None]:
         frames: dict[str, pd.DataFrame | None] = {}
         for offset in range(0, len(symbols), PRICE_QUERY_CHUNK):
             chunk = symbols[offset : offset + PRICE_QUERY_CHUNK]
@@ -122,8 +121,6 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
     summary = summarize_horizon([event.evaluated for event in events], horizon_sessions=horizon)
     counted = [event for event in events if horizon not in event.evaluated.suppressed]
     closed = [event for event in counted if horizon in event.evaluated.outcomes]
-    picks_per_date = Counter(event.as_of_date for event in closed).values()
-    effective_dates = round(sum(picks_per_date) ** 2 / sum(n * n for n in picks_per_date), 1) if closed else 0.0
     excess = [
         event.evaluated.outcomes[horizon].excess_return_pct
         for event in closed
@@ -139,11 +136,11 @@ def _horizon_block(events: list[CohortEvent], horizon: int, sessions: list[date]
     return {
         "horizon_sessions": horizon,
         "sample_size": summary.sample_size,
-        "signal_dates": len(picks_per_date),
-        "effective_dates": effective_dates,
+        "signal_dates": len({event.as_of_date for event in closed}),
+        "effective_dates": summary.effective_dates,
         "pending_windows": summary.pending_windows,
         "oldest_open_sessions": max(open_sessions, default=None),
-        "thin": summary.sample_size < THIN_SAMPLE_SIZE or effective_dates < THIN_EFFECTIVE_DATES,
+        "thin": summary.thin,
         "positive_rate": summary.positive_rate,
         "beat_benchmark_rate": round(sum(value > 0 for value in excess) / len(excess), 4) if excess else None,
         "median_return_pct": summary.median_return_pct,

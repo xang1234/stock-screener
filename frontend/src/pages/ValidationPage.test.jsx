@@ -50,6 +50,7 @@ const groupHorizon = (horizonSessions, sampleSize, avgReturnPct, excessSampleSiz
   excess_sample_size: excessSampleSize,
   avg_stopped_return_pct: -0.5,
   stopped_out_rate: 0.25,
+  thin: sampleSize < 20,
 });
 
 const overviewGroups = [
@@ -99,8 +100,8 @@ describe('ValidationPage', () => {
       benchmark_symbol: 'SPY',
       stop_loss_pct: 7,
       horizons: [
-        { horizon_sessions: 1, sample_size: 12, positive_rate: 0.58, avg_return_pct: 1.2, median_return_pct: 0.9, avg_excess_return_pct: 0.4, median_excess_return_pct: 0.2, excess_sample_size: 10, avg_stopped_return_pct: 1.0, median_stopped_return_pct: 0.9, stopped_out_rate: 0.08, avg_mfe_pct: 2.0, avg_mae_pct: -1.0, skipped_missing_history: 1 },
-        { horizon_sessions: 5, sample_size: 11, positive_rate: 0.55, avg_return_pct: 2.4, median_return_pct: 1.8, avg_excess_return_pct: 1.1, median_excess_return_pct: 0.6, excess_sample_size: 9, avg_stopped_return_pct: 1.9, median_stopped_return_pct: 1.5, stopped_out_rate: 0.18, avg_mfe_pct: 4.7, avg_mae_pct: -2.1, skipped_missing_history: 2 },
+        { horizon_sessions: 1, thin: false, sample_size: 40, positive_rate: 0.58, avg_return_pct: 1.2, median_return_pct: 0.9, avg_excess_return_pct: 0.4, median_excess_return_pct: 0.2, excess_sample_size: 10, avg_stopped_return_pct: 1.0, median_stopped_return_pct: 0.9, stopped_out_rate: 0.08, avg_mfe_pct: 2.0, avg_mae_pct: -1.0, skipped_missing_history: 1 },
+        { horizon_sessions: 5, thin: true, sample_size: 11, positive_rate: 0.55, avg_return_pct: 2.4, median_return_pct: 1.8, avg_excess_return_pct: 1.1, median_excess_return_pct: 0.6, excess_sample_size: 9, avg_stopped_return_pct: 1.9, median_stopped_return_pct: 1.5, stopped_out_rate: 0.18, avg_mfe_pct: 4.7, avg_mae_pct: -2.1, skipped_missing_history: 2 },
         { horizon_sessions: 20, sample_size: 8, positive_rate: 0.5, avg_return_pct: 3.1, median_return_pct: 1.2, avg_excess_return_pct: 1.4, median_excess_return_pct: 0.3, excess_sample_size: 8, avg_stopped_return_pct: -1.5, median_stopped_return_pct: -2.0, stopped_out_rate: 0.35, avg_mfe_pct: 9.4, avg_mae_pct: -5.2, skipped_missing_history: 3 },
         { horizon_sessions: 60, sample_size: 0, positive_rate: null, avg_return_pct: null, median_return_pct: null, avg_excess_return_pct: null, median_excess_return_pct: null, excess_sample_size: 0, avg_stopped_return_pct: null, median_stopped_return_pct: null, stopped_out_rate: null, avg_mfe_pct: null, avg_mae_pct: null, skipped_missing_history: 1, pending_windows: 10 },
       ],
@@ -150,7 +151,7 @@ describe('ValidationPage', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByRole('heading', { name: 'Validation' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Backtest' })).toBeInTheDocument();
     expect(screen.getByText('Recent Events')).toBeInTheDocument();
     expect(screen.getByText('By Group')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'NVDA' })).toHaveAttribute('href', '/stocks/NVDA');
@@ -159,7 +160,10 @@ describe('ValidationPage', () => {
     expect(screen.getByText(formatDate('2026-04-02'))).toBeInTheDocument();
     const cardTitles = screen.getAllByText(/^\d+ Sessions?$/).map((title) => title.textContent);
     expect(cardTitles).toEqual(['1 Session', '5 Sessions', '20 Sessions', '60 Sessions']);
+    const oneSession = within(screen.getByText('1 Session').closest('.MuiCardContent-root'));
+    expect(oneSession.queryByText('Small sample')).not.toBeInTheDocument();
     const fiveSessions = within(screen.getByText('5 Sessions').closest('.MuiCardContent-root'));
+    expect(fiveSessions.getByText('Small sample')).toBeInTheDocument();
     expect(fiveSessions.getByText('Avg vs SPY (no stop, n=9)').nextSibling).toHaveTextContent('1.1%');
     expect(fiveSessions.getByText('Median vs SPY (no stop, n=9)').nextSibling).toHaveTextContent('0.6%');
     expect(fiveSessions.getByText('Avg MFE (no stop)').nextSibling).toHaveTextContent('4.7%');
@@ -231,7 +235,7 @@ describe('ValidationPage', () => {
       </MemoryRouter>
     );
 
-    await screen.findByRole('heading', { name: 'Validation' });
+    await screen.findByRole('heading', { name: 'Backtest' });
     fireEvent.click(screen.getByRole('button', { name: 'Theme Alerts' }));
     fireEvent.click(screen.getByRole('button', { name: '180D' }));
 
@@ -270,7 +274,7 @@ describe('ValidationPage', () => {
       ['Extension vs 50DMA'],
       ['30%+', '21', '60%', '5.1%', '1.2%', '-0.5%', '25%'],
     ]);
-    expect(within(table).getByText('3').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 events');
+    expect(within(table).getByText('3').closest('tr')).toHaveAttribute('title', 'Small sample');
     expect(within(table).getByText('2').closest('tr')).not.toHaveAttribute('title');
     expect(getComputedStyle(within(table).getByText('3')).color).not.toBe(
       getComputedStyle(within(table).getByText('2')).color,
@@ -289,7 +293,7 @@ describe('ValidationPage', () => {
       ['Extension vs 50DMA'],
       ['30%+', '24', '60%', '2.2%', '1.2%', '-0.5%', '25%'],
     ]);
-    expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample: fewer than 20 events');
+    expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample');
     expect(within(table).getByText('30%+').closest('tr')).not.toHaveAttribute('title');
 
     fireEvent.click(screen.getByRole('button', { name: '60S' }));
@@ -297,7 +301,7 @@ describe('ValidationPage', () => {
     const setupReady = within(table).getByText('Setup Ready').closest('tr');
     expect(within(table).getByText('2').closest('tr').cells[1]).toHaveTextContent('0');
     expect(setupReady.cells[1]).toHaveTextContent('0');
-    expect(setupReady).toHaveAttribute('title', 'Small sample: fewer than 20 events');
+    expect(setupReady).toHaveAttribute('title', 'Small sample');
   });
 
   it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
@@ -315,7 +319,7 @@ describe('ValidationPage', () => {
       </MemoryRouter>
     );
 
-    await screen.findByRole('heading', { name: 'Validation' });
+    await screen.findByRole('heading', { name: 'Backtest' });
     expect(screen.queryByText(/survivor-biased/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Replay (Minervini)' }));
 
@@ -360,7 +364,7 @@ describe('ValidationPage', () => {
       </MemoryRouter>
     );
 
-    await screen.findByRole('heading', { name: 'Validation' });
+    await screen.findByRole('heading', { name: 'Backtest' });
     expect(getValidationOverview).toHaveBeenLastCalledWith('scan_pick', 90, 'US');
     fireEvent.mouseDown(screen.getByRole('combobox', { name: /market/i }));
     await user.click(await screen.findByRole('option', { name: /Hong Kong/i }));

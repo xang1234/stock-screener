@@ -1582,6 +1582,17 @@ def test_get_many_cached_only_fresh_always_forwards_minimum_rows(monkeypatch):
     bulk_db_lookup.assert_called_once_with(["AAPL"], "2y", minimum_rows=50)
 
 
+def test_get_many_cached_only_forwards_minimum_rows(monkeypatch):
+    service = PriceCacheService(redis_client=None, session_factory=lambda: MagicMock())
+    bulk_db_lookup = MagicMock(return_value={})
+    monkeypatch.setattr(service, "_get_many_from_database", bulk_db_lookup)
+
+    service.get_many_cached_only(["AAPL"])
+    service.get_many_cached_only(["IPO"], minimum_rows=1)
+
+    assert [call.kwargs["minimum_rows"] for call in bulk_db_lookup.call_args_list] == [50, 1]
+
+
 def test_get_many_from_database_chunks_large_symbol_sets(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

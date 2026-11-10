@@ -343,7 +343,9 @@ class PriceCacheService:
     def get_many_cached_only(
         self,
         symbols: List[str],
-        period: str = "2y"
+        period: str = "2y",
+        *,
+        minimum_rows: int = 50,
     ) -> Dict[str, Optional[pd.DataFrame]]:
         """
         Get price data for multiple symbols from cache ONLY.
@@ -353,11 +355,12 @@ class PriceCacheService:
         Args:
             symbols: List of stock symbols
             period: Time period ('1y', '2y', '5y')
+            minimum_rows: Fewest rows a symbol needs to be returned
 
         Returns:
             Dict mapping symbol to DataFrame (or None if not cached)
         """
-        results = self._get_many_from_database(symbols, period)
+        results = self._get_many_from_database(symbols, period, minimum_rows=minimum_rows)
         return {symbol: data for symbol, (data, _) in results.items()}
 
     def get_many_cached_only_fresh(

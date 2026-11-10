@@ -48,6 +48,10 @@ class ValidationHorizonSummary(BaseModel):
     # Windows whose last session falls after the last completed one.
     pending_windows: int = 0
     suppressed_overlapping: int = 0
+    # Closed windows' signal dates, each weighted by how many picks it holds.
+    effective_dates: float = 0.0
+    # Under 20 closed windows or 5 effective dates: too few to read as a result.
+    thin: bool = True
 
 
 class ValidationEvent(BaseModel):
