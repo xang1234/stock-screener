@@ -22,7 +22,8 @@ configure({ asyncUtilTimeout: 5000 });
 const ARTIFACT_TITLE = 'Recovered from retained build artifacts, not recorded live';
 const PRE_FIX_TITLE = 'Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)';
 const ALL_PENDING = 'No window has closed yet. Nothing here is a result.';
-const DARK_TEXT = getDesignTokens('dark').palette.text;
+const DARK = getDesignTokens('dark').palette;
+const DARK_TEXT = DARK.text;
 
 const manifest = {
   default_market: 'US',
@@ -63,6 +64,12 @@ const renderRoute = (entry) => renderWithProviders(
   </MemoryRouter>,
 );
 
+const HEADER_NAMES = ['Screen', 'Sample', 'Median', 'Positive', 'Beat benchmark', 'Median excess'];
+// Each full label must name exactly one header, in column order.
+const headerNames = (section) => {
+  const headers = within(section).getAllByRole('columnheader');
+  return HEADER_NAMES.filter((name, index) => within(section).getByRole('columnheader', { name }) === headers[index]);
+};
 const rowFor = (section, name) => within(section).getByText(name).closest('tr');
 const sectionFor = (title) => screen.getByText(title).closest('section');
 const scoreboardFetches = () => fetch.mock.calls.map(([url]) => url).filter((url) => url.includes('scoreboard'));
@@ -73,6 +80,13 @@ const openSection = (title) => {
 };
 const pressedHorizon = () => within(screen.getByRole('group', { name: 'Horizon' }))
   .getByRole('button', { pressed: true }).textContent;
+const sampleOf = (row) => {
+  const cell = within(row).getAllByRole('cell')[1];
+  return [cell.firstChild.textContent, cell.querySelector('span')?.textContent ?? ''];
+};
+const namesIn = (section) => within(section).getAllByRole('row').slice(1)
+  .map((row) => within(row).getAllByRole('cell')[0].firstChild.textContent);
+const statCell = (row, label) => within(row).getAllByRole('cell')[2 + ['Median', 'Positive', 'Beat benchmark', 'Median excess'].indexOf(label)];
 const switchMarket = async (name) => {
   fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Static market selector' }));
   fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
@@ -93,7 +107,7 @@ describe('StaticScoreboardPage', () => {
     const live = (await screen.findByText('Recorded live')).closest('section');
 
     const row = rowFor(live, 'Minervini');
-    expect(row).toHaveTextContent('0 closed · 0 dates · 357 pending · oldest 2 of 5 sessions');
+    expect(sampleOf(row)).toEqual(['357 pending', 'oldest 2 of 5 sessions']);
     expect(row).not.toHaveTextContent('%');
     expect(within(row).getAllByText('-')).toHaveLength(4);
     expect(row).not.toHaveTextContent('Small sample');
@@ -105,7 +119,7 @@ describe('StaticScoreboardPage', () => {
     const live = (await screen.findByText('Recorded live')).closest('section');
 
     const row = rowFor(live, 'High Tight Flag');
-    expect(row).toHaveTextContent('No picks');
+    expect(sampleOf(row)).toEqual(['No picks', '']);
     expect(row).not.toHaveTextContent('pending');
     expect(row).not.toHaveTextContent('%');
   });
@@ -128,14 +142,14 @@ describe('StaticScoreboardPage', () => {
     openSection(PRE_FIX_TITLE);
     const section = sectionFor(PRE_FIX_TITLE);
 
-    expect(rowFor(section, 'VCP')).toHaveTextContent('540 closed · 13 dates, effective 9.0 · 0 pending · 80 overlapping');
-    expect(rowFor(section, 'VCP')).toHaveTextContent('+0.4%');
+    expect(sampleOf(rowFor(section, 'VCP'))).toEqual(['540 closed · 13 dates', 'effective 9.0 · 0 pending · 80 overlapping']);
+    expect(rowFor(section, 'VCP')).toHaveTextContent('+0.5%');
 
     fireEvent.click(screen.getByRole('button', { name: '20 sessions' }));
 
-    expect(rowFor(section, 'VCP')).toHaveTextContent('26 closed · 6 dates, effective 4.8 · 300 pending · 294 overlapping');
+    expect(sampleOf(rowFor(section, 'VCP'))).toEqual(['26 closed · 6 dates', 'effective 4.8 · 300 pending · 294 overlapping']);
     expect(rowFor(section, 'VCP')).toHaveTextContent('-2.3%');
-    expect(rowFor(section, 'VCP')).not.toHaveTextContent('+0.4%');
+    expect(rowFor(section, 'VCP')).not.toHaveTextContent('+0.5%');
   });
 
   it('renders the sample cell and the median, positive, beat and excess numbers at 5 sessions', async () => {
@@ -144,8 +158,8 @@ describe('StaticScoreboardPage', () => {
     openSection(ARTIFACT_TITLE);
 
     const row = rowFor(sectionFor(ARTIFACT_TITLE), 'Minervini');
-    expect(within(row).getAllByRole('cell')[1].textContent)
-      .toBe('1,298 closed · 12 dates, effective 8.4 · 40 pending · 3 no price · 100 overlapping · excess on 1,250');
+    expect(sampleOf(row))
+      .toEqual(['1,298 closed · 12 dates', 'effective 8.4 · 40 pending · 3 no price · 100 overlapping · excess on 1,250']);
     expect(within(row).getAllByRole('cell').slice(2).map((cell) => cell.textContent))
       .toEqual(['+0.9%', '57%', '48%', '+0.1%']);
     expect(row).not.toHaveTextContent('Small sample');
@@ -155,9 +169,18 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard');
     const live = (await screen.findByText('Recorded live')).closest('section');
 
-    expect(within(live).getAllByRole('columnheader').map((cell) => cell.textContent))
-      .toEqual(['Screen', 'Sample', 'Median', 'Positive', 'Beat benchmark', 'Median excess']);
+    expect(headerNames(live)).toEqual(HEADER_NAMES);
     expect(document.body).not.toHaveTextContent(/average/i);
+  });
+
+  it('carries short phone labels in the stat headers while their names stay the full labels', async () => {
+    renderRoute('/scoreboard');
+    const live = (await screen.findByText('Recorded live')).closest('section');
+    const headers = within(live).getAllByRole('columnheader');
+
+    expect(headerNames(live)).toEqual(HEADER_NAMES);
+    expect(headers.slice(2).map((cell) => [...cell.querySelectorAll('[role="button"] > span')].map((span) => span.textContent)))
+      .toEqual([['Median', 'Median'], ['Positive', 'Pos.'], ['Beat benchmark', 'Beat'], ['Median excess', 'Excess']]);
   });
 
   it('keeps the screen name beside the numbers when a narrow table scrolls sideways', async () => {
@@ -203,7 +226,7 @@ describe('StaticScoreboardPage', () => {
     expect(pressedHorizon()).toBe('20 sessions');
     const row = rowFor(sectionFor(PRE_FIX_TITLE), 'VCP');
     expect(row).toBeVisible();
-    expect(row).toHaveTextContent('26 closed · 6 dates, effective 4.8 · 300 pending · 294 overlapping');
+    expect(sampleOf(row)).toEqual(['26 closed · 6 dates', 'effective 4.8 · 300 pending · 294 overlapping']);
   });
 
   it('passes over an artifact section with nothing closed and opens the pre-fix section at 5 sessions', async () => {
@@ -213,7 +236,7 @@ describe('StaticScoreboardPage', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'false');
     expect(pressedHorizon()).toBe('5 sessions');
-    expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).toHaveTextContent('90 closed · 4 dates, effective 3.6 · 0 pending');
+    expect(sampleOf(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP'))).toEqual(['90 closed · 4 dates', 'effective 3.6 · 0 pending']);
   });
 
   it('opens nothing and shows 5 sessions when live has closed only at 5', async () => {
@@ -223,7 +246,7 @@ describe('StaticScoreboardPage', () => {
     expect(sectionToggle(ARTIFACT_TITLE)).toHaveAttribute('aria-expanded', 'false');
     expect(sectionToggle(PRE_FIX_TITLE)).toHaveAttribute('aria-expanded', 'false');
     expect(pressedHorizon()).toBe('5 sessions');
-    expect(rowFor(live, 'Minervini')).toHaveTextContent('42 closed · 6 dates, effective 5.2 · 18 pending');
+    expect(sampleOf(rowFor(live, 'Minervini'))).toEqual(['42 closed · 6 dates', 'effective 5.2 · 18 pending']);
     expect(within(live).queryByText(/Nothing here is a result/)).not.toBeInTheDocument();
   });
 
@@ -232,7 +255,7 @@ describe('StaticScoreboardPage', () => {
     const live = (await screen.findByText('Recorded live')).closest('section');
 
     expect(pressedHorizon()).toBe('20 sessions');
-    expect(within(live).getByRole('table', { name: '20-session windows' })).toBeInTheDocument();
+    expect(within(live).getByRole('table', { name: '20-session windows · 2026-11-03 to 2026-11-04' })).toBeInTheDocument();
     expect(within(live).getByText(ALL_PENDING)).toBeInTheDocument();
   });
 
@@ -246,7 +269,7 @@ describe('StaticScoreboardPage', () => {
     await screen.findByRole('button', { name: PRE_FIX_TITLE });
 
     expect(pressedHorizon()).toBe('60 sessions');
-    expect(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP')).toHaveTextContent('0 closed · 0 dates · 326 pending · oldest 22 of 60 sessions');
+    expect(sampleOf(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP'))).toEqual(['326 pending', 'oldest 22 of 60 sessions · 294 overlapping']);
   });
 
   it('works out the default again when a market changes, including back to one already loaded', async () => {
@@ -278,17 +301,18 @@ describe('StaticScoreboardPage', () => {
     expect(rowFor(section, 'VCP')).not.toHaveTextContent('Small sample');
   });
 
-  it('names the horizon in the table caption and marks the pressed picker button', async () => {
+  it('names the horizon and the shared date range in the table caption and marks the pressed picker button', async () => {
     renderRoute('/scoreboard');
     const live = (await screen.findByText('Recorded live')).closest('section');
     const picker = screen.getByRole('group', { name: 'Horizon' });
 
-    expect(within(live).getByRole('table', { name: '5-session windows' })).toBeInTheDocument();
+    expect(within(live).getByRole('table', { name: '5-session windows · 2026-11-03 to 2026-11-04' })).toBeInTheDocument();
+    expect(rowFor(live, 'Minervini')).not.toHaveTextContent('2026-11-03 to 2026-11-04');
     expect(within(picker).getByRole('button', { name: '5 sessions' })).toHaveAttribute('aria-pressed', 'true');
 
     fireEvent.click(within(picker).getByRole('button', { name: '60 sessions' }));
 
-    expect(within(live).getByRole('table', { name: '60-session windows' })).toBeInTheDocument();
+    expect(within(live).getByRole('table', { name: '60-session windows · 2026-11-03 to 2026-11-04' })).toBeInTheDocument();
     expect(within(picker).getByRole('button', { name: '60 sessions' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(picker).getByRole('button', { name: '5 sessions' })).toHaveAttribute('aria-pressed', 'false');
   });
@@ -305,6 +329,7 @@ describe('StaticScoreboardPage', () => {
   it.each([
     [ARTIFACT_TITLE, 'scoreboard-US-artifact-toggle', 'scoreboard-US-artifact-panel'],
     [PRE_FIX_TITLE, 'scoreboard-US-artifact_pre_stage_fix-toggle', 'scoreboard-US-artifact_pre_stage_fix-panel'],
+    ['How this is scored', 'scoreboard-method-toggle', 'scoreboard-method-panel'],
   ])('connects the toggle and panel of "%s" in both directions', async (title, toggleId, panelId) => {
     renderRoute('/scoreboard');
     const toggle = await screen.findByRole('button', { name: title });
@@ -338,8 +363,32 @@ describe('StaticScoreboardPage', () => {
     const thin = rowFor(section, 'CANSLIM');
     expect(thin).toHaveTextContent('Small sample');
     expect(thin).toHaveTextContent('-0.3%');
-    expect(within(thin).getAllByRole('cell')[2]).toHaveStyle({ color: DARK_TEXT.secondary });
-    expect(within(rowFor(section, 'Minervini')).getAllByRole('cell')[2]).toHaveStyle({ color: DARK_TEXT.primary });
+    expect(statCell(rowFor(section, 'Minervini'), 'Positive')).toHaveStyle({ color: DARK_TEXT.primary });
+  });
+
+  it('tints medians beyond half a point green or red, leaves flat ones grey and never tints a thin row', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+    const section = sectionFor(ARTIFACT_TITLE);
+
+    expect(statCell(rowFor(section, 'Minervini'), 'Median')).toHaveTextContent('+0.9%');
+    expect(statCell(rowFor(section, 'Minervini'), 'Median')).toHaveStyle({ color: DARK.success.main });
+    expect(statCell(rowFor(section, 'Pocket Pivot'), 'Median')).toHaveTextContent('-1.4%');
+    expect(statCell(rowFor(section, 'Pocket Pivot'), 'Median')).toHaveStyle({ color: DARK.error.main });
+    expect(statCell(rowFor(section, 'Minervini'), 'Median excess')).toHaveTextContent('+0.1%');
+    expect(statCell(rowFor(section, 'Minervini'), 'Median excess')).toHaveStyle({ color: DARK_TEXT.secondary });
+    expect(statCell(rowFor(section, 'CANSLIM'), 'Median excess')).toHaveTextContent('-0.9%');
+    expect(statCell(rowFor(section, 'CANSLIM'), 'Median excess')).toHaveStyle({ color: DARK_TEXT.secondary });
+  });
+
+  it('tints by the shown number, so a median of 0.46 shown as +0.5% is green', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+    openSection(PRE_FIX_TITLE);
+
+    const vcpMedian = statCell(rowFor(sectionFor(PRE_FIX_TITLE), 'VCP'), 'Median');
+    expect(vcpMedian).toHaveTextContent('+0.5%');
+    expect(vcpMedian).toHaveStyle({ color: DARK.success.main });
   });
 
   it('labels a retired preset', async () => {
@@ -350,14 +399,40 @@ describe('StaticScoreboardPage', () => {
     expect(rowFor(sectionFor(ARTIFACT_TITLE), 'CANSLIM')).not.toHaveTextContent('Retired');
   });
 
-  it('keeps the published cohort order whatever the returns are', async () => {
+  it('sorts by median excess, highest first, with thin rows after solid ones, then empty values, then no-pick cohorts', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
-    openSection(ARTIFACT_TITLE);
+    const section = sectionFor(ARTIFACT_TITLE);
 
-    const names = within(sectionFor(ARTIFACT_TITLE)).getAllByRole('row').slice(1)
-      .map((row) => within(row).getAllByRole('cell')[0].textContent);
-    expect(names.map((name) => name.split('2026')[0])).toEqual(['Minervini', 'CANSLIM', 'Old Breakout']);
+    expect(namesIn(section)).toEqual(['Minervini', 'Old Breakout', 'CANSLIM', 'Pocket Pivot', 'High Tight Flag']);
+    expect(within(section).getByRole('columnheader', { name: 'Median excess' })).toHaveAttribute('aria-sort', 'descending');
+    expect(within(section).getByRole('columnheader', { name: 'Median' })).not.toHaveAttribute('aria-sort');
+  });
+
+  it('flips the active column and starts another column highest first, in every section', async () => {
+    renderRoute('/scoreboard');
+    const live = (await screen.findByText('Recorded live')).closest('section');
+    const section = sectionFor(ARTIFACT_TITLE);
+
+    fireEvent.click(within(section).getByRole('button', { name: 'Median excess' }));
+    expect(namesIn(section)).toEqual(['Minervini', 'CANSLIM', 'Old Breakout', 'Pocket Pivot', 'High Tight Flag']);
+    expect(within(section).getByRole('columnheader', { name: 'Median excess' })).toHaveAttribute('aria-sort', 'ascending');
+
+    fireEvent.click(within(section).getByRole('button', { name: 'Median' }));
+    expect(namesIn(section)).toEqual(['Minervini', 'Pocket Pivot', 'Old Breakout', 'CANSLIM', 'High Tight Flag']);
+    expect(within(section).getByRole('columnheader', { name: 'Median' })).toHaveAttribute('aria-sort', 'descending');
+    expect(within(section).getByRole('columnheader', { name: 'Median excess' })).not.toHaveAttribute('aria-sort');
+    expect(within(live).getByRole('columnheader', { name: 'Median' })).toHaveAttribute('aria-sort', 'descending');
+  });
+
+  it('keeps per-row date ranges and a bare caption when the cohorts of a section span different dates', async () => {
+    renderRoute('/scoreboard');
+    await screen.findByText('Recorded live');
+    const section = sectionFor(ARTIFACT_TITLE);
+
+    expect(within(section).getByRole('table', { name: '5-session windows' })).toBeInTheDocument();
+    expect(rowFor(section, 'Minervini')).toHaveTextContent('2026-10-22 to 2026-10-29');
+    expect(rowFor(section, 'CANSLIM')).toHaveTextContent('2026-10-27 to 2026-10-28');
   });
 
   it('names a horizon with no closed window when another horizon has closed', async () => {
@@ -375,6 +450,7 @@ describe('StaticScoreboardPage', () => {
     await screen.findByText('Recorded live');
 
     expect(screen.getByText('Recording since 2026-10-05 · Ledger through 2026-11-04 · 2 missing sessions')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'How this is scored' }));
     expect(screen.getByText('Entry is the first open after publication. Exit is the close of the Nth session.')).toBeInTheDocument();
     expect(screen.getByText('Returns are price only, in local currency, with no costs. Excess is against SPY.')).toBeInTheDocument();
     expect(screen.getByText('Funds that match a screen are included.')).toBeInTheDocument();
@@ -386,6 +462,21 @@ describe('StaticScoreboardPage', () => {
     expect(rules[rules.indexOf("A pick is a stock newly entering the screen. Stocks on the list on the first recorded day, or on a day the screen's definition or the Stage calculation changed, are not counted.") + 1])
       .toBe('A stock that returns after its window ends counts again.');
     expect(screen.getByText('Prices are as the provider reports them, so an unadjusted split can appear as a false move. Medians limit the effect.')).toBeInTheDocument();
+  });
+
+  it('keeps the scoring method collapsed until it is opened', async () => {
+    renderRoute('/scoreboard');
+    const toggle = await screen.findByRole('button', { name: 'How this is scored' });
+    const rule = screen.getByText('Funds that match a screen are included.');
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(rule).not.toBeVisible();
+    expect(screen.getByText('How each preset screen\'s picks moved after they were published.')).toBeVisible();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(rule).toBeVisible();
   });
 
   it('shows Scored since only when it differs from Recording since', async () => {
@@ -401,8 +492,7 @@ describe('StaticScoreboardPage', () => {
 
     expect(screen.getByText('Returns are price only, in local currency, with no costs.')).toBeInTheDocument();
     const row = rowFor(live, 'CANSLIM');
-    expect(within(row).getAllByRole('cell')[1].textContent)
-      .toBe('64 closed · 11 dates, effective 7.3 · 0 pending · excess on 0');
+    expect(sampleOf(row)).toEqual(['64 closed · 11 dates', 'effective 7.3 · 0 pending · excess on 0']);
     expect(within(row).getAllByRole('cell').slice(2).map((cell) => cell.textContent))
       .toEqual(['+1.1%', '55%', '-', '-']);
     expect(document.body).not.toHaveTextContent(/against|null|None|undefined/);
