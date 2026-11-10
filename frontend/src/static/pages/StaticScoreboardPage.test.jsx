@@ -64,6 +64,12 @@ const renderRoute = (entry) => renderWithProviders(
   </MemoryRouter>,
 );
 
+const HEADER_NAMES = ['Screen', 'Sample', 'Median', 'Positive', 'Beat benchmark', 'Median excess'];
+// Each full label must name exactly one header, in column order.
+const headerNames = (section) => {
+  const headers = within(section).getAllByRole('columnheader');
+  return HEADER_NAMES.filter((name, index) => within(section).getByRole('columnheader', { name }) === headers[index]);
+};
 const rowFor = (section, name) => within(section).getByText(name).closest('tr');
 const sectionFor = (title) => screen.getByText(title).closest('section');
 const scoreboardFetches = () => fetch.mock.calls.map(([url]) => url).filter((url) => url.includes('scoreboard'));
@@ -163,9 +169,18 @@ describe('StaticScoreboardPage', () => {
     renderRoute('/scoreboard');
     const live = (await screen.findByText('Recorded live')).closest('section');
 
-    expect(within(live).getAllByRole('columnheader').map((cell) => cell.textContent))
-      .toEqual(['Screen', 'Sample', 'Median', 'Positive', 'Beat benchmark', 'Median excess']);
+    expect(headerNames(live)).toEqual(HEADER_NAMES);
     expect(document.body).not.toHaveTextContent(/average/i);
+  });
+
+  it('carries short phone labels in the stat headers while their names stay the full labels', async () => {
+    renderRoute('/scoreboard');
+    const live = (await screen.findByText('Recorded live')).closest('section');
+    const headers = within(live).getAllByRole('columnheader');
+
+    expect(headerNames(live)).toEqual(HEADER_NAMES);
+    expect(headers.slice(2).map((cell) => [...cell.querySelectorAll('[role="button"] > span')].map((span) => span.textContent)))
+      .toEqual([['Median', 'Median'], ['Positive', 'Pos.'], ['Beat benchmark', 'Beat'], ['Median excess', 'Excess']]);
   });
 
   it('keeps the screen name beside the numbers when a narrow table scrolls sideways', async () => {

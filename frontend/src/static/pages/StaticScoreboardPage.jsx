@@ -44,24 +44,26 @@ const MINIMUM_SAMPLE = 20;
 
 const formatRate = (rate) => (rate == null ? '-' : `${Math.round(rate * 100)}%`);
 
-const percentColumn = (label, field) => ({
+const percentColumn = (label, short, field) => ({
   label,
+  short,
   value: (horizon) => formatPercent(horizon[field]),
   sortValue: (horizon) => horizon[field],
   toned: true,
 });
-const rateColumn = (label, field) => ({
+const rateColumn = (label, short, field) => ({
   label,
+  short,
   value: (horizon) => formatRate(horizon[field]),
   sortValue: (horizon) => horizon[field],
   toned: false,
 });
 
 const STAT_COLUMNS = [
-  percentColumn('Median', 'median_return_pct'),
-  rateColumn('Positive', 'positive_rate'),
-  rateColumn('Beat benchmark', 'beat_benchmark_rate'),
-  percentColumn('Median excess', 'median_excess_return_pct'),
+  percentColumn('Median', 'Median', 'median_return_pct'),
+  rateColumn('Positive', 'Pos.', 'positive_rate'),
+  rateColumn('Beat benchmark', 'Beat', 'beat_benchmark_rate'),
+  percentColumn('Median excess', 'Excess', 'median_excess_return_pct'),
 ];
 
 const DEFAULT_SORT = { label: 'Median excess', direction: 'desc' };
@@ -132,6 +134,20 @@ const sharedRange = (cohorts) => {
   return ranges.size === 1 ? [...ranges][0] : null;
 };
 
+// Phones get tighter cells and no idle sort arrows so the four stat columns fit without scrolling.
+const TABLE_SX = {
+  '& caption': { captionSide: 'top', px: 1, pt: 0, pb: 0.5 },
+  '& .MuiTableCell-root': { px: { xs: 0.75, sm: 2 } },
+  '& .MuiTableSortLabel-root:not(.Mui-active) .MuiTableSortLabel-icon': { display: { xs: 'none', sm: 'inline-block' } },
+};
+const VISUALLY_HIDDEN = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+};
 const SAMPLE_COLUMN_SX = { display: { xs: 'none', sm: 'table-cell' } };
 const CAPTION_SX = { display: 'block', color: 'text.secondary' };
 
@@ -155,7 +171,7 @@ function CohortRow({ cohort, sessions, showRange }) {
 
   return (
     <TableRow>
-      <TableCell sx={{ ...toneSx, ...STICKY_SCREEN_SX, minWidth: 120 }}>
+      <TableCell sx={{ ...toneSx, ...STICKY_SCREEN_SX, minWidth: { xs: 96, sm: 120 } }}>
         <Box component="span" sx={{ display: 'block', fontWeight: 600 }}>{cohort.name}</Box>
         {captions.map((caption) => (
           <Typography key={caption} variant="caption" component="span" sx={CAPTION_SX}>{caption}</Typography>
@@ -206,7 +222,8 @@ function SortableHeader({ column, sort, onSort }) {
   return (
     <TableCell align="right" sortDirection={active ? sort.direction : false}>
       <TableSortLabel active={active} direction={active ? sort.direction : 'desc'} onClick={() => onSort(column.label)}>
-        {column.label}
+        <Box component="span" sx={(theme) => ({ [theme.breakpoints.down('sm')]: VISUALLY_HIDDEN })}>{column.label}</Box>
+        <Box component="span" aria-hidden sx={{ display: { sm: 'none' } }}>{column.short}</Box>
       </TableSortLabel>
     </TableCell>
   );
@@ -220,7 +237,7 @@ function OriginSection({ market, section, cohorts, sessions, sort, onSort, defau
       {note && <Alert severity="info">{note}</Alert>}
       {cohorts.length > 0 && (
         <TableContainer>
-          <Table size="small" sx={{ '& caption': { captionSide: 'top', px: 1, pt: 0, pb: 0.5 } }}>
+          <Table size="small" sx={TABLE_SX}>
             <caption>{[`${sessions}-session windows`, range].filter(Boolean).join(' · ')}</caption>
             <TableHead>
               <TableRow>
