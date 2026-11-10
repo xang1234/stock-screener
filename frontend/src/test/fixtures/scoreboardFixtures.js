@@ -114,9 +114,33 @@ const artifactRetiredCohort = {
   events: 8,
   signal_dates: 2,
   horizons: [
-    horizon(5, closed(8, 2, 2, 0.625, 0.5, 1.5, 0.8)),
+    horizon(5, closed(8, 2, 2, 0.625, 0.5, 0.2, 0.8)),
     horizon(20, pending(8, 9)),
     horizon(60, pending(8, 9)),
+  ],
+};
+
+const artifactZeroMatchCohort = {
+  ...liveZeroMatchCohort,
+  origin: 'artifact',
+  first_date: '2026-10-22',
+  last_date: '2026-10-29',
+};
+
+const artifactNoExcessCohort = {
+  preset: 'pocket_pivot',
+  name: 'Pocket Pivot',
+  retired: false,
+  definition: '5b8e2d7f1a9c0364',
+  origin: 'artifact',
+  first_date: '2026-10-22',
+  last_date: '2026-10-28',
+  events: 34,
+  signal_dates: 6,
+  horizons: [
+    horizon(5, closed(30, 6, 5.5, 0.4, null, -1.4, null, pending(4, 3, { excess_sample_size: 0 }))),
+    horizon(20, pending(34, 9)),
+    horizon(60, pending(34, 9)),
   ],
 };
 
@@ -150,6 +174,8 @@ export const scoreboardFixture = {
   cohorts: [
     liveAllPendingCohort,
     liveZeroMatchCohort,
+    artifactZeroMatchCohort,
+    artifactNoExcessCohort,
     artifactClosedCohort,
     artifactThinCohort,
     artifactRetiredCohort,
