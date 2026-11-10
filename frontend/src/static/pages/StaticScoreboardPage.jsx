@@ -112,9 +112,10 @@ const sampleLines = (cohort, horizon) => {
   };
 };
 
-const sortRank = (cohort, value) => {
-  if (cohort.events === 0) return 2;
-  return value == null ? 1 : 0;
+const sortRank = (cohort, horizon, value) => {
+  if (cohort.events === 0) return 3;
+  if (value == null) return 2;
+  return horizon.thin ? 1 : 0;
 };
 
 const sortCohorts = (cohorts, sessions, sort) => {
@@ -122,10 +123,11 @@ const sortCohorts = (cohorts, sessions, sort) => {
   const sign = sort.direction === 'asc' ? 1 : -1;
   return cohorts
     .map((cohort) => {
-      const value = column.sortValue(horizonOf(cohort, sessions));
-      return { cohort, value, rank: sortRank(cohort, value) };
+      const horizon = horizonOf(cohort, sessions);
+      const value = column.sortValue(horizon);
+      return { cohort, value, rank: sortRank(cohort, horizon, value) };
     })
-    .sort((a, b) => a.rank - b.rank || (a.rank === 0 ? sign * (a.value - b.value) : 0))
+    .sort((a, b) => a.rank - b.rank || (a.rank < 2 ? sign * (a.value - b.value) : 0))
     .map(({ cohort }) => cohort);
 };
 

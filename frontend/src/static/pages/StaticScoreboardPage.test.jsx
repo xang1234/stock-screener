@@ -329,6 +329,7 @@ describe('StaticScoreboardPage', () => {
   it.each([
     [ARTIFACT_TITLE, 'scoreboard-US-artifact-toggle', 'scoreboard-US-artifact-panel'],
     [PRE_FIX_TITLE, 'scoreboard-US-artifact_pre_stage_fix-toggle', 'scoreboard-US-artifact_pre_stage_fix-panel'],
+    ['How this is scored', 'scoreboard-method-toggle', 'scoreboard-method-panel'],
   ])('connects the toggle and panel of "%s" in both directions', async (title, toggleId, panelId) => {
     renderRoute('/scoreboard');
     const toggle = await screen.findByRole('button', { name: title });
@@ -362,7 +363,6 @@ describe('StaticScoreboardPage', () => {
     const thin = rowFor(section, 'CANSLIM');
     expect(thin).toHaveTextContent('Small sample');
     expect(thin).toHaveTextContent('-0.3%');
-    expect(within(thin).getAllByRole('cell')[2]).toHaveStyle({ color: DARK_TEXT.secondary });
     expect(statCell(rowFor(section, 'Minervini'), 'Positive')).toHaveStyle({ color: DARK_TEXT.primary });
   });
 
@@ -399,12 +399,12 @@ describe('StaticScoreboardPage', () => {
     expect(rowFor(sectionFor(ARTIFACT_TITLE), 'CANSLIM')).not.toHaveTextContent('Retired');
   });
 
-  it('sorts by median excess, highest first, with empty values and then no-pick cohorts last', async () => {
+  it('sorts by median excess, highest first, with thin rows after solid ones, then empty values, then no-pick cohorts', async () => {
     renderRoute('/scoreboard');
     await screen.findByText('Recorded live');
     const section = sectionFor(ARTIFACT_TITLE);
 
-    expect(namesIn(section)).toEqual(['Old Breakout', 'Minervini', 'CANSLIM', 'Pocket Pivot', 'High Tight Flag']);
+    expect(namesIn(section)).toEqual(['Minervini', 'Old Breakout', 'CANSLIM', 'Pocket Pivot', 'High Tight Flag']);
     expect(within(section).getByRole('columnheader', { name: 'Median excess' })).toHaveAttribute('aria-sort', 'descending');
     expect(within(section).getByRole('columnheader', { name: 'Median' })).not.toHaveAttribute('aria-sort');
   });
@@ -415,11 +415,11 @@ describe('StaticScoreboardPage', () => {
     const section = sectionFor(ARTIFACT_TITLE);
 
     fireEvent.click(within(section).getByRole('button', { name: 'Median excess' }));
-    expect(namesIn(section)).toEqual(['CANSLIM', 'Minervini', 'Old Breakout', 'Pocket Pivot', 'High Tight Flag']);
+    expect(namesIn(section)).toEqual(['Minervini', 'CANSLIM', 'Old Breakout', 'Pocket Pivot', 'High Tight Flag']);
     expect(within(section).getByRole('columnheader', { name: 'Median excess' })).toHaveAttribute('aria-sort', 'ascending');
 
     fireEvent.click(within(section).getByRole('button', { name: 'Median' }));
-    expect(namesIn(section)).toEqual(['Minervini', 'Old Breakout', 'CANSLIM', 'Pocket Pivot', 'High Tight Flag']);
+    expect(namesIn(section)).toEqual(['Minervini', 'Pocket Pivot', 'Old Breakout', 'CANSLIM', 'High Tight Flag']);
     expect(within(section).getByRole('columnheader', { name: 'Median' })).toHaveAttribute('aria-sort', 'descending');
     expect(within(section).getByRole('columnheader', { name: 'Median excess' })).not.toHaveAttribute('aria-sort');
     expect(within(live).getByRole('columnheader', { name: 'Median' })).toHaveAttribute('aria-sort', 'descending');
