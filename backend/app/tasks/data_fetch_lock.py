@@ -7,7 +7,7 @@ from yfinance, finviz, and other external data sources.
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
@@ -213,7 +213,7 @@ class DataFetchLock:
                     return (True, True)
 
         # Normal acquire
-        lock_value = f"{task_name}:{task_id}:{datetime.now().isoformat()}"
+        lock_value = f"{task_name}:{task_id}:{datetime.now(timezone.utc).isoformat()}"
         acquired = self.redis.set(
             key,
             lock_value,
