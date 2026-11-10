@@ -55,6 +55,9 @@ _CA_EXCHANGE_ALIASES = {
 _EMPTY_TOKENS = {"", "-", "N/A", "NA", "NAN", "NONE", "NULL"}
 _LOAD_EXCEPTIONS = (OSError, csv.Error, UnicodeError)
 
+# Only CA ships without a curated CSV; its absence is expected, not a warning.
+_OPTIONAL_CSV_FILES = frozenset({"canada-deep.csv"})
+
 
 class TaxonomyLoadError(RuntimeError):
     """Raised when committed taxonomy source files are missing or malformed."""
@@ -247,6 +250,24 @@ class MarketTaxonomyService:
         if not self._loaded:
             self.refresh()
 
+    def _skip_if_missing(self, path: Path, market: str) -> bool:
+        """Record a CSV that is not there and say whether the loader must stop.
+
+        One helper for all eight loaders. A missing file used to be fatal, so
+        silence would be the wrong register: this warns and names the market
+        and the path. canada-deep.csv is optional and logs at INFO.
+        """
+        if path.exists():
+            return False
+        log = logger.info if path.name in _OPTIONAL_CSV_FILES else logger.warning
+        log(
+            "%s taxonomy CSV not found at %s; skipping. Symbol-level "
+            "classification will fall back to universe fields.",
+            market,
+            path,
+        )
+        return True
+
     @staticmethod
     def _normalize_text(value: object) -> str | None:
         text = str(value or "").strip()
@@ -309,6 +330,8 @@ class MarketTaxonomyService:
 
     def _load_us(self) -> None:
         path = self._data_dir / "IBD_industry_group.csv"
+        if self._skip_if_missing(path, "US"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.reader(handle)
             for row in reader:
@@ -329,6 +352,8 @@ class MarketTaxonomyService:
 
     def _load_hk(self) -> None:
         path = self._data_dir / "hk-deep.csv"
+        if self._skip_if_missing(path, "HK"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -351,7 +376,7 @@ class MarketTaxonomyService:
 
     def _load_in(self) -> None:
         path = self._data_dir / "india-deep.csv"
-        if not path.exists():
+        if self._skip_if_missing(path, "IN"):
             return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -378,6 +403,8 @@ class MarketTaxonomyService:
 
     def _load_jp(self) -> None:
         path = self._data_dir / "kabutan_themes_en.csv"
+        if self._skip_if_missing(path, "JP"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -400,6 +427,8 @@ class MarketTaxonomyService:
 
     def _load_tw(self) -> None:
         path = self._data_dir / "taiwan-deep.csv"
+        if self._skip_if_missing(path, "TW"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(path, reader, ("Symbol", "Market", "Industry (EN)"))
@@ -421,6 +450,8 @@ class MarketTaxonomyService:
 
     def _load_kr(self) -> None:
         path = self._data_dir / "korea-deep.csv"
+        if self._skip_if_missing(path, "KR"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -447,6 +478,8 @@ class MarketTaxonomyService:
 
     def _load_cn(self) -> None:
         path = self._data_dir / "china-deep.csv"
+        if self._skip_if_missing(path, "CN"):
+            return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             self._require_columns(
@@ -477,13 +510,7 @@ class MarketTaxonomyService:
         # market is still usable for breadth/group-rank calculations even
         # when no curated GICS file is present.
         path = self._data_dir / "canada-deep.csv"
-        if not path.exists():
-            logger.info(
-                "CA taxonomy CSV not found at %s; symbol-level GICS sector/"
-                "industry will fall back to TMX ingestion fields. Add "
-                "canada-deep.csv to enrich classification.",
-                path,
-            )
+        if self._skip_if_missing(path, "CA"):
             return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
