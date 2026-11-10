@@ -313,7 +313,7 @@ function OriginSection({ market, section, cohorts, sessions, sort, onSort, defau
   const body = (
     <Stack spacing={1}>
       {summary && <PendingStrip summary={summary} sessions={sessions} />}
-      {summary && table ? (
+      {summary?.pending > 0 && table ? (
         <Box component="details">
           <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary', py: 0.5 }}>
             {`All screens (${count(cohorts.length)})`}

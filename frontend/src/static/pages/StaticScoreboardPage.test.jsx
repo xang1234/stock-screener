@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   allPendingScoreboardFixture,
   liveClosedAtFiveScoreboardFixture,
+  nothingPendingScoreboardFixture,
   nullBenchmarkScoreboardFixture,
   pendingArtifactScoreboardFixture,
   preFixOnlyScoreboardFixture,
@@ -31,7 +32,7 @@ const manifest = {
   default_market: 'US',
   generation: 'g1',
   data_root: 'g/g1/',
-  supported_markets: ['US', 'HK', 'JP', 'AU', 'TW', 'CN', 'DE'],
+  supported_markets: ['US', 'HK', 'JP', 'AU', 'TW', 'CN', 'DE', 'KR'],
   unavailable_markets: [],
   markets: {
     US: { display_name: 'United States', assets: { scoreboard: { path: 'markets/us/scoreboard.json' } } },
@@ -41,6 +42,7 @@ const manifest = {
     TW: { display_name: 'Taiwan', assets: { scoreboard: { path: 'markets/tw/scoreboard.json' } } },
     CN: { display_name: 'China', assets: { scoreboard: { path: 'markets/cn/scoreboard.json' } } },
     DE: { display_name: 'Germany', assets: { scoreboard: { path: 'markets/de/scoreboard.json' } } },
+    KR: { display_name: 'South Korea', assets: { scoreboard: { path: 'markets/kr/scoreboard.json' } } },
   },
 };
 
@@ -52,6 +54,7 @@ const STATIC_FILES = {
   '/static-data/g/g1/markets/tw/scoreboard.json': preFixOnlyScoreboardFixture,
   '/static-data/g/g1/markets/cn/scoreboard.json': pendingArtifactScoreboardFixture,
   '/static-data/g/g1/markets/de/scoreboard.json': liveClosedAtFiveScoreboardFixture,
+  '/static-data/g/g1/markets/kr/scoreboard.json': nothingPendingScoreboardFixture,
 };
 
 const respondWith = (body) => (body
@@ -288,6 +291,18 @@ describe('StaticScoreboardPage', () => {
     const details = within(live).getByText('All screens (2)').closest('details');
     expect(details).not.toHaveAttribute('open');
     expect(details).toContainElement(rowFor(live, 'Minervini'));
+  });
+
+  it('leaves the table open when nothing is pending, so dropped picks stay in view', async () => {
+    renderRoute('/scoreboard?market=KR');
+    const live = (await screen.findByText('Recorded live')).closest('section');
+
+    expect(within(live).getByText(ALL_PENDING)).toBeInTheDocument();
+    expect(within(live).queryByText(/picks pending across/)).not.toBeInTheDocument();
+    expect(within(live).queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(within(live).queryByText(/All screens/)).not.toBeInTheDocument();
+    expect(rowFor(live, 'Momentum').closest('details')).toBeNull();
+    expect(sampleOf(rowFor(live, 'Momentum'))).toEqual(['0 pending', '3 no price · 6 overlapping']);
   });
 
   it('shows no pending strip and an unfolded table once a window has closed', async () => {

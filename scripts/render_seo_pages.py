@@ -40,10 +40,10 @@ FIELD_LABELS = {
 }
 SCOREBOARD_HORIZONS = (5, 20, 60)
 SCOREBOARD_SECTIONS = (
-    ("live", "Recorded live"),
-    ("artifact", "Recovered from retained build artifacts, not recorded live"),
-    ("artifact_pre_stage_fix",
-     "Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)"),
+    ("live", "Recorded live", None),
+    ("artifact", "Recovered", "Recovered from retained build artifacts, not recorded live."),
+    ("artifact_pre_stage_fix", "Recovered, pre-Stage fix",
+     "Recovered from retained build artifacts, not recorded live, from before the Stage calculation fix (#671)."),
 )
 CSS = """\
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px;margin:0 auto;padding:16px;color:#1b1f24;line-height:1.5}
@@ -153,7 +153,7 @@ def scoreboard_cell(cohort: dict[str, Any], sessions: int) -> str:
     return f"<td>{esc(verdict)}<br><span class=muted>{esc(counts)}</span></td>"
 
 
-def scoreboard_section(title: str, cohorts: list[dict[str, Any]]) -> str:
+def scoreboard_section(title: str, detail: str | None, cohorts: list[dict[str, Any]]) -> str:
     note = ("" if any(h["sample_size"] for c in cohorts for h in c["horizons"])
             else "<p>No window has closed yet. Nothing here is a result.</p>")
     rows = "".join(
@@ -163,7 +163,8 @@ def scoreboard_section(title: str, cohorts: list[dict[str, Any]]) -> str:
         for c in cohorts)
     head = "".join(f"<th>{sessions} sessions</th>" for sessions in SCOREBOARD_HORIZONS)
     table = f"<table><tr><th>Screen</th>{head}</tr>{rows}</table>" if cohorts else ""
-    return f"<h2>{esc(title)}</h2>{note}{table}"
+    caveat = f"<p class=muted>{esc(detail)}</p>" if detail else ""
+    return f"<h2>{esc(title)}</h2>{caveat}{note}{table}"
 
 
 class Site:
@@ -241,8 +242,8 @@ def render_scoreboard(site: Site, code: str, name: str, scoreboard: dict[str, An
     pending = sum(h["pending_windows"] for h in at_20)
     picks = plural(closed + pending, "pick")
     sections = "".join(
-        scoreboard_section(title, members)
-        for origin, title in SCOREBOARD_SECTIONS
+        scoreboard_section(title, detail, members)
+        for origin, title, detail in SCOREBOARD_SECTIONS
         if (members := [c for c in cohorts if c["origin"] == origin]) or origin == "live")
     benchmark = scoreboard["benchmark"]
     rules = ("Entry is the first open after publication. Exit is the close of the Nth session.",
