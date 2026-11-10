@@ -1163,7 +1163,8 @@ class PriceCacheService:
 
                 else:
                     # No heartbeat at all — use lock-age grace period
-                    started_at = parse_activity_timestamp(current_holder.get('started_at'))
+                    started_at_str = current_holder.get('started_at')
+                    started_at = parse_activity_timestamp(started_at_str)
                     lock_age_minutes = (
                         None
                         if started_at is None
@@ -1189,52 +1190,28 @@ class PriceCacheService:
                     # Lock held >= 2 min with no heartbeat.
                     # Check if warmup metadata shows completion after lock was acquired.
                     warmup_meta = self._get_warmup_metadata()
-                    if warmup_meta and warmup_meta.get('completed_at') and started_at_str:
-                        try:
-                            completed_at = datetime.fromisoformat(warmup_meta['completed_at'])
-                            started_at = datetime.fromisoformat(started_at_str)
-                            if completed_at > started_at:
-                                # Task completed but lock is stale — release and fall through.
-                                # Use force_release_all() to clear whichever market key is held.
-                                logger.info("Warmup completed after lock acquired, releasing stale lock")
-                                lock.force_release_all()
-                                # Fall through to SPY freshness check below
-                            else:
-                                # Old completion, task truly stuck
-                                return {
-                                    "status": "stuck",
-                                    "message": "Task unresponsive (no heartbeat)",
-                                    "can_refresh": True,
-                                    "can_force_cancel": True,
-                                    "spy_last_date": None,
-                                    "expected_date": None,
-                                    "task_running": {
-                                        "task_id": current_holder.get('task_id'),
-                                        "task_name": current_holder.get('task_name'),
-                                        "started_at": started_at_str,
-                                        "minutes_since_heartbeat": None
-                                    },
-                                    "last_warmup": warmup_meta
-                                }
-                        except (ValueError, TypeError):
-                            pass
-
-                    # Default: truly stuck
-                    return {
-                        "status": "stuck",
-                        "message": "Task unresponsive (no heartbeat)",
-                        "can_refresh": True,
-                        "can_force_cancel": True,
-                        "spy_last_date": None,
-                        "expected_date": None,
-                        "task_running": {
-                            "task_id": current_holder.get('task_id'),
-                            "task_name": current_holder.get('task_name'),
-                            "started_at": started_at_str,
-                            "minutes_since_heartbeat": None
-                        },
-                        "last_warmup": self._get_warmup_metadata()
-                    }
+                    completed_at = parse_activity_timestamp((warmup_meta or {}).get('completed_at'))
+                    if completed_at is not None and started_at is not None and completed_at > started_at:
+                        # Task completed but lock is stale — release and fall through.
+                        # Use force_release_all() to clear whichever market key is held.
+                        logger.info("Warmup completed after lock acquired, releasing stale lock")
+                        lock.force_release_all()
+                    else:
+                        return {
+                            "status": "stuck",
+                            "message": "Task unresponsive (no heartbeat)",
+                            "can_refresh": True,
+                            "can_force_cancel": True,
+                            "spy_last_date": None,
+                            "expected_date": None,
+                            "task_running": {
+                                "task_id": current_holder.get('task_id'),
+                                "task_name": current_holder.get('task_name'),
+                                "started_at": started_at_str,
+                                "minutes_since_heartbeat": None
+                            },
+                            "last_warmup": warmup_meta
+                        }
 
             # No task running (or stale lock was released above) — check SPY freshness
             spy_last_date = self._get_spy_last_date()
