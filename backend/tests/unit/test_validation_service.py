@@ -800,10 +800,10 @@ def _grouped(source_kind, attributes, *, pct_above_50dma=None):
     )
 
 
-def _five_session_pick(event_at, *, closed=True):
+def _five_session_pick(event_at, *, entry_at=None, closed=True):
     return EvaluatedValidationEvent(
         raw=RawValidationEvent("NVDA", ValidationSourceKind.SCAN_PICK, "ref", event_at, {}),
-        entry_at=event_at,
+        entry_at=entry_at or event_at,
         entry_price=10.0,
         exits={5: event_at} if closed else {},
         outcomes={5: _outcome(1.0)} if closed else {},
@@ -834,12 +834,12 @@ def test_summary_is_thin_below_twenty_closed_events_or_five_effective_dates(
     assert (summary.effective_dates, summary.thin) == (effective_dates, thin)
 
 
-def test_alerts_on_one_eastern_day_count_as_one_effective_date():
-    morning = datetime(2026, 4, 6, 13, 0, tzinfo=UTC)
-    evening = datetime(2026, 4, 7, 2, 0, tzinfo=UTC)
+def test_signals_on_different_days_entering_one_session_count_as_one_effective_date():
+    friday, monday = date(2026, 4, 3), date(2026, 4, 6)
 
     summary = summarize_horizon(
-        [_five_session_pick(morning), _five_session_pick(evening)], horizon_sessions=5
+        [_five_session_pick(friday, entry_at=monday), _five_session_pick(monday - timedelta(days=1), entry_at=monday)],
+        horizon_sessions=5,
     )
 
     assert summary.effective_dates == 1.0
