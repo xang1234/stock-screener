@@ -768,11 +768,11 @@ def summarize_horizon(
         if outcome.excess_return_pct is not None
     ]
     pending = sum(horizon_sessions not in event.exits for event in counted)
-    picks_per_date = Counter(
+    picks_per_session = Counter(
         event.entry_at for event in counted if horizon_sessions in event.outcomes
     ).values()
     # Each entry session weighs by the picks it holds, so one busy day counts as about one.
-    effective_dates = round(sum(picks_per_date) ** 2 / sum(n * n for n in picks_per_date), 1) if picks_per_date else 0.0
+    effective_dates = round(sum(picks_per_session) ** 2 / sum(n * n for n in picks_per_session), 1) if picks_per_session else 0.0
     return ValidationHorizonSummary(
         horizon_sessions=horizon_sessions,
         sample_size=len(outcomes),
