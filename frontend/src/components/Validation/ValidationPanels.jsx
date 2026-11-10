@@ -23,7 +23,7 @@ import { ACTION_STATE_META } from '../../features/opportunityState/actionState';
 import { formatPatternName } from '../../utils/formatUtils';
 
 const GROUP_HORIZONS = [1, 5, 20, 60];
-const SMALL_SAMPLE_SIZE = 20;
+const MINIMUM_SAMPLE = 20;
 // Dimensions whose values have a display name; the others show their value as it is.
 const GROUP_VALUE_LABELS = {
   action_state: (value) => ACTION_STATE_META[value]?.label ?? value,
@@ -51,14 +51,22 @@ function formatDate(value) {
   return date.toLocaleDateString();
 }
 
+// The server marks a horizon thin; this names which half of its rule tripped.
+function thinLabel(horizon) {
+  return (horizon?.sample_size ?? 0) < MINIMUM_SAMPLE ? 'Small sample' : 'Few dates';
+}
+
 function MetricCard({ title, horizon, benchmarkLabel, stopLossPct }) {
   const excessSample = horizon?.excess_sample_size ?? 0;
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-          {title}
-        </Typography>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+            {title}
+          </Typography>
+          {horizon?.thin && horizon.sample_size > 0 && <Chip size="small" variant="outlined" label={thinLabel(horizon)} />}
+        </Stack>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75 }}>
           <MetricRow label="Sample" value={horizon?.sample_size ?? 0} />
           <MetricRow label="Positive" value={formatRate(horizon?.positive_rate)} />
@@ -217,7 +225,7 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
               const horizon = group.horizons.find((item) => item.horizon_sessions === horizonSessions);
               const sampleSize = horizon?.sample_size ?? 0;
               const excessSampleSize = horizon?.excess_sample_size ?? 0;
-              const isSmallSample = sampleSize < SMALL_SAMPLE_SIZE;
+              const isSmallSample = horizon?.thin ?? true;
               return (
                 <Fragment key={`${group.dimension}:${group.value}`}>
                   {group.dimension !== groups[index - 1]?.dimension && (
@@ -226,7 +234,7 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
                     </TableRow>
                   )}
                   <TableRow
-                    title={isSmallSample ? `Small sample: fewer than ${SMALL_SAMPLE_SIZE} events` : undefined}
+                    title={isSmallSample ? thinLabel(horizon) : undefined}
                     sx={isSmallSample ? { '& td': { color: 'text.secondary' } } : undefined}
                   >
                     <TableCell>{GROUP_VALUE_LABELS[group.dimension]?.(group.value) ?? group.value}</TableCell>

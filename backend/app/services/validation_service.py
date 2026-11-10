@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
@@ -54,6 +54,8 @@ PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
 HORIZONS = (1, 5, 20, 60)
+THIN_SAMPLE_SIZE = 20
+THIN_EFFECTIVE_DATES = 5
 STOP_LOSS_PCT = 7.0
 # Events this far before the cutoff join the overlap rule, so a pick before it still blocks
 # the repeats inside its window. ponytail: one longest-horizon window at 7 calendar days per
@@ -561,7 +563,7 @@ class ReplayPickValidationSource:
 
 class CachedPriceSource(Protocol):
     def get_many_cached_only(
-        self, symbols: list[str], period: str = PRICE_CACHE_PERIOD
+        self, symbols: list[str], period: str = PRICE_CACHE_PERIOD, *, minimum_rows: int = 50
     ) -> dict[str, pd.DataFrame | None]: ...
 
 
@@ -581,11 +583,13 @@ class PriceOutcomeCalculator:
         """Evaluate events over the market's ``sessions``, ignoring bars after the last one;
         also return the benchmark used."""
         through = max(sessions, default=None)
+        # A forward return needs only the bars in its window, so a recent IPO still scores.
         histories = {
             symbol: _normalize_price_history(frame, through)
             for symbol, frame in self._price_cache.get_many_cached_only(
                 sorted({event.symbol for event in events} | set(benchmark_candidates)),
                 period=PRICE_CACHE_PERIOD,
+                minimum_rows=1,
             ).items()
         }
         calendar = pd.DatetimeIndex(sessions)
@@ -764,6 +768,11 @@ def summarize_horizon(
         if outcome.excess_return_pct is not None
     ]
     pending = sum(horizon_sessions not in event.exits for event in counted)
+    picks_per_session = Counter(
+        event.entry_at for event in counted if horizon_sessions in event.outcomes
+    ).values()
+    # Each entry session weighs by the picks it holds, so one busy day counts as about one.
+    effective_dates = round(sum(picks_per_session) ** 2 / sum(n * n for n in picks_per_session), 1) if picks_per_session else 0.0
     return ValidationHorizonSummary(
         horizon_sessions=horizon_sessions,
         sample_size=len(outcomes),
@@ -781,6 +790,8 @@ def summarize_horizon(
         skipped_missing_history=len(counted) - len(outcomes) - pending,
         pending_windows=pending,
         suppressed_overlapping=len(events) - len(counted),
+        effective_dates=effective_dates,
+        thin=len(outcomes) < THIN_SAMPLE_SIZE or effective_dates < THIN_EFFECTIVE_DATES,
     )
 
 

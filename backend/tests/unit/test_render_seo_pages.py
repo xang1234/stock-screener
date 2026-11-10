@@ -411,3 +411,12 @@ def test_flat_layout_without_data_generations(dist):
     shutil.rmtree(data / "g")
     render(dist)
     assert (dist / "stocks/us/AAA/index.html").exists()
+
+
+def test_scoreboard_horizons_match_the_published_contract_and_the_engine() -> None:
+    from app.services.static_market_artifact_contract import STATIC_SCOREBOARD_HORIZONS
+    from app.services.validation_service import HORIZONS
+
+    # The engine scores only its own horizons; any other would leave every pick unscored.
+    assert set(STATIC_SCOREBOARD_HORIZONS) <= set(HORIZONS)
+    assert load_generator().SCOREBOARD_HORIZONS == STATIC_SCOREBOARD_HORIZONS

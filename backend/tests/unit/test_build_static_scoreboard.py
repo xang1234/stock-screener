@@ -722,6 +722,20 @@ def test_thin_needs_twenty_closed_events_and_five_effective_dates(
     )
 
 
+def test_effective_dates_count_entry_sessions_so_a_late_publish_shares_the_next_days_entry(db, calendar) -> None:
+    add_bars(db, calendar, "LATE", date(2026, 10, 5), date(2026, 10, 23))
+    add_bars(db, calendar, "NEXT", date(2026, 10, 5), date(2026, 10, 23))
+    # Thursday's day goes out before Monday's open, Friday's on time: both enter Monday.
+    ledger = after_baseline(
+        ledger_day(date(2026, 10, 8), "2026-10-12T12:00:00Z", {"minervini": (DEF_A, ["LATE"])}),
+        ledger_day(date(2026, 10, 9), "2026-10-10T02:00:00Z", {"minervini": (DEF_A, ["LATE", "NEXT"])}),
+    )
+
+    block = horizon(only_cohort(score(db, calendar, ledger, date(2026, 10, 23))), 5)
+
+    assert (block["sample_size"], block["signal_dates"], block["effective_dates"]) == (2, 2, 1.0)
+
+
 def test_effective_dates_count_only_closed_events(db, calendar) -> None:
     add_bars(db, calendar, "OLDER", date(2026, 10, 5), date(2026, 10, 13))
     add_bars(db, calendar, "OPEN", date(2026, 10, 5), date(2026, 10, 13))

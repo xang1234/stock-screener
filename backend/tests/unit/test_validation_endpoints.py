@@ -80,7 +80,7 @@ class _FakePriceCache:
     def __init__(self, histories):
         self._histories = histories
 
-    def get_many_cached_only(self, symbols, period="2y"):
+    def get_many_cached_only(self, symbols, period="2y", *, minimum_rows=50):
         return {symbol: self._histories.get(symbol) for symbol in symbols}
 
 

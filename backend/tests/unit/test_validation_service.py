@@ -27,6 +27,7 @@ from app.services.validation_service import (
     ThemeAlertValidationSource,
     ValidationService,
     mark_overlapping_windows,
+    summarize_horizon,
 )
 from tests.helpers.taxonomy_authority import set_economic_authority
 
@@ -75,8 +76,13 @@ class _FakePriceCache:
     def __init__(self, histories):
         self._histories = histories
 
-    def get_many_cached_only(self, symbols, period="2y"):
-        return {symbol: self._histories.get(symbol) for symbol in symbols}
+    def get_many_cached_only(self, symbols, period="2y", *, minimum_rows=50):
+        """Holds back histories shorter than ``minimum_rows``, as PriceCacheService does."""
+        histories = {symbol: self._histories.get(symbol) for symbol in symbols}
+        return {
+            symbol: history if history is not None and len(history) >= minimum_rows else None
+            for symbol, history in histories.items()
+        }
 
 
 class _FixedCalendar:
@@ -792,6 +798,51 @@ def _grouped(source_kind, attributes, *, pct_above_50dma=None):
         outcomes={1: _outcome(1.0)},
         pct_above_50dma=pct_above_50dma,
     )
+
+
+def _five_session_pick(event_at, *, entry_at=None, closed=True):
+    return EvaluatedValidationEvent(
+        raw=RawValidationEvent("NVDA", ValidationSourceKind.SCAN_PICK, "ref", event_at, {}),
+        entry_at=entry_at or event_at,
+        entry_price=10.0,
+        exits={5: event_at} if closed else {},
+        outcomes={5: _outcome(1.0)} if closed else {},
+    )
+
+
+@pytest.mark.parametrize(
+    ("picks_per_date", "effective_dates", "thin"),
+    [
+        pytest.param([4, 4, 4, 4, 4], 5.0, False, id="exactly-20-and-exactly-5"),
+        pytest.param([4, 3, 3, 3, 3, 3], 5.9, True, id="19-events-enough-dates"),
+        pytest.param([6, 6, 5, 2, 1], 3.9, True, id="five-dates-but-uneven"),
+        pytest.param([], 0.0, True, id="nothing-closed"),
+    ],
+)
+def test_summary_is_thin_below_twenty_closed_events_or_five_effective_dates(
+    picks_per_date, effective_dates, thin
+):
+    events = [
+        _five_session_pick(FIXED_TODAY - timedelta(days=offset))
+        for offset, count in enumerate(picks_per_date)
+        for _ in range(count)
+    ]
+    pending = [_five_session_pick(FIXED_TODAY - timedelta(days=99), closed=False)]
+
+    summary = summarize_horizon(events + pending, horizon_sessions=5)
+
+    assert (summary.effective_dates, summary.thin) == (effective_dates, thin)
+
+
+def test_signals_on_different_days_entering_one_session_count_as_one_effective_date():
+    friday, monday = date(2026, 4, 3), date(2026, 4, 6)
+
+    summary = summarize_horizon(
+        [_five_session_pick(friday, entry_at=monday), _five_session_pick(monday - timedelta(days=1), entry_at=monday)],
+        horizon_sessions=5,
+    )
+
+    assert summary.effective_dates == 1.0
 
 
 def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extension():
