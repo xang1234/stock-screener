@@ -629,11 +629,26 @@ class OperationsJobService:
                     jobs.append(record)
         return jobs
 
-    def _lock_holder_record(self, market: str) -> _JobRecord | None:
+    def _lock_holder_record(
+        self,
+        market: str,
+        runtime_records: dict[str, dict[str, Any]],
+    ) -> _JobRecord | None:
         current_task = get_data_fetch_lock().get_current_task(market=market)
         if not current_task:
             return None
-        heartbeat_lag = _age_seconds_from(current_task.get("last_heartbeat"))
+        # Only price refreshes write the warmup heartbeat, and a killed one
+        # leaves it behind for the next holder. Other holders, such as the
+        # fundamentals refresh, report progress through a running activity
+        # record. A failed record is skipped: a retry keeps its task id and
+        # its running writes are dropped, so the record's age means nothing.
+        last_progress = current_task.get("last_heartbeat")
+        started_at = _parse_iso(current_task.get("started_at"))
+        heartbeat_at = _parse_iso(last_progress)
+        if heartbeat_at is None or (started_at is not None and heartbeat_at < started_at):
+            activity = runtime_records.get(current_task.get("task_id")) or {}
+            last_progress = activity.get("updated_at") if activity.get("status") == "running" else None
+        heartbeat_lag = _age_seconds_from(last_progress)
         state = "stuck" if heartbeat_lag is not None and heartbeat_lag >= HEARTBEAT_STUCK_AFTER_SECONDS else "running"
         record = _JobRecord(
             task_id=current_task.get("task_id") or "unknown",
@@ -787,7 +802,7 @@ class OperationsJobService:
         }
 
         for market in SUPPORTED_MARKETS:
-            lock_record = self._lock_holder_record(market)
+            lock_record = self._lock_holder_record(market, runtime_records)
             if lock_record and lock_record.task_id not in records:
                 records[lock_record.task_id] = lock_record
 
