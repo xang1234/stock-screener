@@ -249,24 +249,41 @@ def test_entry_count_for_market_counts_loaded_rows_before_symbol_merge(tmp_path)
     assert service.entry_count_for_market("KR") == 2
 
 
-def test_market_taxonomy_service_raises_load_error_for_missing_required_csv(tmp_path):
-    _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
-    _write_csv(
-        tmp_path / "india-deep.csv",
-        "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
-    )
-    _write_csv(
-        tmp_path / "kabutan_themes_en.csv",
-        "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
-    )
-    _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
-    _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
-    _write_csv(tmp_path / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n")
+def test_refresh_tolerates_a_data_dir_without_any_csv(tmp_path, caplog):
+    """A data directory with no CSV at all must not be fatal.
 
+    The CSVs are committed files, but a deployment can start before they are
+    mounted. Every market is then skipped with a warning that names it, and
+    lookups answer empty instead of raising.
+    """
     service = MarketTaxonomyService(data_dir=tmp_path)
 
-    with pytest.raises(TaxonomyLoadError, match="hk-deep.csv"):
-        service.groups_for_market("HK")
+    with caplog.at_level("WARNING", logger="app.services.market_taxonomy_service"):
+        assert service.groups_for_market("US") == []
+        assert service.entry_count_for_market("HK") == 0
+        assert service.symbols_for_group("JP", "Information Technology") == []
+
+    assert service._loaded is True
+    warnings = [
+        record.message
+        for record in caplog.records
+        if record.name == "app.services.market_taxonomy_service"
+        and record.levelname == "WARNING"
+    ]
+    for market, filename in (
+        ("US", "IBD_industry_group.csv"),
+        ("HK", "hk-deep.csv"),
+        ("IN", "india-deep.csv"),
+        ("JP", "kabutan_themes_en.csv"),
+        ("TW", "taiwan-deep.csv"),
+        ("KR", "korea-deep.csv"),
+        ("CN", "china-deep.csv"),
+    ):
+        assert any(
+            message.startswith(f"{market} taxonomy CSV not found")
+            and filename in message
+            for message in warnings
+        ), f"{market} did not warn about {filename}: {warnings}"
 
 
 def test_market_taxonomy_service_raises_load_error_for_malformed_csv(tmp_path):
@@ -314,24 +331,44 @@ def _write_minimum_required_csvs(tmp_path) -> None:
     )
 
 
-def test_load_ca_skips_silently_when_csv_is_missing(tmp_path, caplog):
+def test_a_missing_ca_csv_logs_at_info_while_the_others_warn(tmp_path, caplog):
+    """canada-deep.csv is optional, everything else is not.
+
+    Same helper, two registers: CA must stay quiet enough to ignore in a normal
+    log, while a missing US/HK/... file has to be visible.
+    """
     _write_minimum_required_csvs(tmp_path)
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
     with caplog.at_level("INFO", logger="app.services.market_taxonomy_service"):
-        # Force taxonomy load via any market lookup; CA loader runs as part of
-        # refresh() and must not raise when canada-deep.csv is absent.
         assert service.entry_count_for_market("CA") == 0
-        assert service.groups_for_market("CA") == []
 
-    info_messages = [
-        record.message
+    by_level = {}
+    for record in caplog.records:
+        if record.name != "app.services.market_taxonomy_service":
+            continue
+        if "taxonomy CSV not found" not in record.message:
+            continue
+        by_level.setdefault(record.levelname, []).append(record.message)
+
+    assert any("CA taxonomy CSV not found" in m for m in by_level.get("INFO", []))
+    assert not any("CA taxonomy CSV not found" in m for m in by_level.get("WARNING", []))
+
+    # and the other direction: a missing required file is a WARNING, not INFO
+    leer = tmp_path / "ohne"
+    leer.mkdir()
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.services.market_taxonomy_service"):
+        MarketTaxonomyService(data_dir=leer).groups_for_market("US")
+    warning_levels = {
+        record.message.split(" taxonomy")[0]: record.levelname
         for record in caplog.records
         if record.name == "app.services.market_taxonomy_service"
-        and record.levelname == "INFO"
-    ]
-    assert any("CA taxonomy CSV not found" in message for message in info_messages)
+        and "taxonomy CSV not found" in record.message
+    }
+    assert warning_levels.get("US") == "WARNING"
+    assert warning_levels.get("CA") == "INFO"
 
 
 def test_load_ca_loads_canada_deep_when_present(tmp_path):

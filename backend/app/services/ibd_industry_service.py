@@ -18,15 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 def _market_taxonomy_service():
-    from .market_taxonomy_service import MarketTaxonomyService
+    """Return the process-wide taxonomy service.
 
-    global _TAXONOMY_SINGLETON
-    if _TAXONOMY_SINGLETON is None:
-        _TAXONOMY_SINGLETON = MarketTaxonomyService()
-    return _TAXONOMY_SINGLETON
+    A second instance here would parse all eight CSVs a second time and carry
+    its own loaded flag, so the module singleton is used instead.
+    """
+    from .market_taxonomy_service import get_market_taxonomy_service
 
-
-_TAXONOMY_SINGLETON = None
+    return get_market_taxonomy_service()
 
 
 def _market_has_curated_taxonomy(market: str) -> bool:
