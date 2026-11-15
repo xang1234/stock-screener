@@ -467,8 +467,16 @@ class MarketCopilotService:
         consumers that need it; it does not change what counts as fresh.
         """
 
+        # Resolving the calendar is a lookup of its own: the process-scoped
+        # service builds the coverage registry on first use, and a malformed
+        # manifest raises CalendarManifestError - a ValueError. It must not be
+        # reported as a bad market, so it is guarded separately.
         try:
             calendar = self._calendar()
+        except Exception as exc:  # noqa: BLE001 - provider/catalog drift
+            raise self._calendar_error(args.market, exc) from exc
+
+        try:
             market = calendar.normalize_market(args.market)
         except ValueError as exc:
             raise ValueError(f"Unsupported market: {args.market}") from exc

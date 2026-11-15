@@ -23,6 +23,7 @@ from sqlalchemy import event
 
 from app.interfaces.mcp import market_copilot as market_copilot_module
 from app.interfaces.mcp.market_copilot import MarketCopilotService
+from app.domain.markets.calendar_coverage import CalendarManifestError
 from app.services.market_calendar_service import (
     CalendarCoverageExpired,
     MarketCalendarService,
@@ -706,6 +707,42 @@ def test_a_broken_runtime_calendar_is_not_masked_by_a_private_instance(
     # ticker falls back to the Eastern date and says so.
     basis = service._earnings_reference_date("AAPL", FIXED_NOW)
     assert basis == (to_eastern_date(FIXED_NOW), "eastern")
+
+
+def test_a_malformed_calendar_manifest_is_not_a_bad_market(session_factory, monkeypatch):
+    """CalendarManifestError is a ValueError and must not read as a bad request.
+
+    The process-scoped service loads the coverage registry on first use, so the
+    resolver is where a malformed manifest surfaces. Reporting
+    ``invalid_arguments`` there would blame the caller for a broken data tree.
+    """
+    def broken_manifest():
+        raise CalendarManifestError("calendar index schema_version must be 1")
+
+    monkeypatch.setattr(market_copilot_module, "get_market_calendar_service", broken_manifest)
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
+        now_provider=lambda: FIXED_NOW,
+    )
+
+    result = service.call_tool("market_calendar_status", {"market": "US"})
+
+    assert result.get("isError") is True
+    payload = result["structuredContent"]
+    assert payload["error"]["code"] == "calendar_unavailable"
+    assert "last_completed_trading_day" not in payload
+    # The request was valid and the cause stays out of the answer.
+    assert "Unsupported market" not in result["content"][0]["text"]
+    assert "CalendarManifestError" not in result["content"][0]["text"]
+
+
+def test_an_unsupported_market_is_still_a_bad_request(session_factory):
+    """The narrow guard did not swallow the real invalid_arguments case."""
+    error = _error(_service(session_factory), "market_calendar_status", {"market": "XX"})
+
+    assert error["code"] == "invalid_arguments"
+    assert error["details"]["message"] == "Unsupported market: XX"
 
 
 def test_a_database_failure_fails_closed(session_factory):
