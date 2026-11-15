@@ -28,6 +28,10 @@ The MCP server exposes 15 tools:
 
 Every tool returns a structured envelope with `summary`, `facts`, `citations`, `freshness`, and `next_actions`.
 
+Both transports resolve services the same way: the stdio entry point builds the process-scoped
+runtime container at startup (`initialize_process_runtime_services()`), as the FastAPI lifespan and
+the Celery worker do, so `group_rankings` and the calendar tools work over stdio too.
+
 ## Calendar and Earnings Facts
 
 Both tools are read-only and replace the two facts consumers (the Hermes watchlist scanner among
@@ -48,19 +52,20 @@ same names:
   "market_now": "2026-10-15T11:00:00-04:00",
   "market_date": "2026-10-15",
   "is_trading_day": true,
+  "is_market_open": true,
   "last_completed_trading_day": "2026-10-14",
-  "expected_trading_date": "2026-10-15",
   "calendar_source": "xang_market_calendar_service"
 }
 ```
 
-`expected_trading_date` names the session whose bars can exist right now. While the session is
-**open** that is the market-calendar day; before the open, and on a day without a session, it is
-the last completed one — pointing at a session that has not traded yet would make an up-to-date
-cache look stale for the rest of the day. After the close the two dates are the same again.
-Values come from
+`last_completed_trading_day` is the day a run must carry, and the only date a freshness check may
+compare against. Runs are published after the close, so while a session is open the newest run that
+can exist belongs to the previous session; judging it against `market_date` would call it stale for
+the whole session. `is_market_open` answers "a session is running now" for consumers that need the
+phase, and never changes what counts as fresh. Values come from
 `app.services.market_calendar_service.MarketCalendarService`; if the service cannot answer, the
-call is `isError` with `code: "calendar_unavailable"` and **no** `expected_trading_date`.
+call is `isError` with `code: "calendar_unavailable"` and **no** `last_completed_trading_day`.
+There is no expected-date field: one date with one meaning is the contract.
 
 ### `earnings_lookup`
 
@@ -127,7 +132,7 @@ Combine `watchlist_snapshot` with `explain_symbol` to audit your watchlist. The 
 
 ### Run Freshness and Event Risk
 Call `market_calendar_status` for the market, then `earnings_lookup` for each held symbol. Treat
-`expected_trading_date` as the day the run should carry, and `freshness_status != "ok"` or
+`last_completed_trading_day` as the day the run should carry, and `freshness_status != "ok"` or
 `available: false` as "no evidence" — never as a date.
 
 ### Theme Scouting

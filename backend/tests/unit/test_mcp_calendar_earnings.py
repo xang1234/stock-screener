@@ -22,8 +22,11 @@ import pytest
 from sqlalchemy import event
 
 from app.interfaces.mcp import market_copilot as market_copilot_module
-from app.interfaces.mcp.market_copilot import MarketCopilotService, ToolSourceUnavailable
-from app.services.market_calendar_service import CalendarCoverageExpired
+from app.interfaces.mcp.market_copilot import MarketCopilotService
+from app.services.market_calendar_service import (
+    CalendarCoverageExpired,
+    MarketCalendarService,
+)
 from app.utils.market_hours import to_eastern_date
 from app.models.stock import StockFundamental
 from app.services import yahoo_earnings_calendar
@@ -42,8 +45,8 @@ CALENDAR_GATEWAY_KEYS = {
     "market_now",
     "market_date",
     "is_trading_day",
+    "is_market_open",
     "last_completed_trading_day",
-    "expected_trading_date",
     "calendar_source",
 }
 
@@ -231,15 +234,14 @@ def test_calendar_tool_defaults_to_the_us_market(session_factory):
 # ---------------------------------------------------------------------------
 
 CALENDAR_CASES = [
-    # moment UTC, trading day?, last completed, market date, expected, open?, phase
+    # moment UTC, trading day?, last completed, market date, open?, phase
     pytest.param(
         datetime(2026, 10, 15, 15, 0, tzinfo=UTC),  # 11:00 ET, session running
         True,
         date(2026, 10, 14),
         "2026-10-15",
-        "2026-10-15",
         True,
-        "is open",
+        "is in session",
         id="trading-day-mid-session",
     ),
     pytest.param(
@@ -247,9 +249,8 @@ CALENDAR_CASES = [
         True,
         date(2026, 10, 14),
         "2026-10-15",
-        "2026-10-14",
         False,
-        "has not opened yet",
+        "not open now",
         id="trading-day-pre-open",
     ),
     pytest.param(
@@ -257,9 +258,8 @@ CALENDAR_CASES = [
         True,
         date(2026, 10, 15),
         "2026-10-15",
-        "2026-10-15",
         False,
-        "is complete",
+        "not open now",
         id="trading-day-after-close",
     ),
     pytest.param(
@@ -267,7 +267,6 @@ CALENDAR_CASES = [
         False,
         date(2026, 10, 16),
         "2026-10-17",
-        "2026-10-16",
         False,
         "has no session",
         id="weekend",
@@ -277,7 +276,6 @@ CALENDAR_CASES = [
         False,
         date(2026, 11, 25),
         "2026-11-26",
-        "2026-11-25",
         False,
         "has no session",
         id="exchange-holiday",
@@ -287,34 +285,32 @@ CALENDAR_CASES = [
         True,
         date(2026, 10, 14),
         "2026-10-14",
-        "2026-10-14",
         False,
-        "is complete",
+        "not open now",
         id="market-timezone-boundary",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("moment_utc", "trading", "last_completed", "market_date", "expected", "open_session", "phase"),
+    ("moment_utc", "trading", "last_completed", "market_date", "open_session", "phase"),
     CALENDAR_CASES,
 )
-def test_the_calendar_reports_the_expected_trading_date(
+def test_the_calendar_reports_the_last_completed_session(
     session_factory,
     moment_utc,
     trading,
     last_completed,
     market_date,
-    expected,
     open_session,
     phase,
 ):
-    """``expected_trading_date`` names the session whose bars can exist.
+    """``last_completed_trading_day`` is the only freshness reference.
 
-    Mid-session that is today, because the session is producing bars. Before
-    the open it is the last completed session - otherwise an up-to-date cache
-    would look stale until the session trades. After the close the last
-    completed session is today again.
+    It is the session a published run can carry, in every phase: mid-session
+    the run for today cannot exist yet, so yesterday's run is the newest one.
+    ``is_market_open`` reports the phase without moving that reference, and
+    ``expected_trading_date`` - which used to move - is gone.
     """
     calendar = FixedCalendar(
         market_now=moment_utc.astimezone(NEW_YORK),
@@ -331,8 +327,9 @@ def test_the_calendar_reports_the_expected_trading_date(
     assert payload["market_now"] == moment_utc.astimezone(NEW_YORK).isoformat()
     assert payload["market_date"] == market_date
     assert payload["is_trading_day"] is trading
+    assert payload["is_market_open"] is open_session
     assert payload["last_completed_trading_day"] == last_completed.isoformat()
-    assert payload["expected_trading_date"] == expected
+    assert "expected_trading_date" not in payload
     assert payload["calendar_source"] == "xang_market_calendar_service"
     # A consumer must be able to tell the phase from the summary.
     assert phase in payload["summary"]
@@ -342,12 +339,18 @@ def test_an_unsupported_market_is_rejected_as_bad_arguments(session_factory):
     error = _error(_service(session_factory), "market_calendar_status", {"market": "XX"})
 
     assert error["code"] == "invalid_arguments"
-    assert "expected_trading_date" not in error["details"]
+    assert "last_completed_trading_day" not in error["details"]
 
 
 @pytest.mark.parametrize(
     "fail_on",
-    ["market_now", "is_trading_day", "last_completed_trading_day", "market_timezone"],
+    [
+        "market_now",
+        "is_trading_day",
+        "last_completed_trading_day",
+        "market_timezone",
+        "is_market_open",
+    ],
 )
 def test_an_unavailable_calendar_fails_closed(session_factory, fail_on):
     """Every lookup inside the block maps to the same code.
@@ -371,7 +374,7 @@ def test_an_unavailable_calendar_fails_closed(session_factory, fail_on):
     payload = result["structuredContent"]
     assert payload["error"]["code"] == "calendar_unavailable"
     # No half-filled success payload: there is no date to read.
-    assert "expected_trading_date" not in payload
+    assert "last_completed_trading_day" not in payload
     assert "calendar lookup failed" not in payload["error"]["message"]
 
 
@@ -410,13 +413,14 @@ def test_the_calendar_payload_keeps_the_gateway_keys(session_factory):
         ),
     ],
 )
-def test_the_canonical_service_confirms_the_expected_date_semantics(
+def test_the_canonical_service_confirms_the_completed_session_semantics(
     session_factory, moment, market_date, trading, last_completed
 ):
     """The contract holds against the real calendar, not only the double."""
     service = MarketCopilotService(
         session_factory,
         SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
+        calendar_service=MarketCalendarService(),
         now_provider=lambda: moment,
     )
 
@@ -425,7 +429,7 @@ def test_the_canonical_service_confirms_the_expected_date_semantics(
     assert payload["market_date"] == market_date
     assert payload["is_trading_day"] is trading
     assert payload["last_completed_trading_day"] == last_completed
-    assert payload["expected_trading_date"] == (market_date if trading else last_completed)
+    assert "expected_trading_date" not in payload
 
 
 def test_a_non_us_market_uses_its_own_timezone_and_sessions(session_factory):
@@ -440,6 +444,7 @@ def test_a_non_us_market_uses_its_own_timezone_and_sessions(session_factory):
     service = MarketCopilotService(
         session_factory,
         SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
+        calendar_service=MarketCalendarService(),
         now_provider=lambda: moment,
     )
 
@@ -450,8 +455,8 @@ def test_a_non_us_market_uses_its_own_timezone_and_sessions(session_factory):
     assert japan["market_date"] == "2026-09-23"
     assert japan["is_trading_day"] is False
     assert japan["last_completed_trading_day"] == "2026-09-18"
-    # Closed day: the expected date is the last completed session, not the day.
-    assert japan["expected_trading_date"] == "2026-09-18"
+    # Closed day: no session is running, and the completed session stands alone.
+    assert japan["is_market_open"] is False
     # The same moment, the other calendar: a hardcoded market would match here.
     assert states["is_trading_day"] is True
     assert states["last_completed_trading_day"] == "2026-09-22"
@@ -667,9 +672,12 @@ def test_the_reference_basis_names_an_eastern_fallback(earnings_factory):
 def test_a_broken_runtime_calendar_is_not_masked_by_a_private_instance(
     session_factory, monkeypatch
 ):
-    """Only 'services not initialised' may fall back; expired coverage may not."""
-    built: list[int] = []
+    """A calendar that cannot be resolved fails closed, with its own cause.
 
+    The service no longer builds a private instance when the process scope is
+    missing - the stdio entry point builds it instead. So every resolution
+    failure, expired coverage included, is reported as ``calendar_unavailable``.
+    """
     def exploding_resolver():
         raise CalendarCoverageExpired(
             market="US",
@@ -680,59 +688,24 @@ def test_a_broken_runtime_calendar_is_not_masked_by_a_private_instance(
         )
 
     monkeypatch.setattr(market_copilot_module, "get_market_calendar_service", exploding_resolver)
-    monkeypatch.setattr(
-        market_copilot_module, "MarketCalendarService", lambda *a, **k: built.append(1)
-    )
     service = MarketCopilotService(
         session_factory,
         SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
         now_provider=lambda: FIXED_NOW,
     )
 
-    with pytest.raises(ToolSourceUnavailable) as caught:
-        service._calendar()
+    result = service.call_tool("market_calendar_status", {"market": "US"})
 
-    # The canonical failure is reported as its own cause, and no private
-    # instance was built to hide it.
-    assert isinstance(caught.value.__cause__, CalendarCoverageExpired)
-    assert built == []
-
-
-def test_missing_runtime_services_still_build_the_canonical_calendar(
-    session_factory, monkeypatch
-):
-    """The stdio process has no FastAPI startup, so it builds the same class."""
-    built: list[object] = []
-    calendar = FixedCalendar(
-        market_now=FIXED_NOW.astimezone(NEW_YORK),
-        is_trading_day=True,
-        last_completed=date(2026, 10, 14),
-    )
-
-    def no_runtime_services():
-        raise RuntimeError(
-            "RuntimeServices are not initialized for this context. "
-            "Use the FastAPI lifespan or runtime_context.use_runtime_services()."
-        )
-
-    monkeypatch.setattr(
-        market_copilot_module, "get_market_calendar_service", no_runtime_services
-    )
-    monkeypatch.setattr(
-        market_copilot_module,
-        "MarketCalendarService",
-        lambda *a, **k: built.append(calendar) or calendar,
-    )
-    service = MarketCopilotService(
-        session_factory,
-        SimpleNamespace(mcp_watchlist_writes_enabled=False, mcp_server_name="test"),
-        now_provider=lambda: FIXED_NOW,
-    )
-
-    payload = _payload(service, "market_calendar_status", {"market": "US"})
-
-    assert built == [calendar]
-    assert payload["market"] == "US"
+    assert result.get("isError") is True
+    payload = result["structuredContent"]
+    assert payload["error"]["code"] == "calendar_unavailable"
+    # No half-filled payload and no internal class name in the answer.
+    assert "last_completed_trading_day" not in payload
+    assert "CalendarCoverageExpired" not in result["content"][0]["text"]
+    # Earnings lookups resolve the same calendar and stay available: a plain
+    # ticker falls back to the Eastern date and says so.
+    basis = service._earnings_reference_date("AAPL", FIXED_NOW)
+    assert basis == (to_eastern_date(FIXED_NOW), "eastern")
 
 
 def test_a_database_failure_fails_closed(session_factory):

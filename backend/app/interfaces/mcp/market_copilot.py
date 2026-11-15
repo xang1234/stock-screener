@@ -30,7 +30,6 @@ from app.schemas.scanning import ExplainResponse, ScanResultItem
 from app.services import yahoo_earnings_calendar
 from app.services.breadth.query import breadth_query, latest_breadth
 from app.services.economic_theme_read_service import EconomicThemeReader
-from app.services.market_calendar_service import MarketCalendarService
 from app.services.task_registry_service import SCHEDULED_TASKS
 from app.services.watchlist_capacity import check_watchlist_capacity, lock_watchlist
 from app.tasks.market_queues import SUPPORTED_MARKETS
@@ -138,9 +137,9 @@ class ToolSourceUnavailable(RuntimeError):
     """A canonical source could not answer; the tool must fail closed.
 
     Raised instead of returning a half-filled payload: a caller must not read
-    an ``expected_trading_date`` or an ``available`` flag off a source that did
-    not respond. ``call_tool`` turns this into an ``isError`` response with the
-    given code and a message that carries no internal detail.
+    a ``last_completed_trading_day`` or an ``available`` flag off a source that
+    did not respond. ``call_tool`` turns this into an ``isError`` response with
+    the given code and a message that carries no internal detail.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -261,9 +260,10 @@ class MarketCopilotService:
                 ToolSpec(
                     name="market_calendar_status",
                     description=(
-                        "Return the canonical market-calendar facts for one market: market_now, market_date, "
-                        "is_trading_day, last_completed_trading_day and expected_trading_date. Read-only; no "
-                        "trading decision."
+                        "Return the canonical market-calendar facts for one market: market_now, "
+                        "market_date, is_trading_day, is_market_open and "
+                        "last_completed_trading_day, the session a published run must carry. "
+                        "Read-only; no trading decision."
                     ),
                     args_model=MarketCalendarStatusArgs,
                     handler=self._market_calendar_status,
@@ -401,32 +401,32 @@ class MarketCopilotService:
         """Build the one error every calendar failure reports."""
         return ToolSourceUnavailable("calendar_unavailable", message)
 
-    @staticmethod
-    def _runtime_services_missing(exc: RuntimeError) -> bool:
-        # resolve_runtime_services raises a plain RuntimeError with this text.
-        # Checked by exact type and message on purpose: CalendarCoverageExpired
-        # and provider drift also subclass RuntimeError, and falling back for
-        # those would hide a broken calendar behind a private instance.
-        return type(exc) is RuntimeError and "RuntimeServices are not initialized" in str(exc)
-
     def _calendar(self) -> Any:
-        """Return the canonical calendar service, resolved once per process."""
-        if self._calendar_service is None:
-            try:
-                self._calendar_service = get_market_calendar_service()
-            except RuntimeError as exc:
-                if not self._runtime_services_missing(exc):
-                    raise self._calendar_unavailable() from exc
-                # The stdio MCP process never runs the FastAPI startup, so no
-                # process-scoped instance exists there. Same canonical class,
-                # built on first use - not a second implementation.
-                try:
-                    self._calendar_service = MarketCalendarService()
-                except Exception as build_exc:  # noqa: BLE001 - fail closed
-                    raise self._calendar_unavailable() from build_exc
-            except Exception as exc:  # noqa: BLE001 - fail closed, never emulate
-                raise self._calendar_unavailable() from exc
-        return self._calendar_service
+        """Return the canonical calendar service.
+
+        The process-scoped instance is built by the process lifecycle - the
+        FastAPI lifespan, the Celery worker and the stdio entry point all call
+        ``initialize_process_runtime_services()`` - so the resolver is the only
+        way to reach it. There is no second, privately built calendar; the
+        constructor argument stays for tests that inject a double.
+        """
+        if self._calendar_service is not None:
+            return self._calendar_service
+        return get_market_calendar_service()
+
+    def _calendar_error(self, market: str, exc: BaseException) -> ToolSourceUnavailable:
+        """Log the cause and report the one calendar failure code."""
+        # The message is written for the caller; the cause belongs in the log,
+        # otherwise an expired calendar and a missing data root look identical.
+        logger.warning(
+            "calendar lookup failed for %s: %s",
+            market,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return self._calendar_unavailable(
+            "The canonical market calendar could not answer for this market."
+        )
 
     def _earnings_reference_date(self, symbol: str, now: datetime) -> tuple[date, str]:
         """Calendar date the earnings freshness is measured against.
@@ -459,22 +459,21 @@ class MarketCopilotService:
     def _market_calendar_status(self, args: MarketCalendarStatusArgs) -> ToolEnvelope:
         """Return the canonical calendar facts the run-freshness check needs.
 
-        ``expected_trading_date`` keeps the meaning the temporary gateway gave
-        it: the market-calendar day while the market trades (mid-session
-        included), otherwise the last completed session. It is therefore *not*
-        ``last_completed_trading_day`` during a running session, which is the
-        value that only exists after the close.
+        ``last_completed_trading_day`` is the day a published run must carry: a
+        run is published after the close, so while a session is running the
+        newest run that can exist belongs to the previous session. Judging
+        freshness against anything later would call that run stale for the whole
+        session. ``is_market_open`` answers "a session is running now" for
+        consumers that need it; it does not change what counts as fresh.
         """
 
-        calendar = self._calendar()
         try:
+            calendar = self._calendar()
             market = calendar.normalize_market(args.market)
         except ValueError as exc:
             raise ValueError(f"Unsupported market: {args.market}") from exc
         except Exception as exc:  # noqa: BLE001 - provider/catalog drift
-            raise self._calendar_unavailable(
-                "The canonical market calendar could not answer for this market."
-            ) from exc
+            raise self._calendar_error(args.market, exc) from exc
 
         now = self._now()
         try:
@@ -485,44 +484,22 @@ class MarketCopilotService:
             market_timezone = str(calendar.market_timezone(market))
             is_open = bool(calendar.is_market_open(market, now=now))
         except Exception as exc:  # noqa: BLE001 - missing coverage, provider drift
-            logger.warning(
-                "calendar lookup failed for %s: %s",
-                market,
-                type(exc).__name__,
-                exc_info=True,
-            )
-            raise self._calendar_unavailable(
-                "The canonical market calendar could not answer for this market."
-            ) from exc
+            raise self._calendar_error(market, exc) from exc
 
-        # Today's session only counts once it is running. Before the open the
-        # freshest bars any cache can hold belong to the last completed session;
-        # pointing at a session that has not traded would make an up-to-date
-        # cache look stale for the rest of the day.
-        session_open = is_trading_day and is_open
-        session_complete = is_trading_day and last_completed == market_date
-        expected = market_date if (session_open or session_complete) else last_completed
-
-        if session_open:
+        if is_open:
             summary = (
-                f"{market} trades on {market_date.isoformat()} and the session is open; the "
-                f"expected trading date is {expected.isoformat()}."
-            )
-        elif session_complete:
-            summary = (
-                f"{market} traded on {market_date.isoformat()} and the session is complete; the "
-                f"expected trading date is that session, {expected.isoformat()}."
+                f"{market} is in session on {market_date.isoformat()}; the last completed "
+                f"session is {last_completed.isoformat()}."
             )
         elif is_trading_day:
             summary = (
-                f"{market} trades on {market_date.isoformat()}, but the session has not opened "
-                f"yet; the expected trading date is the last completed session, "
-                f"{expected.isoformat()}."
+                f"{market} has a session on {market_date.isoformat()} that is not open now; "
+                f"the last completed session is {last_completed.isoformat()}."
             )
         else:
             summary = (
-                f"{market} has no session on {market_date.isoformat()}; the expected trading date "
-                f"is the last completed session, {expected.isoformat()}."
+                f"{market} has no session on {market_date.isoformat()}; the last completed "
+                f"session is {last_completed.isoformat()}."
             )
 
         payload = {
@@ -531,8 +508,8 @@ class MarketCopilotService:
             "market_now": market_now.isoformat(),
             "market_date": market_date.isoformat(),
             "is_trading_day": is_trading_day,
+            "is_market_open": is_open,
             "last_completed_trading_day": last_completed.isoformat(),
-            "expected_trading_date": expected.isoformat(),
             "calendar_source": _CALENDAR_SOURCE,
         }
 
@@ -540,10 +517,7 @@ class MarketCopilotService:
             {key: value for key, value in payload.items() if key != "calendar_source"},
             _CALENDAR_SOURCE,
             as_of=market_date,
-            key_dates={
-                "last_completed_trading_day": last_completed,
-                "expected_trading_date": expected,
-            },
+            key_dates={"last_completed_trading_day": last_completed},
         )
 
         return self._envelope(

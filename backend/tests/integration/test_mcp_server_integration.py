@@ -171,7 +171,7 @@ class TestMcpHttpTransport:
         body = resp.json()
         assert body["result"]["protocolVersion"] == "2025-03-26"
 
-    async def test_tools_list_returns_13_tools(self, client):
+    async def test_tools_list_returns_15_tools(self, client):
         resp = await client.post(
             "/mcp/",
             json={
@@ -183,12 +183,14 @@ class TestMcpHttpTransport:
         )
         body = resp.json()
         tool_names = {t["name"] for t in body["result"]["tools"]}
-        assert len(tool_names) == 13
+        assert len(tool_names) == 15
         assert "group_rankings" in tool_names
         assert "stock_lookup" in tool_names
         assert "stock_snapshot" in tool_names
         assert "breadth_snapshot" in tool_names
         assert "daily_digest" in tool_names
+        assert "market_calendar_status" in tool_names
+        assert "earnings_lookup" in tool_names
 
     async def test_tool_call_market_overview(self, client):
         resp = await client.post(
