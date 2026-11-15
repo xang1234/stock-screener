@@ -15,6 +15,7 @@ Calculates:
 import logging
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
+import fin_primitives as fp
 import pandas as pd
 import numpy as np
 
@@ -139,26 +140,21 @@ class TechnicalCalculatorService:
         Calculate ATR (Average True Range).
 
         True Range = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
-        ATR = EMA of True Range over period
+        ATR = Wilder's smoothing (RMA, alpha = 1/period) of True Range,
+        seeded with the simple average of the first `period` true ranges.
         """
         try:
-            if len(price_data) < period + 1:
+            bars = price_data[['High', 'Low', 'Close']].dropna().astype(float)
+            if len(bars) < period + 1:
                 return None
 
-            high = price_data['High']
-            low = price_data['Low']
-            close = price_data['Close']
-
-            # Calculate True Range components
-            tr1 = high - low
-            tr2 = abs(high - close.shift(1))
-            tr3 = abs(low - close.shift(1))
-
-            # True Range is the max of the three
-            true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-            # ATR is the EMA of True Range
-            atr = true_range.ewm(span=period, adjust=False).mean()
+            atr = fp.compute(
+                "wilder_smoothed_range",
+                bars['Close'],
+                period,
+                high=bars['High'],
+                low=bars['Low'],
+            )
 
             return float(atr.iloc[-1])
 

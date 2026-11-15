@@ -790,6 +790,14 @@ filelock==4.2.4 \
     --hash=sha256:301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e \
     --hash=sha256:c6d8663535e1650ee430507b4ffbac7b464dd64b7647ea0112a9f406499d163d
     # via huggingface-hub
+fin-primitives==3.2.0 \
+    --hash=sha256:0249ececf29246b425bca96622149d89fdde231e8204bb58321f0d0f032e8c41 \
+    --hash=sha256:305ab23445526c2eb70a814c002dbba213d9fb1f175fe9e695fd4bca0e9f1710 \
+    --hash=sha256:3e38ca75e242fab22a26ee2b9a1ca5943e72f6088a0c9b62eb3de49f179826e7 \
+    --hash=sha256:59829d405a5f867faab1b3985fb85914a242690695e05f39748daaf2f87bc844 \
+    --hash=sha256:74aaf69ae4e836c2daaf85b35b026c32f7afd3db59d8d3a6c6dca0d6ab280ccc \
+    --hash=sha256:b7931eb8ca44fdd40d68a95f9785b1ffadff1ada077e74eded2445e660f9f2e4
+    # via -r backend/requirements-runtime.txt
 finvizfinance==1.2.0 \
     --hash=sha256:f3906fa899ccfa34e0e77fc449f8e5e3ba95d7b4f6b466ac4603fab793c193dd \
     --hash=sha256:f7a53943108cf2e5554fc0d8cf8d39152aab1fbfc29fe3d971ea4e24583c1a8d
