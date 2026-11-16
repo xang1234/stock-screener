@@ -89,6 +89,17 @@ def test_atr_uses_wilder_smoothing():
     assert service.calculate_all(frame)["atr_14"] == round(expected, 2)
 
 
+def test_atr_seeds_with_first_period_mean_on_short_history():
+    # calculate_all accepts 20 bars (recent IPOs), where an ewm seed of the
+    # first true range would still dominate the result.
+    frame = _random_walk_frame(periods=20)
+    frame.iloc[0, frame.columns.get_loc("High")] += 20.0
+
+    atr = TechnicalCalculatorService()._calculate_atr(frame, period=14)
+
+    assert atr == pytest.approx(_wilder_atr_reference(frame), rel=1e-9)
+
+
 def test_atr_is_not_the_span_ema():
     frame = _random_walk_frame()
     span_ema = float(_true_range(frame).ewm(span=14, adjust=False).mean().iloc[-1])

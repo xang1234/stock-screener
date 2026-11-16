@@ -160,8 +160,12 @@ class TechnicalCalculatorService:
             # True Range is the max of the three
             true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-            # Wilder smoothing: alpha = 1/period (span=period would be 2/(period+1))
-            atr = true_range.ewm(alpha=1 / period, adjust=False).mean()
+            # Wilder smoothing: seed with the mean of the first `period` true
+            # ranges, then recurse with alpha = 1/period. ewm(adjust=False)
+            # starts from its first value, so replace it with the seed.
+            smoothed = true_range.iloc[period - 1:].copy()
+            smoothed.iloc[0] = true_range.iloc[:period].mean()
+            atr = smoothed.ewm(alpha=1 / period, adjust=False).mean()
 
             return float(atr.iloc[-1])
 
