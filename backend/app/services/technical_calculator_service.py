@@ -139,15 +139,18 @@ class TechnicalCalculatorService:
         Calculate ATR (Average True Range).
 
         True Range = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
-        ATR = EMA of True Range over period
+        ATR = Wilder's smoothing (RMA, alpha = 1/period) of True Range,
+        matching TA-Lib, finviz and analysis.patterns.technicals.average_true_range.
+        Bars with missing High/Low/Close are dropped.
         """
         try:
-            if len(price_data) < period + 1:
+            bars = price_data[['High', 'Low', 'Close']].dropna()
+            if len(bars) < period + 1:
                 return None
 
-            high = price_data['High']
-            low = price_data['Low']
-            close = price_data['Close']
+            high = bars['High']
+            low = bars['Low']
+            close = bars['Close']
 
             # Calculate True Range components
             tr1 = high - low
@@ -157,8 +160,8 @@ class TechnicalCalculatorService:
             # True Range is the max of the three
             true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-            # ATR is the EMA of True Range
-            atr = true_range.ewm(span=period, adjust=False).mean()
+            # Wilder smoothing: alpha = 1/period (span=period would be 2/(period+1))
+            atr = true_range.ewm(alpha=1 / period, adjust=False).mean()
 
             return float(atr.iloc[-1])
 
