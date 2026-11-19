@@ -8,6 +8,7 @@ from typing import Any
 
 from app.config import settings
 from app.database import SessionLocal
+from app.wiring.bootstrap import initialize_process_runtime_services
 
 from .market_copilot import MarketCopilotService
 
@@ -173,6 +174,11 @@ class MarketCopilotMcpServer:
 def main() -> None:
     """Run the stdio MCP server."""
 
+    # The stdio process never runs the FastAPI lifespan and is not a Celery
+    # worker, so nothing else builds the process-scoped runtime services. Tools
+    # that resolve a service - group_rankings and market_calendar_status among
+    # them - fail with "RuntimeServices are not initialized" without this call.
+    initialize_process_runtime_services(session_factory=SessionLocal)
     service = MarketCopilotService(SessionLocal, settings)
     MarketCopilotMcpServer(service).serve_forever()
 

@@ -16,15 +16,18 @@ from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.feature_store.models import FeatureRunDomain, RunStatus
 from app.domain.feature_store.run_metadata import feature_run_market
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.scoring import is_core_scored
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.market_breadth import MarketBreadth
+from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeConstituent, ThemeMetrics
 from app.models.user_watchlist import UserWatchlist, WatchlistItem
 from app.schemas.scanning import ExplainResponse, ScanResultItem
+from app.services import yahoo_earnings_calendar
 from app.services.breadth.query import breadth_query, latest_breadth
 from app.services.economic_theme_read_service import EconomicThemeReader
 from app.services.task_registry_service import SCHEDULED_TASKS
@@ -35,16 +38,23 @@ from app.use_cases.feature_store.compare_runs import (
     CompareRunsQuery,
 )
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
-from app.wiring.bootstrap import get_group_rank_service, get_task_registry_service
+from app.utils.market_hours import to_eastern_date
+from app.wiring.bootstrap import (
+    get_group_rank_service,
+    get_market_calendar_service,
+    get_task_registry_service,
+)
 
 from .models import (
     BreadthSnapshotArgs,
     CandidateFilters,
     CompareFeatureRunsArgs,
     DailyDigestArgs,
+    EarningsLookupArgs,
     ExplainSymbolArgs,
     FindCandidatesArgs,
     GroupRankingsArgs,
+    MarketCalendarStatusArgs,
     MarketOverviewArgs,
     StockLookupArgs,
     StockSnapshotArgs,
@@ -116,6 +126,27 @@ _SUPPORTED_SORT_FIELDS = {
 }
 _MARKET_OVERVIEW_TASK_LIMIT = max(5, len(SUPPORTED_MARKETS))
 
+# Names reported next to the stored observation. They identify the canonical
+# modules to a consumer; neither module exports a source constant, so the values
+# are literals here and have to be kept in step with the module names.
+_EARNINGS_SOURCE = "xang_yahoo_calendar"
+_CALENDAR_SOURCE = "xang_market_calendar_service"
+
+
+class ToolSourceUnavailable(RuntimeError):
+    """A canonical source could not answer; the tool must fail closed.
+
+    Raised instead of returning a half-filled payload: a caller must not read
+    a ``last_completed_trading_day`` or an ``available`` flag off a source that
+    did not respond. ``call_tool`` turns this into an ``isError`` response with
+    the given code and a message that carries no internal detail.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -142,9 +173,15 @@ class MarketCopilotService:
         self,
         session_factory: sessionmaker,
         app_settings: Any = settings,
+        calendar_service: Any = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._settings = app_settings
+        # The canonical calendar is resolved lazily: importing the service must
+        # not require a calendar data tree, and tests inject their own.
+        self._calendar_service = calendar_service
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._tool_specs: dict[str, ToolSpec] = {
             spec.name: spec
             for spec in (
@@ -221,6 +258,27 @@ class MarketCopilotService:
                     handler=self._breadth_snapshot,
                 ),
                 ToolSpec(
+                    name="market_calendar_status",
+                    description=(
+                        "Return the canonical market-calendar facts for one market: market_now, "
+                        "market_date, is_trading_day, is_market_open and "
+                        "last_completed_trading_day, the session a published run must carry. "
+                        "Read-only; no trading decision."
+                    ),
+                    args_model=MarketCalendarStatusArgs,
+                    handler=self._market_calendar_status,
+                ),
+                ToolSpec(
+                    name="earnings_lookup",
+                    description=(
+                        "Read the stored earnings-calendar observation for one symbol: next_earnings_date, "
+                        "event_calendar_as_of_date, freshness_status, date_confirmation and machine-readable "
+                        "reasons. Missing or stale facts are named, never filled in."
+                    ),
+                    args_model=EarningsLookupArgs,
+                    handler=self._earnings_lookup,
+                ),
+                ToolSpec(
                     name="daily_digest",
                     description="Return the full daily digest including market stance, leaders, themes, watchlist highlights, and risk notes.",
                     args_model=DailyDigestArgs,
@@ -258,7 +316,18 @@ class MarketCopilotService:
             return self._tool_error(
                 f"Invalid arguments for {name}",
                 code="invalid_arguments",
-                details={"errors": exc.errors()},
+                # loc/msg/type only: ctx carries the original exception object,
+                # which the JSON envelope cannot serialise.
+                details={
+                    "errors": [
+                        {
+                            "loc": list(error.get("loc", ())),
+                            "msg": error.get("msg"),
+                            "type": error.get("type"),
+                        }
+                        for error in exc.errors()
+                    ]
+                },
             )
 
         try:
@@ -297,6 +366,14 @@ class MarketCopilotService:
                 code="invalid_arguments",
                 details={"message": str(exc)},
             )
+        except ToolSourceUnavailable as exc:
+            # The message is written for the caller; the cause belongs in the
+            # log, otherwise an expired calendar and a missing data root look
+            # identical from the outside.
+            logger.warning(
+                "%s unavailable (%s)", name, exc.code, exc_info=exc.__cause__ or exc
+            )
+            return self._tool_error(exc.message, code=exc.code)
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.exception("Unhandled MCP tool failure for %s", name)
             return self._tool_error(
@@ -313,6 +390,340 @@ class MarketCopilotService:
             ],
             "structuredContent": payload,
         }
+
+    # ------------------------------------------------------------------
+    # Canonical calendar and stored earnings facts (read-only)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _calendar_unavailable(
+        message: str = "The canonical market calendar could not be loaded.",
+    ) -> ToolSourceUnavailable:
+        """Build the one error every calendar failure reports."""
+        return ToolSourceUnavailable("calendar_unavailable", message)
+
+    def _calendar(self) -> Any:
+        """Return the canonical calendar service.
+
+        The process-scoped instance is built by the process lifecycle - the
+        FastAPI lifespan, the Celery worker and the stdio entry point all call
+        ``initialize_process_runtime_services()`` - so the resolver is the only
+        way to reach it. There is no second, privately built calendar; the
+        constructor argument stays for tests that inject a double.
+        """
+        if self._calendar_service is not None:
+            return self._calendar_service
+        return get_market_calendar_service()
+
+    def _calendar_error(self, market: str, exc: BaseException) -> ToolSourceUnavailable:
+        """Log the cause and report the one calendar failure code."""
+        # The message is written for the caller; the cause belongs in the log,
+        # otherwise an expired calendar and a missing data root look identical.
+        logger.warning(
+            "calendar lookup failed for %s: %s",
+            market,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return self._calendar_unavailable(
+            "The canonical market calendar could not answer for this market."
+        )
+
+    def _earnings_reference_date(self, symbol: str, now: datetime) -> tuple[date, str]:
+        """Calendar date the earnings freshness is measured against.
+
+        Returns the date and the basis it came from: ``market`` when the
+        symbol's own market answered, ``eastern`` for a plain US ticker, and
+        ``eastern_fallback`` when a suffixed symbol's calendar was unavailable
+        and the Eastern date had to stand in. The basis travels to the caller so
+        a successful answer cannot be mistaken for market-local evidence.
+        """
+        market = market_symbol_suffix_registry.market_for_symbol(symbol)
+        if market is None:
+            return to_eastern_date(now), "eastern"
+        try:
+            market_date = self._calendar().market_now(market, now=now).date()
+        except Exception as exc:  # noqa: BLE001 - the read must stay available
+            logger.warning(
+                "market date for %s (%s) unavailable, using the Eastern date: %s",
+                symbol,
+                market,
+                type(exc).__name__,
+            )
+            return to_eastern_date(now), "eastern_fallback"
+        return market_date, "market"
+
+    def _now(self) -> datetime:
+        current = self._now_provider()
+        return current if current.tzinfo is not None else current.replace(tzinfo=UTC)
+
+    def _market_calendar_status(self, args: MarketCalendarStatusArgs) -> ToolEnvelope:
+        """Return the canonical calendar facts the run-freshness check needs.
+
+        ``last_completed_trading_day`` is the day a published run must carry: a
+        run is published after the close, so while a session is running the
+        newest run that can exist belongs to the previous session. Judging
+        freshness against anything later would call that run stale for the whole
+        session. ``is_market_open`` answers "a session is running now" for
+        consumers that need it; it does not change what counts as fresh.
+        """
+
+        # Resolving the calendar is a lookup of its own: the process-scoped
+        # service builds the coverage registry on first use, and a malformed
+        # manifest raises CalendarManifestError - a ValueError. It must not be
+        # reported as a bad market, so it is guarded separately.
+        try:
+            calendar = self._calendar()
+        except Exception as exc:  # noqa: BLE001 - provider/catalog drift
+            raise self._calendar_error(args.market, exc) from exc
+
+        try:
+            market = calendar.normalize_market(args.market)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported market: {args.market}") from exc
+        except Exception as exc:  # noqa: BLE001 - provider/catalog drift
+            raise self._calendar_error(args.market, exc) from exc
+
+        now = self._now()
+        try:
+            market_now = calendar.market_now(market, now=now)
+            market_date = market_now.date()
+            is_trading_day = bool(calendar.is_trading_day(market, market_date))
+            last_completed = calendar.last_completed_trading_day(market, now=now)
+            market_timezone = str(calendar.market_timezone(market))
+            is_open = bool(calendar.is_market_open(market, now=now))
+        except Exception as exc:  # noqa: BLE001 - missing coverage, provider drift
+            raise self._calendar_error(market, exc) from exc
+
+        if is_open:
+            summary = (
+                f"{market} is in session on {market_date.isoformat()}; the last completed "
+                f"session is {last_completed.isoformat()}."
+            )
+        elif is_trading_day:
+            summary = (
+                f"{market} has a session on {market_date.isoformat()} that is not open now; "
+                f"the last completed session is {last_completed.isoformat()}."
+            )
+        else:
+            summary = (
+                f"{market} has no session on {market_date.isoformat()}; the last completed "
+                f"session is {last_completed.isoformat()}."
+            )
+
+        payload = {
+            "market": market,
+            "market_timezone": market_timezone,
+            "market_now": market_now.isoformat(),
+            "market_date": market_date.isoformat(),
+            "is_trading_day": is_trading_day,
+            "is_market_open": is_open,
+            "last_completed_trading_day": last_completed.isoformat(),
+            "calendar_source": _CALENDAR_SOURCE,
+        }
+
+        facts = self._facts(
+            {key: value for key, value in payload.items() if key != "calendar_source"},
+            _CALENDAR_SOURCE,
+            as_of=market_date,
+            key_dates={"last_completed_trading_day": last_completed},
+        )
+
+        return self._envelope(
+            summary,
+            facts=facts,
+            citations=[
+                self._citation(
+                    _CALENDAR_SOURCE,
+                    "canonical market calendar",
+                    f"market={market}, day={market_date.isoformat()}",
+                    market_date,
+                )
+            ],
+            next_actions=[],
+            freshness=self._freshness(
+                market_date,
+                generated_at=now,
+                market_calendar=_CALENDAR_SOURCE,
+            ),
+            **payload,
+        )
+
+    def _earnings_lookup(self, args: EarningsLookupArgs) -> ToolEnvelope:
+        """Read one stored earnings observation; never fetch, never guess.
+
+        The freshness verdict comes from ``app.services.yahoo_earnings_calendar``
+        - the same module the scanners use. This handler only names *which*
+        side of the window was missed; it re-derives no threshold.
+
+        Contract notes (kept from the temporary gateway, deviations named):
+
+        * ``available`` answers "is there a usable observation", not "is a date
+          known": a fresh observation that knows of no upcoming date is
+          ``available=True`` with
+          ``reasons=["no_upcoming_earnings_date", "date_confirmation_unrecorded"]``.
+        * ``date_confirmation`` stays ``unknown``: ``stock_fundamentals`` stores
+          no confirmation proof, so neither ``confirmed`` nor ``estimated`` can
+          be claimed.
+        * Deviations from the gateway: a malformed symbol and an unreadable
+          database are ``isError`` responses here (``invalid_arguments`` /
+          ``database_unavailable``) instead of a success payload, because a
+          consumer must not read a filled-in envelope off a failed lookup.
+        """
+
+        rules = yahoo_earnings_calendar
+        now = self._now()
+        # Freshness is judged in the symbol's own market date: 0700.HK at 08:00
+        # HKT must not be measured against the previous Eastern date. A plain
+        # US ticker has no suffix and keeps the Eastern date the scanners use.
+        reference, reference_basis = self._earnings_reference_date(args.symbol, now)
+
+        payload: dict[str, Any] = {
+            "symbol": args.symbol,
+            "next_earnings_date": None,
+            "event_calendar_as_of_date": None,
+            "source": _EARNINGS_SOURCE,
+            "freshness_status": "unknown",
+            "date_confirmation": "unknown",
+            "available": False,
+            "reasons": [],
+            "generated_at": now.isoformat(),
+            "freshness_reference_date": reference.isoformat(),
+            "freshness_reference_basis": reference_basis,
+            "event_calendar_max_age_days": rules.EVENT_CALENDAR_MAX_AGE_DAYS,
+            "event_calendar_producer_refresh_after_days": (
+                rules.EVENT_CALENDAR_PRODUCER_REFRESH_AFTER_DAYS
+            ),
+            "event_calendar_future_tolerance_days": rules.EVENT_CALENDAR_FUTURE_TOLERANCE_DAYS,
+        }
+
+        try:
+            with self._session_scope() as db:
+                row = (
+                    db.query(StockFundamental)
+                    .filter(StockFundamental.symbol == args.symbol)
+                    .first()
+                )
+        except Exception as exc:  # noqa: BLE001 - fail closed on every driver error
+            logger.warning("earnings lookup failed for %s: %s", args.symbol, type(exc).__name__)
+            raise ToolSourceUnavailable(
+                "database_unavailable",
+                "The stored earnings observation could not be read.",
+            ) from exc
+
+        if row is None:
+            payload["reasons"].append("symbol_not_found")
+            summary = f"No stored earnings observation exists for {args.symbol}."
+        else:
+            observed = row.event_calendar_as_of_date
+            if observed is None:
+                payload["reasons"].append("observation_date_missing")
+                summary = (
+                    f"{args.symbol} has no event-calendar observation date; the freshness is unknown."
+                )
+            else:
+                payload["event_calendar_as_of_date"] = observed.isoformat()
+                age_days = (reference - observed).days
+                payload["observation_age_days"] = age_days
+
+                if not rules.is_event_calendar_observation_fresh(observed, reference_date=reference):
+                    # The canonical rule decides; the branch only names the side.
+                    if age_days > rules.EVENT_CALENDAR_MAX_AGE_DAYS:
+                        payload["freshness_status"] = "stale"
+                        payload["reasons"].append("observation_stale")
+                        summary = (
+                            f"The earnings observation for {args.symbol} is {age_days} days old "
+                            f"and no longer counts as evidence."
+                        )
+                    else:
+                        payload["freshness_status"] = "invalid"
+                        payload["reasons"].append("observation_date_in_future")
+                        summary = (
+                            f"The earnings observation for {args.symbol} is dated in the future, "
+                            "beyond the accepted tolerance."
+                        )
+                else:
+                    payload["freshness_status"] = "ok"
+                    stored_next, is_evidence = rules.persisted_next_earnings_date(
+                        {
+                            "event_calendar_as_of_date": observed,
+                            "next_earnings_date": row.next_earnings_date,
+                        },
+                        as_of_date=reference,
+                    )
+                    if not is_evidence:
+                        # The column is a SQL date and the canonical helper
+                        # treats a missing date as usable evidence, so the only
+                        # remaining cause is a date before the reference date.
+                        # With a weekly producer cadence that is a normal state,
+                        # not damaged storage: report it as stale.
+                        payload["freshness_status"] = "stale"
+                        payload["reasons"].append("earnings_date_in_past")
+                        summary = (
+                            f"The earnings observation for {args.symbol} is current, but its stored "
+                            f"date {row.next_earnings_date.isoformat()} has already passed."
+                        )
+                    elif stored_next is None:
+                        payload["available"] = True
+                        payload["reasons"].extend(
+                            ["no_upcoming_earnings_date", "date_confirmation_unrecorded"]
+                        )
+                        summary = (
+                            f"The earnings observation for {args.symbol} is current and reports no "
+                            "upcoming date."
+                        )
+                    else:
+                        payload["next_earnings_date"] = stored_next.isoformat()
+                        payload["available"] = True
+                        payload["reasons"].append("date_confirmation_unrecorded")
+                        summary = (
+                            f"The earnings observation for {args.symbol} is current; the next stored "
+                            f"date is {stored_next.isoformat()}, unconfirmed."
+                        )
+
+        fact_keys = (
+            "symbol",
+            "freshness_status",
+            "date_confirmation",
+            "available",
+            "event_calendar_as_of_date",
+            "next_earnings_date",
+            "observation_age_days",
+        )
+        facts = self._facts(
+            {key: payload[key] for key in fact_keys if payload.get(key) is not None},
+            _EARNINGS_SOURCE,
+        )
+
+        next_actions: list[str] = []
+        if payload["freshness_status"] == "stale":
+            next_actions.append(
+                "Refresh the fundamentals snapshot before treating this date as evidence."
+            )
+        elif payload["freshness_status"] == "invalid":
+            next_actions.append("Inspect the stored event-calendar observation for this symbol.")
+        elif not payload["available"]:
+            next_actions.append("No usable observation is stored for this symbol.")
+
+        return self._envelope(
+            summary,
+            facts=facts,
+            citations=[
+                self._citation(
+                    "stock_fundamentals",
+                    "stored event-calendar observation",
+                    f"symbol={args.symbol}",
+                    payload["event_calendar_as_of_date"],
+                )
+            ],
+            next_actions=next_actions,
+            freshness=self._freshness(
+                None,
+                generated_at=now,
+                earnings_calendar=_EARNINGS_SOURCE,
+                fundamentals="stock_fundamentals",
+            ),
+            **payload,
+        )
 
     def _market_overview(self, args: MarketOverviewArgs) -> ToolEnvelope:
         selected_as_of = args.as_of_date
@@ -1928,6 +2339,20 @@ class MarketCopilotService:
             **extra,
         )
 
+    def _facts(
+        self,
+        values: dict[str, Any],
+        source: str,
+        *,
+        as_of: date | None = None,
+        key_dates: dict[str, date] | None = None,
+    ) -> list[ToolFact]:
+        """Build one fact per value, keeping the dictionary's order."""
+        return [
+            self._fact(key, value, source, (key_dates or {}).get(key, as_of))
+            for key, value in values.items()
+        ]
+
     def _fact(self, key: str, value: Any, source: str, as_of: date | None = None) -> ToolFact:
         return ToolFact(
             key=key,
@@ -1950,9 +2375,15 @@ class MarketCopilotService:
             as_of=self._as_of_string(as_of),
         )
 
-    def _freshness(self, as_of_date: date | None = None, **sources: str | None) -> ToolFreshness:
+    def _freshness(
+        self,
+        as_of_date: date | None = None,
+        *,
+        generated_at: datetime | None = None,
+        **sources: str | None,
+    ) -> ToolFreshness:
         return ToolFreshness(
-            generated_at=datetime.now(UTC).isoformat(),
+            generated_at=(generated_at or datetime.now(UTC)).isoformat(),
             as_of_date=as_of_date.isoformat() if isinstance(as_of_date, date) else None,
             sources=sources,
         )
