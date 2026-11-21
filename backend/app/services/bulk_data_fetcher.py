@@ -1135,7 +1135,8 @@ class BulkDataFetcher:
                 break
 
             # Short-circuit doomed batches when the per-market breaker is open.
-            if market is not None and breaker.check("yfinance", market) == "open":
+            breaker_state = breaker.check("yfinance", market) if market is not None else "closed"
+            if breaker_state == "open":
                 logger.warning(
                     "Yahoo circuit open for market=%s; skipping remaining %d batches",
                     market, total_batches - batch_num,
@@ -1212,8 +1213,13 @@ class BulkDataFetcher:
 
             # Batch-level backoff: if >50% of batch hit rate limits, back off
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0
-            if batch_failure_rate > 0.5:
+            # A closed circuit trips on mostly rate-limited batches; a probe
+            # batch fails on any 429, or the circuit would stay half-open.
+            if batch_failure_rate > 0.5 or (
+                breaker_state == "half_open_probe" and batch_rate_limit_failures
+            ):
                 breaker.record_429("yfinance", market)
+            if batch_failure_rate > 0.5:
                 consecutive_backoffs += 1
                 backoff_time = min(
                     backoff_base_s * (backoff_factor ** (consecutive_backoffs - 1)),

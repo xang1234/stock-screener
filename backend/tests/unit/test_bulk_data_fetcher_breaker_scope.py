@@ -13,10 +13,10 @@ from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.provider_circuit_breaker import ProviderCircuitBreaker
 
 
-def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size):
+def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=None):
     monkeypatch.setattr(settings, "circuit_breaker_enabled", True)
     monkeypatch.setattr(settings, "circuit_breaker_threshold", 3)
-    breaker = ProviderCircuitBreaker(redis_client_factory=lambda: None)
+    breaker = breaker or ProviderCircuitBreaker(redis_client_factory=lambda: None)
     monkeypatch.setattr(breaker_module, "get_circuit_breaker", lambda: breaker)
 
     policy_429s = []
@@ -80,3 +80,21 @@ def test_consecutive_rate_limited_batches_open_breaker(monkeypatch):
 
     assert fetched_batches == [symbols[:10], symbols[10:20], symbols[20:30]]
     assert all(results[s]["error"] == "circuit_open" for s in symbols[30:])
+
+
+def test_half_open_probe_with_one_429_reopens_instead_of_sticking(monkeypatch):
+    monkeypatch.setattr(settings, "circuit_breaker_enabled", True)
+    monkeypatch.setattr(settings, "circuit_breaker_threshold", 3)
+    breaker = ProviderCircuitBreaker(redis_client_factory=lambda: None)
+    for _ in range(3):
+        breaker.record_429("yfinance", "US")
+    entry = breaker._fallback_state[breaker.state_key("yfinance", "US")]
+    entry["opened_at"] -= breaker.cooldown_s("US")  # cooldown elapsed: next check probes
+
+    symbols = ["S00", "S01", "S02", "S03"]
+    _fetch_fundamentals(monkeypatch, symbols, rate_limited={"S00"}, batch_size=4, breaker=breaker)
+
+    # The failed probe reopened the circuit, so after another cooldown it
+    # probes again. A stuck half-open circuit would answer "open" forever.
+    entry["opened_at"] -= breaker.cooldown_s("US")
+    assert breaker.check("yfinance", "US") == "half_open_probe"
