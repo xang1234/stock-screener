@@ -13,7 +13,8 @@ from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.provider_circuit_breaker import ProviderCircuitBreaker
 
 
-def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=None):
+def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=None, sleeps=None,
+                        error="429 Too Many Requests"):
     monkeypatch.setattr(settings, "circuit_breaker_enabled", True)
     monkeypatch.setattr(settings, "circuit_breaker_threshold", 3)
     breaker = breaker or ProviderCircuitBreaker(redis_client_factory=lambda: None)
@@ -28,14 +29,14 @@ def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=
             record_429=lambda *args: policy_429s.append(args),
         ),
     )
-    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    monkeypatch.setattr(time, "sleep", (sleeps if sleeps is not None else []).append)
 
     fetched_batches = []
 
     def fake_tickers(symbols_str, **_kwargs):
         batch = symbols_str.split()
         fetched_batches.append(batch)
-        return SimpleNamespace(tickers={s: _Ticker(s, rate_limited) for s in batch})
+        return SimpleNamespace(tickers={s: _Ticker(s, rate_limited, error) for s in batch})
 
     monkeypatch.setattr(yf, "Tickers", fake_tickers)
     no_wait = SimpleNamespace(wait_for_market=lambda *a, **k: None, wait=lambda *a, **k: None)
@@ -50,13 +51,14 @@ def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=
 
 
 class _Ticker:
-    def __init__(self, symbol, rate_limited):
+    def __init__(self, symbol, rate_limited, error):
         self._rate_limited = symbol in rate_limited
+        self._error = error
 
     @property
     def info(self):
         if self._rate_limited:
-            raise RuntimeError("429 Too Many Requests")
+            raise RuntimeError(self._error)
         return {"marketCap": 1_000_000}
 
 
@@ -74,12 +76,16 @@ def test_scattered_429s_do_not_open_breaker(monkeypatch):
 
 def test_consecutive_rate_limited_batches_open_breaker(monkeypatch):
     symbols = [f"S{i:02d}" for i in range(40)]
+    sleeps = []
     results, fetched_batches, _ = _fetch_fundamentals(
-        monkeypatch, symbols, rate_limited=set(symbols[:30]), batch_size=10
+        monkeypatch, symbols, rate_limited=set(symbols[:30]), batch_size=10, sleeps=sleeps
     )
 
     assert fetched_batches == [symbols[:10], symbols[10:20], symbols[20:30]]
     assert all(results[s]["error"] == "circuit_open" for s in symbols[30:])
+    # No backoff after the batch that opened the circuit: a sleep as long as
+    # the cooldown would let the next batch run as a probe instead of skipping.
+    assert sleeps == [60, 120]
 
 
 def test_half_open_probe_with_one_429_reopens_instead_of_sticking(monkeypatch):
@@ -98,3 +104,19 @@ def test_half_open_probe_with_one_429_reopens_instead_of_sticking(monkeypatch):
     # probes again. A stuck half-open circuit would answer "open" forever.
     entry["opened_at"] -= breaker.cooldown_s("US")
     assert breaker.check("yfinance", "US") == "half_open_probe"
+
+
+def test_half_open_probe_where_every_symbol_fails_does_not_close_the_circuit(monkeypatch):
+    monkeypatch.setattr(settings, "circuit_breaker_enabled", True)
+    monkeypatch.setattr(settings, "circuit_breaker_threshold", 3)
+    breaker = ProviderCircuitBreaker(redis_client_factory=lambda: None)
+    for _ in range(3):
+        breaker.record_429("yfinance", "US")
+    entry = breaker._fallback_state[breaker.state_key("yfinance", "US")]
+    entry["opened_at"] -= breaker.cooldown_s("US")
+
+    symbols = ["S00", "S01"]
+    _fetch_fundamentals(monkeypatch, symbols, rate_limited=set(symbols), batch_size=2,
+                        breaker=breaker, error="503 Service Unavailable")
+
+    assert entry["state"] != "closed"

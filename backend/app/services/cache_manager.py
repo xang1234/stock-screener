@@ -218,6 +218,7 @@ class CacheManager:
 
                 batch_to_store = {}
                 batch_failed = 0
+                batch_unfetchable = 0  # delisted or no data: neither throttled nor fetchable
                 for symbol, data in bulk_data.items():
                     if not data.get('has_error') and data.get('price_data') is not None:
                         price_df = data['price_data']
@@ -236,6 +237,8 @@ class CacheManager:
                         error_msg = data.get('error', 'No data')
                         if is_retryable_price_failure(kind=data.get('error_kind'), error=error_msg):
                             batch_failed += 1
+                        else:
+                            batch_unfetchable += 1
                         stats['errors'].append(f"{symbol}: {error_msg}")
                         logger.debug(f"✗ {symbol}: {error_msg}")
 
@@ -255,7 +258,8 @@ class CacheManager:
                 )
 
                 # Batch-level backoff: if >50% of batch failed retryably, likely rate-limited
-                batch_failure_rate = batch_failed / len(batch) if batch else 0
+                fetchable = len(batch) - batch_unfetchable
+                batch_failure_rate = batch_failed / fetchable if fetchable else 0
                 if batch_failure_rate > 0.5:
                     consecutive_backoffs += 1
                     backoff_time = min(60 * (2 ** (consecutive_backoffs - 1)), 480)  # 60, 120, 240, 480 max
