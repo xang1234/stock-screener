@@ -273,8 +273,8 @@ GUARDED_ROUTES = [
     ("POST", "/taxonomy/assign"),
     ("POST", "/taxonomy/assign/async"),
     ("PUT", "/taxonomy/1/reassign"),
-    ("GET", "/1/validate"),
-    ("GET", "/1/similar"),
+    ("POST", "/1/validate"),
+    ("POST", "/1/similar"),
 ]
 
 
@@ -304,6 +304,18 @@ async def test_route_returns_409_under_economic_authority(db_session, monkeypatc
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "economic_generation_endpoint_required"
     assert _clusters(db_session) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/1/validate", "/1/similar"])
+async def test_writing_routes_no_longer_accept_get(path):
+    # These write, so a GET (prefetch, crawler, cached link) must not reach them.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(f"/api/v1/themes{path}")
+
+    assert response.status_code == 405, response.text
 
 
 @pytest.mark.asyncio

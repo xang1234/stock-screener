@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -425,6 +426,94 @@ def test_generation_reuses_one_kimi_client_for_all_batch_records(
         assert all(record.claim_review["status"] == "unavailable" for record in records)
     assert all((record.grounding_context is not None) == grounded for record in records)
     assert len(created) == 1
+
+
+def test_generation_suppresses_its_own_telemetry_but_not_concurrent_extraction(
+    monkeypatch,
+):
+    from app.models.theme import ContentItem
+    from app.services import telemetry
+    from app.services.theme_extraction_service import ThemeExtractionService
+
+    recorded_languages = []
+    monkeypatch.setattr(
+        telemetry,
+        "get_telemetry",
+        lambda: SimpleNamespace(
+            record_extraction=lambda *_args, **kwargs: recorded_languages.append(
+                kwargs["language"]
+            )
+        ),
+    )
+
+    concurrent = ThemeExtractionService.__new__(ThemeExtractionService)
+    concurrent.provider = "litellm"
+    concurrent._rate_limit = lambda: None
+    concurrent._try_generate_litellm = lambda _prompt: "[]"
+
+    def concurrent_extraction():
+        concurrent.extract_from_content(
+            ContentItem(title="Orders", content="Orders rose.", source_language="ja"),
+            verify_claims=False,
+        )
+
+    class RuntimeExtractionService(ThemeExtractionService):
+        def __init__(self, _session, pipeline):
+            self.pipeline = pipeline
+            self.llm = SimpleNamespace(preset=SimpleNamespace(primary=None))
+
+        def _rate_limit(self):
+            return None
+
+        def _try_generate_litellm(self, _prompt):
+            worker = threading.Thread(target=concurrent_extraction)
+            worker.start()
+            worker.join()
+            return "[]"
+
+        def _review_claims(self, mentions, *_args):
+            return mentions
+
+    session = _Session()
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-kimi-key")
+    monkeypatch.setattr(runtime, "_open_evaluation_session", _fake_context(session))
+    monkeypatch.setattr(
+        "app.services.theme_extraction_service.ThemeExtractionService",
+        RuntimeExtractionService,
+    )
+    monkeypatch.setattr(runtime, "_KimiExtractionClient", lambda _api_key: object())
+
+    records = runtime.generate_extractions(
+        [
+            make_input(
+                source_id="post:1",
+                source_kind="post",
+                source_url="https://example.com/post/1",
+                title="Supplier orders",
+                text="Orders increased.",
+                language="en",
+                published_at=datetime(2026, 9, 8, tzinfo=timezone.utc),
+                available_at=datetime(2026, 9, 8, tzinfo=timezone.utc),
+                original_text_sha256=hashlib.sha256(b"Orders increased.").hexdigest(),
+                result_ids=[],
+                input_kind="original",
+                normalization_policy=None,
+                warnings=[],
+            )
+        ],
+        eval_database_url=EVAL_URL,
+        application_database_url=APP_URL,
+        reference_manifest=_reference(session),
+        model=runtime.MINIMAX_MODEL,
+        pipelines=["technical"],
+        max_documents=1,
+        code_revision="revision",
+        allow_model_calls=True,
+    )
+
+    assert [record.status for record in records] == ["success"]
+    assert recorded_languages == ["ja"]
 
 
 def test_kimi_extraction_session_header_is_stable_and_supports_an_explicit_id(monkeypatch):

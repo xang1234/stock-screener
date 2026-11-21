@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.exc import DatabaseError
 
-import app.api.v1.themes as themes_api
 import app.services.theme_content_recovery_service as recovery_service
 
 
@@ -58,7 +57,7 @@ def test_reset_corrupt_theme_content_storage_recreates_immediately_after_rewind(
         lambda conn: calls.append("recreate"),
     )
 
-    themes_api._reset_corrupt_theme_content_storage(
+    recovery_service.reset_corrupt_theme_content_storage(
         DatabaseError(
             "SELECT * FROM content_items",
             {},

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta
-from importlib import import_module
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,7 +18,10 @@ from ...services.theme_pipeline_state_service import (
     compute_pipeline_observability,
     compute_pipeline_state_health,
 )
-from ...theme_platform.content_browser_queries import render_content_items_csv_chunk
+from ...theme_platform.content_browser_queries import (
+    fetch_content_items_with_themes_with_recovery,
+    render_content_items_csv_chunk,
+)
 from ...theme_platform.contracts import PipelineRunStatusPayload
 from .themes_common import (
     _VALID_THEME_PIPELINES,
@@ -31,11 +33,6 @@ from .themes_common import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _themes_api_module():
-    """Load themes aggregate module to preserve monkeypatch-compatible call sites."""
-    return import_module("app.api.v1.themes")
 
 
 @router.post("/pipeline/run", dependencies=[Depends(reject_legacy_theme_writes)])
@@ -278,8 +275,7 @@ def list_content_items(
     if pipeline and pipeline not in _VALID_THEME_PIPELINES:
         raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
 
-    themes_api = _themes_api_module()
-    items, total = themes_api._fetch_content_items_with_themes_with_recovery(
+    items, total = fetch_content_items_with_themes_with_recovery(
         db,
         search=search,
         source_type=source_type,
@@ -317,7 +313,6 @@ def export_content_items(
     if pipeline and pipeline not in _VALID_THEME_PIPELINES:
         raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
 
-    themes_api = _themes_api_module()
     page_size = 500
 
     def _csv_stream():
@@ -326,7 +321,7 @@ def export_content_items(
         include_bom = True
 
         while True:
-            items, total = themes_api._fetch_content_items_with_themes_with_recovery(
+            items, total = fetch_content_items_with_themes_with_recovery(
                 db,
                 search=search,
                 source_type=source_type,
