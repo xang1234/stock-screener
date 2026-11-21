@@ -1115,17 +1115,19 @@ class PriceCacheService:
             current_holder = lock.get_any_current_holder()
 
             if current_holder and current_holder.get('task_name'):
-                # Lock is held — check heartbeat to determine state
-                hb_info = self._get_heartbeat_info()
+                # Lock is held — judge it by its own market's heartbeat.
+                market = current_holder.get('market')
+                hb_info = self._get_heartbeat_info(market)
 
                 if hb_info and hb_info.get('status') in ('completed', 'failed'):
                     # Task finished but lock not yet released (brief race window).
-                    # Force-release stale lock and fall through to SPY freshness check.
+                    # Release it if that task still holds it, then fall through
+                    # to the SPY freshness check.
                     logger.info(
                         f"Task heartbeat is terminal ({hb_info['status']}), "
-                        f"force-releasing stale lock"
+                        f"releasing stale lock"
                     )
-                    lock.force_release_all()
+                    lock.release(current_holder['task_id'], market)
                     # Fall through to SPY freshness check below
 
                 elif hb_info and hb_info.get('status') == 'running':
@@ -1159,7 +1161,7 @@ class PriceCacheService:
                                 "task_id": current_holder.get('task_id'),
                                 "task_name": current_holder.get('task_name'),
                                 "started_at": current_holder.get('started_at'),
-                                **self._get_task_progress()
+                                **self._get_task_progress(market)
                             },
                             "last_warmup": self._get_warmup_metadata()
                         }
@@ -1192,13 +1194,12 @@ class PriceCacheService:
 
                     # Lock held >= 2 min with no heartbeat.
                     # Check if warmup metadata shows completion after lock was acquired.
-                    warmup_meta = self._get_warmup_metadata()
+                    warmup_meta = self.get_warmup_metadata(market)
                     completed_at = parse_activity_timestamp((warmup_meta or {}).get('completed_at'))
                     if completed_at is not None and started_at is not None and completed_at > started_at:
                         # Task completed but lock is stale — release and fall through.
-                        # Use force_release_all() to clear whichever market key is held.
                         logger.info("Warmup completed after lock acquired, releasing stale lock")
-                        lock.force_release_all()
+                        lock.release(current_holder['task_id'], market)
                     else:
                         return {
                             "status": "stuck",

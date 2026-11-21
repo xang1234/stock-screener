@@ -92,6 +92,7 @@ def _health_with_lock_held(started_at, warmup_meta):
     service = PriceCacheService(redis_client=MagicMock(), session_factory=MagicMock())
     service._get_heartbeat_info = lambda *a, **k: None
     service._get_warmup_metadata = lambda: warmup_meta
+    service.get_warmup_metadata = lambda market=None: warmup_meta
     service._get_spy_last_date = lambda: None
     service._get_expected_data_date = lambda market: None
     lock = MagicMock()
@@ -123,5 +124,5 @@ def test_a_lock_outlived_by_its_completed_warmup_is_released(aware_completion):
         {"status": "completed", "completed_at": completed_at.isoformat()},
     )
 
-    lock.force_release_all.assert_called_once()
+    lock.release.assert_called_once_with("task-1", None)
     assert status["status"] == "stale"
