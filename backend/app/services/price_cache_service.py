@@ -922,10 +922,9 @@ class PriceCacheService:
         try:
             partial = self._freshness_policy.partial_session_day(now_et, calendar_market) is not None
         except Exception:
-            if calendar_market != "US":
-                warn_calendar_outage(
-                    logger, calendar_market, "Calendar unavailable for %s; marking fetch intraday"
-                )
+            warn_calendar_outage(
+                logger, calendar_market, "Calendar unavailable for %s; judging the fetch by the fallback session rule"
+            )
             partial = is_market_open(now_et) if calendar_market == "US" else True
         return {
             "fetch_timestamp": now_et.isoformat(),
@@ -1169,8 +1168,12 @@ class PriceCacheService:
                 # No running heartbeat. A terminal one may be an earlier run's, so
                 # judge the holder by its market's last warmup and its lock age.
                 completed_at = parse_activity_timestamp((held["last_warmup"] or {}).get('completed_at'))
-                if completed_at is not None and started_at is not None and completed_at > started_at:
-                    # Its warmup finished; the lock is released next.
+                if (
+                    completed_at is not None and started_at is not None and completed_at > started_at
+                    and datetime.now(timezone.utc) - completed_at < timedelta(minutes=30)
+                ):
+                    # Its warmup finished; the lock is released next. Past 30 min the
+                    # post-warmup work has hung while renewals kept the lease alive.
                     return {**updating, "message": f"Cache refresh finishing ({task_name})",
                             "task_running": task}
                 if started_at is not None and datetime.now(timezone.utc) - started_at < timedelta(minutes=2):

@@ -1013,3 +1013,13 @@ def test_unavailable_stored_row_check_does_not_vouch_for_the_dropped_bar():
     raw = _frame_with_nan_latest_close()
 
     assert service._unreplaced_rejected_rows({"AAPL": raw}, {"AAPL": raw.iloc[:-1]}) == {"AAPL"}
+
+
+def test_a_us_calendar_failure_on_the_write_path_warns(session_factory, caplog):
+    import app.services.price_cache_service as module
+
+    broken = _service(session_factory, _BrokenCalendar())
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        broken._fetch_metadata_payload("US", _utc(2026, 7, 2, 15, 0))
+
+    assert any("Calendar unavailable for US" in r.getMessage() for r in caplog.records)

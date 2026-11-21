@@ -165,14 +165,14 @@ class PriceCacheFreshnessPolicy:
                 return False
             return self.last_completed_trading_day(market, now) >= session_day
         except Exception as exc:
-            if market == US_MARKET:
-                return self._legacy_us_metadata_stale(meta, now)
             warn_calendar_outage(
                 self._logger,
                 market,
-                "Calendar unavailable for %s freshness; treating fetch metadata as stale: %s",
+                "Calendar unavailable for %s freshness; using the fallback rule: %s",
                 exc,
             )
+            if market == US_MARKET:
+                return self._legacy_us_metadata_stale(meta, now)
             return True
 
     @staticmethod

@@ -184,3 +184,21 @@ def test_an_earlier_runs_running_heartbeat_does_not_mark_a_new_lock_stuck(servic
     assert status["status"] == "updating"
     assert "can_force_cancel" not in status
     assert status["task_running"]["task_id"] == "hk-2"
+
+
+def test_a_lock_held_long_after_its_warmup_finished_is_stuck(service, lock, redis, monkeypatch):
+    # The warmup finished an hour ago, but post-warmup work hung while the
+    # renewal thread kept the lease alive.
+    def hours_ago(hours):
+        return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+    redis.values[_lock_key_for_market("US")] = f"refresh_us:us-1:{hours_ago(2)}"
+    monkeypatch.setattr(
+        service, "get_warmup_metadata",
+        lambda market=None: {"status": "completed", "completed_at": hours_ago(1)},
+    )
+
+    status = _health(service, lock)
+
+    assert status["status"] == "stuck"
+    assert status["can_force_cancel"] is True
