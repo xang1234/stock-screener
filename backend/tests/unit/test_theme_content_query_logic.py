@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api.v1.themes import _fetch_content_items_with_themes
+from app.theme_platform.content_browser_queries import _fetch_content_items_with_themes
 from app.infra.db.models.social_signals import ContentPipelineEligibility
 from app.models.theme import (
     ContentItem,
