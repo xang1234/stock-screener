@@ -1,0 +1,50 @@
+{
+  "description": "Row and condition cases that frontend/src/features/scan/filterExpressionEvaluator.js and stockscreen-mcp/src/stockscreen_mcp/screens.py must both match.",
+  "conditions": [
+    { "row": { "rs_rating": 80 }, "condition": { "field": "rs_rating", "kind": "range", "min": 70, "max": null }, "matches": true },
+    { "row": { "rs_rating": 70 }, "condition": { "field": "rs_rating", "kind": "range", "min": 70, "max": null }, "matches": true },
+    { "row": { "rs_rating": 69 }, "condition": { "field": "rs_rating", "kind": "range", "min": 70, "max": null }, "matches": false },
+    { "row": { "stage": 3 }, "condition": { "field": "stage", "kind": "range", "min": 2, "max": 2 }, "matches": false },
+    { "note": "Missing and null values never pass a range, even an open one.", "row": {}, "condition": { "field": "rs_rating", "kind": "range", "min": null, "max": null }, "matches": false },
+    { "row": { "rs_rating": null }, "condition": { "field": "rs_rating", "kind": "range", "min": 0, "max": null }, "matches": false },
+    { "note": "JS compares a non-numeric string to a number as NaN (false), so neither bound rejects it.", "row": { "rs_rating": "n/a" }, "condition": { "field": "rs_rating", "kind": "range", "min": 70, "max": 99 }, "matches": true },
+    { "note": "JS converts numeric strings for < and >.", "row": { "rs_rating": "50" }, "condition": { "field": "rs_rating", "kind": "range", "min": 70, "max": null }, "matches": false },
+    { "row": { "rs_rating": "80" }, "condition": { "field": "rs_rating", "kind": "range", "min": 70, "max": null }, "matches": true },
+    { "note": "Booleans need a real boolean, not a truthy string or number.", "row": { "ma_alignment": true }, "condition": { "field": "ma_alignment", "kind": "boolean", "value": true }, "matches": true },
+    { "row": { "ma_alignment": "true" }, "condition": { "field": "ma_alignment", "kind": "boolean", "value": true }, "matches": false },
+    { "row": { "ma_alignment": 1 }, "condition": { "field": "ma_alignment", "kind": "boolean", "value": true }, "matches": false },
+    { "row": { "flag": true }, "condition": { "field": "flag", "kind": "boolean", "value": 1 }, "matches": false },
+    { "note": "Categorical include and exclude; exclude lets missing values through.", "row": { "p": "cup" }, "condition": { "field": "p", "kind": "categorical", "values": ["cup"], "mode": "include" }, "matches": true },
+    { "row": { "p": null }, "condition": { "field": "p", "kind": "categorical", "values": ["cup"], "mode": "include" }, "matches": false },
+    { "row": { "p": "cup" }, "condition": { "field": "p", "kind": "categorical", "values": ["cup"], "mode": "exclude" }, "matches": false },
+    { "row": {}, "condition": { "field": "p", "kind": "categorical", "values": ["cup"], "mode": "exclude" }, "matches": true },
+    { "note": "Strict equality: true is not 1 in includes().", "row": { "p": 1 }, "condition": { "field": "p", "kind": "categorical", "values": [true], "mode": "include" }, "matches": false },
+    { "row": { "p": true }, "condition": { "field": "p", "kind": "categorical", "values": [1], "mode": "include" }, "matches": false },
+    { "row": { "p": 1.0 }, "condition": { "field": "p", "kind": "categorical", "values": [1], "mode": "include" }, "matches": true },
+    { "row": { "group": "Semiconductors" }, "condition": { "field": "group", "kind": "text", "pattern": "SEMI" }, "matches": true },
+    { "row": { "group": null }, "condition": { "field": "group", "kind": "text", "pattern": "semi" }, "matches": false },
+    { "note": "Field aliases used by the published presets.", "row": { "current_price": 12 }, "condition": { "field": "price", "kind": "range", "min": 10, "max": null }, "matches": true },
+    { "row": { "pct_day": 5 }, "condition": { "field": "price_change_1d", "kind": "range", "min": 4, "max": null }, "matches": true },
+    { "row": { "pct_week": 25 }, "condition": { "field": "perf_week", "kind": "range", "min": 20, "max": null }, "matches": true },
+    { "row": { "pct_month": 25 }, "condition": { "field": "perf_month", "kind": "range", "min": 20, "max": null }, "matches": true },
+    { "row": { "market_cap": 5000000000, "currency": "USD" }, "condition": { "field": "market_cap_usd", "kind": "range", "min": 1000000000, "max": null }, "matches": true },
+    { "row": { "market_cap": 5000000000, "currency": "HKD", "market": "HK" }, "condition": { "field": "market_cap_usd", "kind": "range", "min": 1000000000, "max": null }, "matches": false },
+    { "row": { "scan_mode": "listing_only" }, "condition": { "field": "listing_aware_volume", "kind": "range", "min": 100000000, "max": null }, "matches": true },
+    { "row": { "symbol": "NVDA", "company_name": "NVIDIA Corp" }, "condition": { "field": "listing_search", "kind": "text", "pattern": "nvidia" }, "matches": true },
+    { "note": "Unknown kinds never match.", "row": { "x": 1 }, "condition": { "field": "x", "kind": "weird" }, "matches": false }
+  ],
+  "expression": {
+    "required": { "match": "all", "conditions": [{ "field": "a", "kind": "range", "min": 1, "max": null }] },
+    "groups": [
+      { "enabled": true, "match": "all", "conditions": [{ "field": "b", "kind": "boolean", "value": true }] },
+      { "enabled": true, "match": "all", "conditions": [{ "field": "c", "kind": "boolean", "value": true }] }
+    ]
+  },
+  "expression_rows": [
+    { "group_join": "any", "row": { "a": 1, "b": true }, "matches": true },
+    { "group_join": "any", "row": { "a": 1 }, "matches": false },
+    { "group_join": "any", "row": { "a": 0, "b": true }, "matches": false },
+    { "group_join": "all", "row": { "a": 1, "b": true, "c": true }, "matches": true },
+    { "group_join": "all", "row": { "a": 1, "b": true }, "matches": false }
+  ]
+}

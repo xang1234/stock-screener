@@ -14,6 +14,8 @@ import logging
 from typing import Dict, Optional
 import pandas as pd
 
+from app.domain.scanning.scoring import CRITERION_MAX_POINTS_BY_SCREENER
+
 from .base_screener import (
     BaseStockScreener,
     DataRequirements,
@@ -35,6 +37,8 @@ class CANSLIMScanner(BaseStockScreener):
     Focuses on growth stocks with strong fundamentals, price momentum,
     and institutional support.
     """
+
+    CRITERION_MAX_POINTS = CRITERION_MAX_POINTS_BY_SCREENER["canslim"]
 
     @property
     def screener_name(self) -> str:
@@ -202,7 +206,7 @@ class CANSLIMScanner(BaseStockScreener):
         if not quarterly_growth or quarterly_growth.get('eps_growth_qq') is None:
             return {
                 "points": 0,
-                "max_points": 20,
+                "max_points": self.CRITERION_MAX_POINTS["current_earnings"],
                 "eps_growth_qq": None,
                 "passes": False,
                 "reason": "No quarterly EPS data"
@@ -224,7 +228,7 @@ class CANSLIMScanner(BaseStockScreener):
 
         return {
             "points": round(points, 2),
-            "max_points": 20,
+            "max_points": self.CRITERION_MAX_POINTS["current_earnings"],
             "eps_growth_qq": eps_growth,
             "passes": eps_growth >= 25,
             "reason": f"EPS growth Q/Q: {eps_growth:.1f}%"
@@ -247,7 +251,7 @@ class CANSLIMScanner(BaseStockScreener):
         if not quarterly_growth or quarterly_growth.get('eps_growth_yy') is None:
             return {
                 "points": 0,
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["annual_earnings"],
                 "eps_growth_yy": None,
                 "consistent_growth": False,
                 "passes": False,
@@ -275,7 +279,7 @@ class CANSLIMScanner(BaseStockScreener):
 
         return {
             "points": round(points, 2),
-            "max_points": 15,
+            "max_points": self.CRITERION_MAX_POINTS["annual_earnings"],
             "eps_growth_yy": round(eps_yy, 2) if eps_yy else 0,
             "consistent_growth": consistent,
             "passes": consistent,
@@ -312,7 +316,7 @@ class CANSLIMScanner(BaseStockScreener):
 
         return {
             "points": round(points, 2),
-            "max_points": 15,
+            "max_points": self.CRITERION_MAX_POINTS["new_highs"],
             "from_high_pct": round(from_high_pct, 2),
             "high_52w": high_52w,
             "passes": from_high_pct <= 15,
@@ -362,7 +366,7 @@ class CANSLIMScanner(BaseStockScreener):
 
             return {
                 "points": round(points, 2),
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["supply_demand"],
                 "volume_ratio": round(volume_ratio, 2),
                 "up_volume": int(up_volume),
                 "down_volume": int(down_volume),
@@ -374,7 +378,7 @@ class CANSLIMScanner(BaseStockScreener):
             logger.warning(f"Error calculating supply/demand: {e}")
             return {
                 "points": 0,
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["supply_demand"],
                 "volume_ratio": None,
                 "passes": False,
                 "reason": f"Error: {str(e)}"
@@ -403,7 +407,7 @@ class CANSLIMScanner(BaseStockScreener):
 
         return {
             "points": round(points, 2),
-            "max_points": 20,
+            "max_points": self.CRITERION_MAX_POINTS["leader"],
             "rs_rating": rs_rating,
             "passes": rs_rating >= 80,
             "reason": f"RS Rating: {rs_rating:.1f}"
@@ -424,7 +428,7 @@ class CANSLIMScanner(BaseStockScreener):
         if not fundamentals or fundamentals.get('institutional_ownership') is None:
             return {
                 "points": 0,
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["institutional"],
                 "ownership_pct": None,
                 "passes": False,
                 "reason": "No institutional ownership data"
@@ -451,7 +455,7 @@ class CANSLIMScanner(BaseStockScreener):
 
         return {
             "points": round(points, 2),
-            "max_points": 15,
+            "max_points": self.CRITERION_MAX_POINTS["institutional"],
             "ownership_pct": round(ownership_pct, 2),
             "passes": 40 <= ownership_pct <= 80,
             "reason": f"Institutional ownership: {ownership_pct:.1f}%"

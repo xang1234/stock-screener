@@ -434,7 +434,7 @@ class TestTopLevelLegacyForm:
         assert result.min_score == 75.0
 
     def test_nested_overrides_top_level(self):
-        """Mirrors CustomScanner._get_filters_config precedence."""
+        """Nested custom_filters keys win over top-level ones."""
         result = compile_custom_criteria(
             {
                 "price_min": 5,

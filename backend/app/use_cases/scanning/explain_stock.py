@@ -32,6 +32,7 @@ from app.domain.scanning.models import (
 )
 from app.domain.scanning.scoring import (
     BUY_THRESHOLD,
+    CRITERION_MAX_POINTS_BY_SCREENER,
     STRONG_BUY_THRESHOLD,
     WATCH_THRESHOLD,
 )
@@ -86,38 +87,6 @@ class ExplainStockResult:
 class ExplainStockUseCase:
     """Explain why a stock received its composite score and rating."""
 
-    # Known max-scores per screener per criterion (from scanner source).
-    # Screeners not listed here (e.g. "custom") get max_score=0.0.
-    _MAX_SCORES: dict[str, dict[str, float]] = {
-        "minervini": {
-            "rs_rating": 20,
-            "stage": 20,
-            "ma_alignment": 15,
-            "position_52w": 15,
-            "vcp": 20,
-        },
-        "canslim": {
-            "current_earnings": 20,
-            "annual_earnings": 15,
-            "new_highs": 15,
-            "supply_demand": 15,
-            "leader": 20,
-            "institutional": 15,
-        },
-        "ipo": {
-            "ipo_age": 25,
-            "performance_since_ipo": 25,
-            "price_stability": 20,
-            "volume_patterns": 15,
-            "revenue_growth": 15,
-        },
-        "volume_breakthrough": {
-            "five_year_high": 43,
-            "one_year_high": 43,
-            "since_ipo_high": 43,
-        },
-    }
-
     _RATING_THRESHOLDS: dict[str, float] = {
         "Strong Buy": STRONG_BUY_THRESHOLD,
         "Buy": BUY_THRESHOLD,
@@ -134,7 +103,8 @@ class ExplainStockUseCase:
 
         screener_explanations: list[ScreenerExplanation] = []
         for screener_name, output in item.screener_outputs.items():
-            max_scores_lookup = cls._MAX_SCORES.get(screener_name, {})
+            # Screeners without a table (e.g. "custom") get max_score=0.0.
+            max_scores_lookup = CRITERION_MAX_POINTS_BY_SCREENER.get(screener_name, {})
 
             criteria: list[CriterionResult] = []
             for criterion_name, raw_value in output.breakdown.items():

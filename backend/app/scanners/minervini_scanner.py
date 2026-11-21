@@ -9,6 +9,8 @@ All original criteria and scoring logic is preserved for backward compatibility.
 import logging
 from typing import Dict, Optional
 
+from app.domain.scanning.scoring import CRITERION_MAX_POINTS_BY_SCREENER
+
 from .base_screener import (
     BaseStockScreener,
     DataRequirements,
@@ -44,6 +46,8 @@ class MinerviniScanner(BaseStockScreener):
     7. Stage 2 uptrend (Weinstein)
     8. VCP pattern (optional but ideal)
     """
+
+    CRITERION_MAX_POINTS = CRITERION_MAX_POINTS_BY_SCREENER["minervini"]
 
     def __init__(self):
         """Initialize Minervini scanner with criteria calculators."""
@@ -562,7 +566,7 @@ class MinerviniScanner(BaseStockScreener):
         score += rs_points
         breakdown["rs_rating"] = {
             "points": round(rs_points, 2),
-            "max_points": 20,
+            "max_points": self.CRITERION_MAX_POINTS["rs_rating"],
             "value": rs_rating,
             "passes": rs_rating >= 70,
         }
@@ -579,7 +583,7 @@ class MinerviniScanner(BaseStockScreener):
         score += stage_points
         breakdown["stage"] = {
             "points": stage_points,
-            "max_points": 20,
+            "max_points": self.CRITERION_MAX_POINTS["stage"],
             "value": stage,
             "passes": stage == 2,
         }
@@ -591,7 +595,7 @@ class MinerviniScanner(BaseStockScreener):
         score += ma_points
         breakdown["ma_alignment"] = {
             "points": round(ma_points, 2),
-            "max_points": 15,
+            "max_points": self.CRITERION_MAX_POINTS["ma_alignment"],
             "value": ma_score,
             "passes": ma_analysis["meets_all_criteria"],
         }
@@ -606,7 +610,7 @@ class MinerviniScanner(BaseStockScreener):
         score += position_points
         breakdown["position_52w"] = {
             "points": position_points,
-            "max_points": 15,
+            "max_points": self.CRITERION_MAX_POINTS["position_52w"],
             "above_low": position_52w["above_low_pct"],
             "from_high": position_52w["from_high_pct"],
             "passes": position_52w["meets_low_criteria"] and position_52w["meets_high_criteria"],
@@ -618,7 +622,7 @@ class MinerviniScanner(BaseStockScreener):
             score += vcp_points
             breakdown["vcp"] = {
                 "points": round(vcp_points, 2),
-                "max_points": 20,
+                "max_points": self.CRITERION_MAX_POINTS["vcp"],
                 "value": vcp_result["vcp_score"],
                 "passes": vcp_result["vcp_detected"],
             }

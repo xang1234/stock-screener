@@ -27,6 +27,10 @@ from dataclasses import dataclass
 from .base_screener import BaseStockScreener, DataRequirements, ScreenerResult, StockData
 from .screener_registry import register_screener
 from .criteria.rs_resolution import CanonicalStockRsUnavailable, resolve_stock_rs
+from ..domain.scanning.custom_criteria_compiler import (
+    DEFAULT_CUSTOM_MIN_SCORE,
+    flatten_custom_filters,
+)
 from ..domain.scanning.mixed_market_policy import (
     REASON_MISSING_ADV_USD,
     REASON_MISSING_CAP_NATIVE,
@@ -83,7 +87,7 @@ class CustomScanner(BaseStockScreener):
         return "custom"
 
     def needs_overall_rs(self, criteria: Optional[Dict] = None) -> bool:
-        return self._get_filters_config(criteria).get("rs_rating_min") is not None
+        return flatten_custom_filters(criteria).get("rs_rating_min") is not None
 
     def get_data_requirements(self, criteria: Optional[Dict] = None) -> DataRequirements:
         """
@@ -96,7 +100,7 @@ class CustomScanner(BaseStockScreener):
             DataRequirements specifying needed data
         """
         # Parse criteria to determine what data we need
-        filters = self._get_filters_config(criteria)
+        filters = flatten_custom_filters(criteria)
 
         # Determine requirements based on filters
         needs_fundamentals = any([
@@ -141,8 +145,10 @@ class CustomScanner(BaseStockScreener):
             ScreenerResult with score, pass status, and details
         """
         # Get filter configuration
-        filters = self._get_filters_config(criteria)
-        min_score = criteria.get("min_score", 70) if criteria else 70
+        filters = flatten_custom_filters(criteria)
+        min_score = (criteria or {}).get("min_score")
+        if min_score is None:
+            min_score = DEFAULT_CUSTOM_MIN_SCORE
 
         # Extract data
         price_data = data.price_data
@@ -701,23 +707,6 @@ class CustomScanner(BaseStockScreener):
         )
 
     # Helper methods
-
-    def _get_filters_config(self, criteria: Optional[Dict]) -> Dict:
-        """Extract filter configuration from criteria."""
-        if not criteria:
-            return {}
-
-        # Support both top-level criteria keys and nested custom_filters
-        custom_filters = criteria.get("custom_filters", {})
-
-        # Merge with top-level keys (for backward compatibility)
-        filters = {**criteria, **custom_filters}
-
-        # Remove non-filter keys
-        filters.pop("custom_filters", None)
-        filters.pop("min_score", None)
-
-        return filters
 
     def _fail_closed(
         self,

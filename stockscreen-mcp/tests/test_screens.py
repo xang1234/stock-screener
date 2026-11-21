@@ -1,5 +1,7 @@
 """The evaluator mirrors frontend/src/features/scan/filterExpressionEvaluator.js."""
 
+import json
+
 import pytest
 
 from stockscreen_mcp.screens import (
@@ -12,60 +14,34 @@ from stockscreen_mcp.screens import (
     sort_rows,
 )
 
-from conftest import PRESETS, condition
+from conftest import PRESETS, REPO, condition
 
 
-@pytest.mark.parametrize(
-    ("row", "cond", "expected"),
-    [
-        ({"rs_rating": 80}, condition("rs_rating", "range", min=70, max=None), True),
-        ({"rs_rating": 70}, condition("rs_rating", "range", min=70, max=None), True),
-        ({"rs_rating": 69}, condition("rs_rating", "range", min=70, max=None), False),
-        ({"stage": 3}, condition("stage", "range", min=2, max=2), False),
-        # Missing and null values never pass a range, even an open one.
-        ({}, condition("rs_rating", "range", min=None, max=None), False),
-        ({"rs_rating": None}, condition("rs_rating", "range", min=0, max=None), False),
-        # JS compares a string to a number as NaN (false), so neither bound rejects it.
-        ({"rs_rating": "n/a"}, condition("rs_rating", "range", min=70, max=99), True),
-        # Booleans need a real boolean, not a truthy string.
-        ({"ma_alignment": True}, condition("ma_alignment", "boolean", value=True), True),
-        ({"ma_alignment": "true"}, condition("ma_alignment", "boolean", value=True), False),
-        ({"ma_alignment": 1}, condition("ma_alignment", "boolean", value=True), False),
-        # Categorical include / exclude; exclude lets missing values through.
-        ({"p": "cup"}, condition("p", "categorical", values=["cup"], mode="include"), True),
-        ({"p": None}, condition("p", "categorical", values=["cup"], mode="include"), False),
-        ({"p": "cup"}, condition("p", "categorical", values=["cup"], mode="exclude"), False),
-        ({}, condition("p", "categorical", values=["cup"], mode="exclude"), True),
-        # Field aliases used by the published presets.
-        ({"current_price": 12}, condition("price", "range", min=10, max=None), True),
-        ({"pct_day": 5}, condition("price_change_1d", "range", min=4, max=None), True),
-        ({"pct_week": 25}, condition("perf_week", "range", min=20, max=None), True),
-        ({"pct_month": 25}, condition("perf_month", "range", min=20, max=None), True),
-        ({"market_cap": 5e9, "currency": "USD"}, condition("market_cap_usd", "range", min=1e9, max=None), True),
-        ({"market_cap": 5e9, "currency": "HKD", "market": "HK"}, condition("market_cap_usd", "range", min=1e9, max=None), False),
-        ({"scan_mode": "listing_only"}, condition("listing_aware_volume", "range", min=1e8, max=None), True),
-        # Unknown kinds never match.
-        ({"x": 1}, condition("x", "weird"), False),
-    ],
-)
-def test_condition_matches_the_frontend(row, cond, expected):
-    assert evaluate_condition(row, cond) is expected
+def _contract(name):
+    # Shared with frontend/src/features/scan/filterExpression.test.js. Outside the
+    # repository checkout (an unpacked sdist) the cases are absent and these skip.
+    path = REPO / "contracts" / name
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
-def test_expression_requires_all_required_conditions_and_any_group():
-    expression = {
-        "required": {"match": "all", "conditions": [condition("a", "range", min=1, max=None)]},
-        "groups": [
-            {"enabled": True, "match": "all", "conditions": [condition("b", "boolean", value=True)]},
-            {"enabled": True, "match": "all", "conditions": [condition("c", "boolean", value=True)]},
-        ],
-        "group_join": "any",
-    }
-    assert evaluate_expression({"a": 1, "b": True}, expression)
-    assert not evaluate_expression({"a": 1}, expression)
-    assert not evaluate_expression({"a": 0, "b": True}, expression)
-    assert evaluate_expression({"a": 1, "b": True, "c": True}, expression | {"group_join": "all"})
-    assert not evaluate_expression({"a": 1, "b": True}, expression | {"group_join": "all"})
+CASES = _contract("scan_filter_condition_cases.json")
+TRUTH_TABLE = _contract("scan_filter_truth_table.json")
+
+
+@pytest.mark.parametrize("case", CASES.get("conditions", []))
+def test_condition_matches_the_frontend(case):
+    assert evaluate_condition(case["row"], case["condition"]) is case["matches"]
+
+
+@pytest.mark.parametrize("case", CASES.get("expression_rows", []))
+def test_expression_matches_the_frontend(case):
+    expression = CASES["expression"] | {"group_join": case["group_join"]}
+    assert evaluate_expression(case["row"], expression) is case["matches"]
+
+
+@pytest.mark.parametrize("case", TRUTH_TABLE.get("rows", []))
+def test_expression_matches_the_browser_and_backend_truth_table(case):
+    assert evaluate_expression(case["row"], TRUTH_TABLE["expression"]) is case["matches"]
 
 
 def test_presets_using_opportunity_state_fields_are_flagged():
@@ -126,23 +102,6 @@ def test_rating_sorts_by_rank_not_alphabetically(site_order):
 
 def test_caller_sorts_keep_rows_without_the_field_last():
     assert symbols(sort_rows(ROWS, "v", descending=True, site_order=False)) == ["B", "C", "D", "A", "E"]
-
-
-@pytest.mark.parametrize(
-    ("row", "cond", "expected"),
-    [
-        # JS converts numeric strings for < and >: "50" < 70 rejects the row.
-        ({"rs_rating": "50"}, condition("rs_rating", "range", min=70, max=None), False),
-        ({"rs_rating": "80"}, condition("rs_rating", "range", min=70, max=None), True),
-        # Strict equality: true is not 1 in includes() or ===.
-        ({"p": 1}, condition("p", "categorical", values=[True], mode="include"), False),
-        ({"p": True}, condition("p", "categorical", values=[1], mode="include"), False),
-        ({"p": 1.0}, condition("p", "categorical", values=[1], mode="include"), True),
-        ({"flag": True}, condition("flag", "boolean", value=1), False),
-    ],
-)
-def test_js_coercion_and_strict_equality(row, cond, expected):
-    assert evaluate_condition(row, cond) is expected
 
 
 @pytest.mark.parametrize(

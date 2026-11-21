@@ -69,6 +69,14 @@ const legacyCompatibilityUrl = new URL(
 const legacyCompatibilityPath = decodeURIComponent(legacyCompatibilityUrl.pathname)
   .replace(/^\/@fs\//, '/');
 const legacyCompatibility = JSON.parse(readFileSync(legacyCompatibilityPath, 'utf8'));
+// Shared with stockscreen-mcp/tests/test_screens.py.
+const conditionCasesUrl = new URL(
+  '../../../../contracts/scan_filter_condition_cases.json',
+  import.meta.url,
+);
+const conditionCasesPath = decodeURIComponent(conditionCasesUrl.pathname)
+  .replace(/^\/@fs\//, '/');
+const conditionCases = JSON.parse(readFileSync(conditionCasesPath, 'utf8'));
 
 describe('scan filter expressions', () => {
   it('canonicalizes malformed persisted collection shapes without crashing', () => {
@@ -324,5 +332,14 @@ describe('scan filter expressions', () => {
           .matched_groups.map((group) => group.id)).toEqual(item.matched_groups);
       }
     });
+  });
+
+  it.each(conditionCases.conditions)('matches the shared condition case %j', (item) => {
+    expect(evaluateCondition(item.row, item.condition)).toBe(item.matches);
+  });
+
+  it.each(conditionCases.expression_rows)('matches the shared expression case %j', (item) => {
+    const expression = { ...conditionCases.expression, group_join: item.group_join };
+    expect(evaluateExpression(item.row, expression)).toBe(item.matches);
   });
 });
