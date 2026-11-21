@@ -249,6 +249,7 @@ Return ONLY the JSON array, no other text."""
 
 class ThemeExtractionService:
     """Service for extracting themes from content using sanctioned LiteLLM providers."""
+    emit_telemetry = True
     DEFAULT_EXTRACTION_MAX_TOKENS = 2000
     HIGH_EXTRACTION_MAX_TOKENS = 4000
     PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
@@ -878,17 +879,18 @@ Example themes for this pipeline: {examples_str}
             # Best-effort — never breaks the extraction path. Market scope is
             # SHARED because language, not market, is the meaningful dimension
             # for theme extraction.
-            try:
-                from .telemetry import get_telemetry, SHARED_SENTINEL
-                get_telemetry().record_extraction(
-                    SHARED_SENTINEL,
-                    language=_telem_lang,
-                    success=_telem_success,
-                    latency_ms=int(time.time() * 1000) - _telem_start_ms,
-                    provider=self.provider,
-                )
-            except Exception:
-                pass
+            if self.emit_telemetry:
+                try:
+                    from .telemetry import get_telemetry, SHARED_SENTINEL
+                    get_telemetry().record_extraction(
+                        SHARED_SENTINEL,
+                        language=_telem_lang,
+                        success=_telem_success,
+                        latency_ms=int(time.time() * 1000) - _telem_start_ms,
+                        provider=self.provider,
+                    )
+                except Exception:
+                    pass
 
     def _review_claims(self, mentions, primary_text, context):
         from app.services.theme_claim_review import POLICY_VERSION, ClaimReviewError, review_claims

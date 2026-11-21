@@ -11,7 +11,6 @@ import asyncio
 import hashlib
 import json
 import os
-import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -39,7 +38,6 @@ _EXTRACTOR_SETTING_KEYS = (
     "reprocessing_max_age_days",
     "theme_policy_overrides",
 )
-_TELEMETRY_PATCH_LOCK = threading.RLock()
 
 
 class RuntimeUnavailable(RuntimeError):
@@ -287,11 +285,6 @@ def _validated_inputs(inputs: list[Any], max_documents: int) -> list[Any]:
     return values[:max_documents]
 
 
-class _NoopTelemetry:
-    def record_extraction(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-
 @contextmanager
 def _isolated_runtime_services(
     session_factory: Callable[[], Session],
@@ -331,24 +324,6 @@ class _PublicChoice(_PublicJson):
     def __init__(self, value: dict[str, Any], content: str):
         super().__init__(value)
         self.message = SimpleNamespace(content=content)
-
-
-@contextmanager
-def _isolated_telemetry() -> Iterator[None]:
-    """Prevent the production extractor's finally block from emitting telemetry."""
-
-    # ThemeExtractionService has no injection point for telemetry.  Its dynamic
-    # import makes this narrow, process-local replacement sufficient; the lock
-    # avoids leaking the no-op hook to concurrent production extraction calls.
-    from app.services import telemetry
-
-    with _TELEMETRY_PATCH_LOCK:
-        original = telemetry.get_telemetry
-        telemetry.get_telemetry = lambda: _NoopTelemetry()
-        try:
-            yield
-        finally:
-            telemetry.get_telemetry = original
 
 
 class _KimiExtractionClient:
@@ -621,6 +596,7 @@ def generate_extractions(
                     )
                     service.llm = route
                     service.provider = "litellm"
+                    service.emit_telemetry = False
                     item = ContentItem(
                         source_id=None,
                         source_type=extraction_input.source_kind,
@@ -633,10 +609,9 @@ def generate_extractions(
                         source_language=extraction_input.language,
                     )
                     try:
-                        with _isolated_telemetry():
-                            mentions = service.extract_from_content(
-                                item, grounding_context=context
-                            )
+                        mentions = service.extract_from_content(
+                            item, grounding_context=context
+                        )
                         records.append(
                             ExtractionRecord(
                                 input_id=extraction_input.input_id,
