@@ -8,6 +8,7 @@ US holiday (Independence Day observed) and an HK trading day; HK trades
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timezone
 
 import pandas as pd
@@ -154,6 +155,60 @@ def test_calendar_failure_makes_non_us_data_stale(session_factory):
     service = _service(session_factory, _BrokenCalendar())
 
     assert service._is_data_fresh(date(2026, 7, 3), market="HK") is False
+
+
+@pytest.mark.parametrize(
+    ("et_hour", "et_minute", "expected"),
+    [
+        (16, 15, date(2026, 11, 18)),  # inside the grace period: Wednesday's close
+        (16, 45, date(2026, 11, 19)),  # after 4:30 PM ET: today's close
+    ],
+)
+def test_us_calendar_failure_falls_back_to_the_us_clock_and_warns(
+    session_factory, monkeypatch, caplog, et_hour, et_minute, expected,
+):
+    import app.services.price_cache_service as module
+
+    now_et = module.EASTERN.localize(datetime(2026, 11, 19, et_hour, et_minute))  # Thursday
+    monkeypatch.setattr(module, "get_eastern_now", lambda: now_et)
+    _end_calendar_outage(session_factory, "US")
+    service = _service(session_factory, _BrokenCalendar())
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        assert service._get_expected_data_date("US") == expected
+
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+def _end_calendar_outage(session_factory, market):
+    """A successful lookup ends any calendar outage an earlier test left open."""
+    _service(session_factory, _FrozenCalendar(_utc(2026, 7, 3, 10, 0)))._get_expected_data_date(market)
+
+
+def test_a_calendar_outage_warns_once_per_market_until_a_lookup_succeeds(session_factory, caplog):
+    import app.services.price_cache_service as module
+
+    symbols = [f"S{i:04d}" for i in range(1000)]
+    db = session_factory()
+    db.add_all(
+        StockPrice(symbol=symbol, date=date(2026, 7, 2), open=1, high=1, low=1, close=1, adj_close=1, volume=1)
+        for symbol in symbols
+    )
+    db.commit()
+    db.close()
+    _end_calendar_outage(session_factory, "US")
+    broken = _service(session_factory, _BrokenCalendar())
+
+    def warnings_after_a_bulk_read():
+        broken.get_many_cached_only_fresh(symbols, period="2y", minimum_rows=1)
+        return sum("Calendar unavailable" in r.getMessage() for r in caplog.records)
+
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        assert warnings_after_a_bulk_read() == 1
+        assert warnings_after_a_bulk_read() == 1  # the same outage
+        _end_calendar_outage(session_factory, "US")
+        assert warnings_after_a_bulk_read() == 2  # a new outage
 
 
 def test_calendar_falls_back_to_standalone_service_outside_runtime(monkeypatch):
@@ -958,3 +1013,13 @@ def test_unavailable_stored_row_check_does_not_vouch_for_the_dropped_bar():
     raw = _frame_with_nan_latest_close()
 
     assert service._unreplaced_rejected_rows({"AAPL": raw}, {"AAPL": raw.iloc[:-1]}) == {"AAPL"}
+
+
+def test_a_us_calendar_failure_on_the_write_path_warns(session_factory, caplog):
+    import app.services.price_cache_service as module
+
+    broken = _service(session_factory, _BrokenCalendar())
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        broken._fetch_metadata_payload("US", _utc(2026, 7, 2, 15, 0))
+
+    assert any("Calendar unavailable for US" in r.getMessage() for r in caplog.records)

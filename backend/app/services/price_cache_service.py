@@ -34,7 +34,11 @@ from ..utils.market_hours import (
     is_trading_day, get_last_trading_day
 )
 from .cache.price_cache_failure_telemetry import PriceCacheFailureTelemetry
-from .cache.price_cache_freshness import PriceCacheFreshnessPolicy, latest_fetch_metadata
+from .cache.price_cache_freshness import (
+    PriceCacheFreshnessPolicy,
+    latest_fetch_metadata,
+    warn_calendar_outage,
+)
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from .cache.price_cache_warmup import PriceCacheWarmupStore
 from .cache.redis_codec import decode_frame, encode_frame
@@ -918,8 +922,9 @@ class PriceCacheService:
         try:
             partial = self._freshness_policy.partial_session_day(now_et, calendar_market) is not None
         except Exception:
-            if calendar_market != "US":
-                logger.warning("Calendar unavailable for %s; marking fetch intraday", calendar_market)
+            warn_calendar_outage(
+                logger, calendar_market, "Calendar unavailable for %s; judging the fetch by the fallback session rule"
+            )
             partial = is_market_open(now_et) if calendar_market == "US" else True
         return {
             "fetch_timestamp": now_et.isoformat(),
@@ -1064,9 +1069,11 @@ class PriceCacheService:
         2. If SPY is fresh, the warmup task ran successfully
         3. Single Redis lookup vs scanning thousands of symbols
 
+        Read-only: it reports a held data-fetch lock and never releases one.
+
         Returns 6 possible states:
         - fresh: Cache is up to date (SPY has expected date + last warmup complete)
-        - updating: Refresh task is currently running
+        - updating: A refresh task holds the lock (starting, running or finishing)
         - stuck: Task running but no progress for >30 minutes
         - partial: Last warmup incomplete (some symbols failed)
         - stale: SPY missing expected trading date
@@ -1115,111 +1122,73 @@ class PriceCacheService:
             current_holder = lock.get_any_current_holder()
 
             if current_holder and current_holder.get('task_name'):
-                # Lock is held — check heartbeat to determine state
-                hb_info = self._get_heartbeat_info()
+                # Report the held lock, judged by its own market; never release it.
+                # A dead holder's lease expires, worker startup clears stale locks,
+                # and POST /v1/cache/force-cancel or /v1/data-fetch/force-release-lock
+                # releases one on demand.
+                market = current_holder.get('market')
+                task_name = current_holder.get('task_name')
+                task = {
+                    "task_id": current_holder.get('task_id'),
+                    "task_name": task_name,
+                    "started_at": current_holder.get('started_at'),
+                    "market": market,
+                }
+                held = {
+                    "spy_last_date": None,
+                    "expected_date": None,
+                    "last_warmup": self.get_warmup_metadata(market),
+                }
+                stuck = {**held, "status": "stuck", "can_refresh": True, "can_force_cancel": True}
+                updating = {**held, "status": "updating", "can_refresh": False}
 
-                if hb_info and hb_info.get('status') in ('completed', 'failed'):
-                    # Task finished but lock not yet released (brief race window).
-                    # Force-release stale lock and fall through to SPY freshness check.
-                    logger.info(
-                        f"Task heartbeat is terminal ({hb_info['status']}), "
-                        f"force-releasing stale lock"
-                    )
-                    lock.force_release_all()
-                    # Fall through to SPY freshness check below
-
-                elif hb_info and hb_info.get('status') == 'running':
-                    minutes = hb_info.get('minutes')
+                started_at = parse_activity_timestamp(task["started_at"])
+                hb_info = self._get_heartbeat_info(market)
+                minutes = (hb_info or {}).get('minutes')
+                # A heartbeat older than the lock is an earlier run's (e.g. a holder
+                # that died mid-run), so it says nothing about this holder.
+                hb_predates_lock = (
+                    minutes is not None
+                    and started_at is not None
+                    and datetime.now(timezone.utc) - timedelta(minutes=minutes) < started_at
+                )
+                if hb_info and hb_info.get('status') == 'running' and not hb_predates_lock:
                     if minutes is not None and minutes > 30:
-                        # Running heartbeat but no progress for >30 min → stuck
                         return {
-                            "status": "stuck",
+                            **stuck,
                             "message": f"Task appears stuck (no progress for {int(minutes)} min)",
-                            "can_refresh": True,
-                            "can_force_cancel": True,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": current_holder.get('started_at'),
-                                "minutes_since_heartbeat": int(minutes)
-                            },
-                            "last_warmup": self._get_warmup_metadata()
+                            "task_running": {**task, "minutes_since_heartbeat": int(minutes)},
                         }
-                    else:
-                        # Task is actively running with recent heartbeat
-                        return {
-                            "status": "updating",
-                            "message": f"Cache refresh in progress ({current_holder.get('task_name')})",
-                            "can_refresh": False,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": current_holder.get('started_at'),
-                                **self._get_task_progress()
-                            },
-                            "last_warmup": self._get_warmup_metadata()
-                        }
+                    return {
+                        **updating,
+                        "message": f"Cache refresh in progress ({task_name})",
+                        "task_running": {**task, **self._get_task_progress(market)},
+                    }
 
-                else:
-                    # No heartbeat at all — use lock-age grace period
-                    started_at_str = current_holder.get('started_at')
-                    started_at = parse_activity_timestamp(started_at_str)
-                    lock_age_minutes = (
-                        None
-                        if started_at is None
-                        else (datetime.now(timezone.utc) - started_at).total_seconds() / 60
-                    )
+                # No running heartbeat. A terminal one may be an earlier run's, so
+                # judge the holder by its market's last warmup and its lock age.
+                completed_at = parse_activity_timestamp((held["last_warmup"] or {}).get('completed_at'))
+                if (
+                    completed_at is not None and started_at is not None and completed_at > started_at
+                    and datetime.now(timezone.utc) - completed_at < timedelta(minutes=30)
+                ):
+                    # Its warmup finished; the lock is released next. Past 30 min the
+                    # post-warmup work has hung while renewals kept the lease alive.
+                    return {**updating, "message": f"Cache refresh finishing ({task_name})",
+                            "task_running": task}
+                if started_at is not None and datetime.now(timezone.utc) - started_at < timedelta(minutes=2):
+                    return {**updating, "message": f"Cache refresh starting ({task_name})",
+                            "task_running": task}
+                return {
+                    **stuck,
+                    "message": "Task unresponsive (no heartbeat)",
+                    "task_running": {**task, "minutes_since_heartbeat": None},
+                }
 
-                    if lock_age_minutes is not None and lock_age_minutes < 2:
-                        # Lock acquired < 2 min ago, task is initializing
-                        return {
-                            "status": "updating",
-                            "message": f"Cache refresh starting ({current_holder.get('task_name')})",
-                            "can_refresh": False,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": started_at_str,
-                            },
-                            "last_warmup": self._get_warmup_metadata()
-                        }
-
-                    # Lock held >= 2 min with no heartbeat.
-                    # Check if warmup metadata shows completion after lock was acquired.
-                    warmup_meta = self._get_warmup_metadata()
-                    completed_at = parse_activity_timestamp((warmup_meta or {}).get('completed_at'))
-                    if completed_at is not None and started_at is not None and completed_at > started_at:
-                        # Task completed but lock is stale — release and fall through.
-                        # Use force_release_all() to clear whichever market key is held.
-                        logger.info("Warmup completed after lock acquired, releasing stale lock")
-                        lock.force_release_all()
-                    else:
-                        return {
-                            "status": "stuck",
-                            "message": "Task unresponsive (no heartbeat)",
-                            "can_refresh": True,
-                            "can_force_cancel": True,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": started_at_str,
-                                "minutes_since_heartbeat": None
-                            },
-                            "last_warmup": warmup_meta
-                        }
-
-            # No task running (or stale lock was released above) — check SPY freshness
+            # No task running — check SPY freshness
             spy_last_date = self._get_spy_last_date()
             expected_date = self._get_expected_data_date("US")
-            warmup_meta = self._get_warmup_metadata()
+            warmup_meta = self.get_warmup_metadata()
 
             if spy_last_date is None:
                 return {
@@ -1319,10 +1288,8 @@ class PriceCacheService:
         try:
             return self._freshness_policy.last_completed_trading_day(market)
         except Exception as exc:
-            if market == "US":
-                return self._legacy_us_expected_data_date()
-            logger.warning("Calendar unavailable for %s expected session: %s", market, exc)
-            return None
+            warn_calendar_outage(logger, market, "Calendar unavailable for %s expected session: %s", exc)
+            return self._legacy_us_expected_data_date() if market == "US" else None
 
     def _legacy_us_expected_data_date(self) -> Optional[date]:
         """
@@ -1330,11 +1297,11 @@ class PriceCacheService:
 
         Logic:
         - During market hours: Yesterday's close is sufficient
-        - After 5 PM on trading day: Today's close expected
+        - From 4:30 PM ET on trading day: Today's close expected
         - Before 9:30 AM on trading day: Yesterday's close is fine
         - Weekend/Holiday: Last trading day before today
 
-        Grace period: Between 4:00-5:00 PM, don't expect today's
+        Grace period: Between 4:00-4:29 PM, don't expect today's
         close yet (data providers may have delay).
 
         Returns:
@@ -1363,15 +1330,6 @@ class PriceCacheService:
 
         # Weekend or holiday: last trading day before today
         return get_last_trading_day(today - timedelta(days=1))
-
-    def _get_warmup_metadata(self) -> Optional[Dict]:
-        """
-        Get metadata from the last warmup operation.
-
-        Returns:
-            Dict with status, count, total, completed_at or None
-        """
-        return self._warmup_store.get_warmup_metadata()
 
     def get_warmup_metadata(self, market: Optional[str] = None) -> Optional[Dict]:
         """Public wrapper for last warmup metadata used by downstream scheduled tasks."""

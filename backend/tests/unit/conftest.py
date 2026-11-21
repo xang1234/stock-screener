@@ -186,3 +186,13 @@ def _stub_external_data(monkeypatch):
     redis_pool._bulk_pool = None
 
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_calendar_outage_carries_over():
+    """The calendar outage set is process-global; one test's outage must not mute the next."""
+    from app.services.cache import price_cache_freshness
+
+    price_cache_freshness._CALENDAR_OUTAGES.clear()
+    yield
+    price_cache_freshness._CALENDAR_OUTAGES.clear()
