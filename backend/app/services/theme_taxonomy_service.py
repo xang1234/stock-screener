@@ -711,8 +711,8 @@ class ThemeTaxonomyService:
                 l1_info = self._fallback_name_cluster(group)
                 consecutive_rate_limits += 1
                 logger.info("LLM naming cluster %d/%d: fallback", i, total)
-                # Back off harder on consecutive failures
-                if consecutive_rate_limits >= 3:
+                # Back off harder on consecutive failures; without an LLM there is nothing to wait for
+                if llm is not None and consecutive_rate_limits >= 3:
                     backoff = min(consecutive_rate_limits * 2.0, 30.0)
                     logger.info("Multiple consecutive fallbacks (%d), backing off %.1fs",
                                 consecutive_rate_limits, backoff)
