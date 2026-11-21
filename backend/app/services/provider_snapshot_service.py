@@ -153,8 +153,12 @@ class ProviderSnapshotService:
     # a fresh ``event_calendar_as_of_date`` satisfies completeness even when
     # ``next_earnings_date`` is null (a successful lookup with no upcoming
     # earnings), while a stale or absent observation keeps the symbol
-    # eligible for Yahoo hydration. Age window must stay in lockstep with
-    # the persisted-evidence gate in DataPreparationLayer.
+    # eligible for Yahoo hydration. Both age windows live in
+    # yahoo_earnings_calendar.py: this producer refreshes after
+    # EVENT_CALENDAR_PRODUCER_REFRESH_AFTER_DAYS (7), deliberately shorter
+    # than the EVENT_CALENDAR_MAX_AGE_DAYS (14) that DataPreparationLayer
+    # accepts, so a weekly run refreshes before scans reject the evidence.
+    # TestProducerRefreshThreshold in test_yahoo_earnings_calendar.py pins it.
     EVENT_CALENDAR_KEYS = (
         "event_calendar_as_of_date",
         "next_earnings_date",
