@@ -307,6 +307,18 @@ async def test_route_returns_409_under_economic_authority(db_session, monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/1/validate", "/1/similar"])
+async def test_writing_routes_no_longer_accept_get(path):
+    # These write, so a GET (prefetch, crawler, cached link) must not reach them.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(f"/api/v1/themes{path}")
+
+    assert response.status_code == 405, response.text
+
+
+@pytest.mark.asyncio
 async def test_rankings_read_skips_metric_recalculation_while_writes_are_fenced(db_session, monkeypatch):
     # A read endpoint: it still serves stored metrics instead of returning 409.
     from app.services import server_auth
