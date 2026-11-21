@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -35,6 +36,8 @@ from app.models.economic_taxonomy_runtime import (
 )
 from app.services.economic_theme_observation_service import materialize_assignment_facts
 from app.utils.file_hashing import canonical_json_sha256 as _hash
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidInterpretation(ValueError):
@@ -268,8 +271,14 @@ class EconomicTaxonomyInterpretationService:
                         selected_attempt_id=selected.id,
                     )
                     return selected
-            except (KeyError, TypeError, ValueError):
-                pass  # InvalidInterpretation is a ValueError: fall back to the default
+            except (KeyError, TypeError, ValueError) as exc:
+                # InvalidInterpretation is a ValueError: fall back to the default.
+                logger.warning(
+                    "Override %s for lineage %s rejected (%s); serving the default",
+                    override_id,
+                    source_lineage_id,
+                    exc,
+                )
             break
         return self._default_attempt(session, source_lineage_id)
 
