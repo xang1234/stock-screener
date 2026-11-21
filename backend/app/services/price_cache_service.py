@@ -34,7 +34,11 @@ from ..utils.market_hours import (
     is_trading_day, get_last_trading_day
 )
 from .cache.price_cache_failure_telemetry import PriceCacheFailureTelemetry
-from .cache.price_cache_freshness import PriceCacheFreshnessPolicy, latest_fetch_metadata
+from .cache.price_cache_freshness import (
+    PriceCacheFreshnessPolicy,
+    latest_fetch_metadata,
+    warn_calendar_outage,
+)
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
 from .cache.price_cache_warmup import PriceCacheWarmupStore
 from .cache.redis_codec import decode_frame, encode_frame
@@ -919,7 +923,9 @@ class PriceCacheService:
             partial = self._freshness_policy.partial_session_day(now_et, calendar_market) is not None
         except Exception:
             if calendar_market != "US":
-                logger.warning("Calendar unavailable for %s; marking fetch intraday", calendar_market)
+                warn_calendar_outage(
+                    logger, calendar_market, "Calendar unavailable for %s; marking fetch intraday"
+                )
             partial = is_market_open(now_et) if calendar_market == "US" else True
         return {
             "fetch_timestamp": now_et.isoformat(),
@@ -1272,7 +1278,7 @@ class PriceCacheService:
         try:
             return self._freshness_policy.last_completed_trading_day(market)
         except Exception as exc:
-            logger.warning("Calendar unavailable for %s expected session: %s", market, exc)
+            warn_calendar_outage(logger, market, "Calendar unavailable for %s expected session: %s", exc)
             return self._legacy_us_expected_data_date() if market == "US" else None
 
     def _legacy_us_expected_data_date(self) -> Optional[date]:

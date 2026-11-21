@@ -24,6 +24,19 @@ SESSION_SETTLEMENT_BUFFER = timedelta(minutes=30)
 # changes at session boundaries, so a few seconds of reuse is invisible.
 LAST_COMPLETED_REUSE_SECONDS = 5.0
 
+# Markets whose calendar lookups are failing. Bulk paths judge thousands of
+# symbols, so an outage warns once per market until a lookup succeeds again.
+# ponytail: unlocked set (each op is GIL-atomic); two threads failing at the
+# same moment can log the warning twice.
+_CALENDAR_OUTAGES: set[str] = set()
+
+
+def warn_calendar_outage(logger, market: str, message: str, *args) -> None:
+    """Log ``message % (market, *args)`` for the first failure of an outage only."""
+    if market.upper() not in _CALENDAR_OUTAGES:
+        _CALENDAR_OUTAGES.add(market.upper())
+        logger.warning(message + " (logged once until the calendar recovers)", market, *args)
+
 
 def settlement_cutoff(calendar, market: str, session_day: date) -> Optional[datetime]:
     """When ``session_day``'s bar in ``market`` is final: its close plus the
@@ -100,6 +113,7 @@ class PriceCacheFreshnessPolicy:
             if now is None and memo_now is None and tick - memo_tick < LAST_COMPLETED_REUSE_SECONDS:
                 return value
         value = self._get_market_calendar().last_completed_trading_day(market, now)
+        _CALENDAR_OUTAGES.discard(market.upper())
         self._last_completed_memo[market] = (now, tick, value)
         return value
 
@@ -153,9 +167,10 @@ class PriceCacheFreshnessPolicy:
         except Exception as exc:
             if market == US_MARKET:
                 return self._legacy_us_metadata_stale(meta, now)
-            self._logger.warning(
-                "Calendar unavailable for %s freshness; treating fetch metadata as stale: %s",
+            warn_calendar_outage(
+                self._logger,
                 market,
+                "Calendar unavailable for %s freshness; treating fetch metadata as stale: %s",
                 exc,
             )
             return True
