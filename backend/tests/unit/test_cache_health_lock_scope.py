@@ -1,4 +1,4 @@
-"""GET /v1/cache/health judges a held lock by that lock's own market scope.
+"""GET /v1/cache/health judges a held lock by its own market scope and never releases it.
 
 Real DataFetchLock and warmup store over a dict-backed Redis.
 """
@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from app.services.price_cache_service import PriceCacheService
-from app.tasks.data_fetch_lock import _RELEASE_LUA, DataFetchLock, _lock_key_for_market
+from app.tasks.data_fetch_lock import LOCK_KEY, _RELEASE_LUA, DataFetchLock, _lock_key_for_market
 
 
 class _DictRedis:
@@ -89,8 +89,7 @@ def test_hk_refresh_is_judged_by_its_own_heartbeat_not_the_shared_one(service, l
 
 
 def test_shared_warmup_completion_does_not_release_a_silent_hk_lock(service, lock, redis):
-    started_at = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    redis.values[_lock_key_for_market("HK")] = f"refresh_hk:hk-1:{started_at}"
+    redis.values[_lock_key_for_market("HK")] = f"refresh_hk:hk-1:{_ten_minutes_ago()}"
     service.save_warmup_metadata("completed", 10, 10)  # a shared run, after the HK lock
 
     status = _health(service, lock)
@@ -99,13 +98,75 @@ def test_shared_warmup_completion_does_not_release_a_silent_hk_lock(service, loc
     assert _holder_id(lock, "HK") == "hk-1"
 
 
-def test_finished_refresh_releases_only_its_own_lock(service, lock):
+def _ten_minutes_ago():
+    return (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+
+
+def _new_hk_lock_after_an_earlier_hk_run(service, lock, redis):
+    service.save_warmup_metadata("completed", 10, 10, market="HK")
+    service.complete_warmup_heartbeat("completed", market="HK")
+    lock.acquire("refresh_hk", "hk-2", market="HK")  # not yet publishing progress
+    return {("hk-2", "HK")}
+
+
+def _finished_us_refresh_beside_a_running_hk_refresh(service, lock, redis):
     lock.acquire("refresh_us", "us-1", market="US")
     lock.acquire("refresh_hk", "hk-1", market="HK")
+    service.save_warmup_metadata("completed", 10, 10, market="US")
     service.complete_warmup_heartbeat("completed", market="US")
     service.update_warmup_heartbeat(5, 10, market="HK")
+    return {("us-1", "US"), ("hk-1", "HK")}
 
-    _health(service, lock)
 
-    assert _holder_id(lock, "US") is None
-    assert _holder_id(lock, "HK") == "hk-1"
+def _silent_us_lock_whose_warmup_finished(service, lock, redis):
+    redis.values[_lock_key_for_market("US")] = f"refresh_us:us-1:{_ten_minutes_ago()}"
+    service.save_warmup_metadata("completed", 10, 10, market="US")
+    return {("us-1", "US")}
+
+
+def _finished_legacy_unsuffixed_lock(service, lock, redis):
+    redis.values[LOCK_KEY] = f"refresh:legacy-1:{_ten_minutes_ago()}"
+    service.save_warmup_metadata("completed", 10, 10)
+    service.complete_warmup_heartbeat("completed")
+    return {("legacy-1", None)}
+
+
+def _lock_keys(redis):
+    return {key: value for key, value in redis.values.items() if key.startswith(LOCK_KEY)}
+
+
+@pytest.mark.parametrize(
+    "arrange",
+    [
+        _new_hk_lock_after_an_earlier_hk_run,
+        _finished_us_refresh_beside_a_running_hk_refresh,
+        _silent_us_lock_whose_warmup_finished,
+        _finished_legacy_unsuffixed_lock,
+    ],
+)
+def test_health_reports_a_held_lock_without_touching_it(service, lock, redis, arrange):
+    holders = arrange(service, lock, redis)
+    redis.values[service._redis_last_update_key("SPY", market="US")] = "2099-01-02"  # SPY fresh
+    keys_before = _lock_keys(redis)
+
+    status = _health(service, lock)
+
+    assert _lock_keys(redis) == keys_before
+    assert status["status"] == "updating"
+    assert status["can_refresh"] is False
+    running = status["task_running"]
+    assert (running["task_id"], running["market"]) in holders
+
+
+@pytest.mark.parametrize("publishes_progress", [True, False])
+def test_a_held_lock_reports_its_own_markets_last_warmup(service, lock, publishes_progress):
+    service.save_warmup_metadata("completed", 10, 10)  # a shared run
+    service.save_warmup_metadata("completed", 3, 3, market="HK")  # the previous HK run
+    lock.acquire("refresh_hk", "hk-1", market="HK")
+    if publishes_progress:
+        service.update_warmup_heartbeat(5, 10, market="HK")
+
+    status = _health(service, lock)
+
+    assert status["status"] == "updating"
+    assert status["last_warmup"]["market"] == "hk"

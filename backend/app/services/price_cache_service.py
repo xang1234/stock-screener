@@ -1064,9 +1064,11 @@ class PriceCacheService:
         2. If SPY is fresh, the warmup task ran successfully
         3. Single Redis lookup vs scanning thousands of symbols
 
+        Read-only: it reports a held data-fetch lock and never releases one.
+
         Returns 6 possible states:
         - fresh: Cache is up to date (SPY has expected date + last warmup complete)
-        - updating: Refresh task is currently running
+        - updating: A refresh task holds the lock (starting, running or finishing)
         - stuck: Task running but no progress for >30 minutes
         - partial: Last warmup incomplete (some symbols failed)
         - stale: SPY missing expected trading date
@@ -1115,112 +1117,62 @@ class PriceCacheService:
             current_holder = lock.get_any_current_holder()
 
             if current_holder and current_holder.get('task_name'):
-                # Lock is held — judge it by its own market's heartbeat.
+                # Report the held lock, judged by its own market; never release it.
+                # A dead holder's lease expires, worker startup clears stale locks,
+                # and POST /v1/cache/force-cancel or /v1/data-fetch/force-release-lock
+                # releases one on demand.
                 market = current_holder.get('market')
+                task_name = current_holder.get('task_name')
+                task = {
+                    "task_id": current_holder.get('task_id'),
+                    "task_name": task_name,
+                    "started_at": current_holder.get('started_at'),
+                    "market": market,
+                }
+                held = {
+                    "spy_last_date": None,
+                    "expected_date": None,
+                    "last_warmup": self.get_warmup_metadata(market),
+                }
+                stuck = {**held, "status": "stuck", "can_refresh": True, "can_force_cancel": True}
+                updating = {**held, "status": "updating", "can_refresh": False}
+
                 hb_info = self._get_heartbeat_info(market)
-
-                if hb_info and hb_info.get('status') in ('completed', 'failed'):
-                    # Task finished but lock not yet released (brief race window).
-                    # Release it if that task still holds it, then fall through
-                    # to the SPY freshness check.
-                    logger.info(
-                        f"Task heartbeat is terminal ({hb_info['status']}), "
-                        f"releasing stale lock"
-                    )
-                    lock.release(current_holder['task_id'], market)
-                    # Fall through to SPY freshness check below
-
-                elif hb_info and hb_info.get('status') == 'running':
+                if hb_info and hb_info.get('status') == 'running':
                     minutes = hb_info.get('minutes')
                     if minutes is not None and minutes > 30:
-                        # Running heartbeat but no progress for >30 min → stuck
                         return {
-                            "status": "stuck",
+                            **stuck,
                             "message": f"Task appears stuck (no progress for {int(minutes)} min)",
-                            "can_refresh": True,
-                            "can_force_cancel": True,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": current_holder.get('started_at'),
-                                "minutes_since_heartbeat": int(minutes)
-                            },
-                            "last_warmup": self._get_warmup_metadata()
+                            "task_running": {**task, "minutes_since_heartbeat": int(minutes)},
                         }
-                    else:
-                        # Task is actively running with recent heartbeat
-                        return {
-                            "status": "updating",
-                            "message": f"Cache refresh in progress ({current_holder.get('task_name')})",
-                            "can_refresh": False,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": current_holder.get('started_at'),
-                                **self._get_task_progress(market)
-                            },
-                            "last_warmup": self._get_warmup_metadata()
-                        }
+                    return {
+                        **updating,
+                        "message": f"Cache refresh in progress ({task_name})",
+                        "task_running": {**task, **self._get_task_progress(market)},
+                    }
 
-                else:
-                    # No heartbeat at all — use lock-age grace period
-                    started_at_str = current_holder.get('started_at')
-                    started_at = parse_activity_timestamp(started_at_str)
-                    lock_age_minutes = (
-                        None
-                        if started_at is None
-                        else (datetime.now(timezone.utc) - started_at).total_seconds() / 60
-                    )
+                # No running heartbeat. A terminal one may be an earlier run's, so
+                # judge the holder by its market's last warmup and its lock age.
+                started_at = parse_activity_timestamp(task["started_at"])
+                completed_at = parse_activity_timestamp((held["last_warmup"] or {}).get('completed_at'))
+                if completed_at is not None and started_at is not None and completed_at > started_at:
+                    # Its warmup finished; the lock is released next.
+                    return {**updating, "message": f"Cache refresh finishing ({task_name})",
+                            "task_running": task}
+                if started_at is not None and datetime.now(timezone.utc) - started_at < timedelta(minutes=2):
+                    return {**updating, "message": f"Cache refresh starting ({task_name})",
+                            "task_running": task}
+                return {
+                    **stuck,
+                    "message": "Task unresponsive (no heartbeat)",
+                    "task_running": {**task, "minutes_since_heartbeat": None},
+                }
 
-                    if lock_age_minutes is not None and lock_age_minutes < 2:
-                        # Lock acquired < 2 min ago, task is initializing
-                        return {
-                            "status": "updating",
-                            "message": f"Cache refresh starting ({current_holder.get('task_name')})",
-                            "can_refresh": False,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": started_at_str,
-                            },
-                            "last_warmup": self._get_warmup_metadata()
-                        }
-
-                    # Lock held >= 2 min with no heartbeat.
-                    # Check if warmup metadata shows completion after lock was acquired.
-                    warmup_meta = self.get_warmup_metadata(market)
-                    completed_at = parse_activity_timestamp((warmup_meta or {}).get('completed_at'))
-                    if completed_at is not None and started_at is not None and completed_at > started_at:
-                        # Task completed but lock is stale — release and fall through.
-                        logger.info("Warmup completed after lock acquired, releasing stale lock")
-                        lock.release(current_holder['task_id'], market)
-                    else:
-                        return {
-                            "status": "stuck",
-                            "message": "Task unresponsive (no heartbeat)",
-                            "can_refresh": True,
-                            "can_force_cancel": True,
-                            "spy_last_date": None,
-                            "expected_date": None,
-                            "task_running": {
-                                "task_id": current_holder.get('task_id'),
-                                "task_name": current_holder.get('task_name'),
-                                "started_at": started_at_str,
-                                "minutes_since_heartbeat": None
-                            },
-                            "last_warmup": warmup_meta
-                        }
-
-            # No task running (or stale lock was released above) — check SPY freshness
+            # No task running — check SPY freshness
             spy_last_date = self._get_spy_last_date()
             expected_date = self._get_expected_data_date("US")
-            warmup_meta = self._get_warmup_metadata()
+            warmup_meta = self.get_warmup_metadata()
 
             if spy_last_date is None:
                 return {
@@ -1362,15 +1314,6 @@ class PriceCacheService:
 
         # Weekend or holiday: last trading day before today
         return get_last_trading_day(today - timedelta(days=1))
-
-    def _get_warmup_metadata(self) -> Optional[Dict]:
-        """
-        Get metadata from the last warmup operation.
-
-        Returns:
-            Dict with status, count, total, completed_at or None
-        """
-        return self._warmup_store.get_warmup_metadata()
 
     def get_warmup_metadata(self, market: Optional[str] = None) -> Optional[Dict]:
         """Public wrapper for last warmup metadata used by downstream scheduled tasks."""

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -91,7 +91,6 @@ def test_a_lock_a_worker_just_took_reads_fresh_in_the_api():
 def _health_with_lock_held(started_at, warmup_meta):
     service = PriceCacheService(redis_client=MagicMock(), session_factory=MagicMock())
     service._get_heartbeat_info = lambda *a, **k: None
-    service._get_warmup_metadata = lambda: warmup_meta
     service.get_warmup_metadata = lambda market=None: warmup_meta
     service._get_spy_last_date = lambda: None
     service._get_expected_data_date = lambda market: None
@@ -114,7 +113,7 @@ def test_a_lock_just_taken_without_heartbeat_reads_as_starting():
 
 
 @pytest.mark.parametrize("aware_completion", [True, False])
-def test_a_lock_outlived_by_its_completed_warmup_is_released(aware_completion):
+def test_a_lock_outlived_by_its_completed_warmup_reads_as_finishing(aware_completion):
     now = datetime.now(timezone.utc)
     completed_at = now - timedelta(minutes=1)
     if not aware_completion:
@@ -124,5 +123,5 @@ def test_a_lock_outlived_by_its_completed_warmup_is_released(aware_completion):
         {"status": "completed", "completed_at": completed_at.isoformat()},
     )
 
-    lock.release.assert_called_once_with("task-1", None)
-    assert status["status"] == "stale"
+    assert lock.method_calls == [call.get_any_current_holder()]  # read-only
+    assert status["status"] == "updating"
