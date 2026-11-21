@@ -1119,7 +1119,7 @@ class BulkDataFetcher:
 
         # Circuit breaker check is per-batch — when open, skip remaining
         # batches rather than spinning through dozens of independent retries.
-        from .provider_circuit_breaker import CircuitOpenError, get_circuit_breaker
+        from .provider_circuit_breaker import get_circuit_breaker
         breaker = get_circuit_breaker()
 
         for batch_num in range(total_batches):
@@ -1135,7 +1135,8 @@ class BulkDataFetcher:
                 break
 
             # Short-circuit doomed batches when the per-market breaker is open.
-            if market is not None and breaker.check("yfinance", market) == "open":
+            breaker_state = breaker.check("yfinance", market) if market is not None else "closed"
+            if breaker_state == "open":
                 logger.warning(
                     "Yahoo circuit open for market=%s; skipping remaining %d batches",
                     market, total_batches - batch_num,
@@ -1151,6 +1152,7 @@ class BulkDataFetcher:
             logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_symbols)} symbols)")
 
             batch_rate_limit_failures = 0
+            batch_successes = 0
 
             try:
                 # Use yf.Tickers for efficient batch fetching
@@ -1177,17 +1179,16 @@ class BulkDataFetcher:
                             fundamentals.update(eps_rating_data)
 
                         all_results[symbol] = fundamentals
+                        batch_successes += 1
 
                     except Exception as e:
-                        error_str = str(e).lower()
                         logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
                         all_results[symbol] = {'has_error': True, 'error': str(e)}
-                        if any(ind in error_str for ind in ("rate", "429", "too many", "limit", "throttl")):
+                        if self._is_rate_limit_error(str(e)):
                             batch_rate_limit_failures += 1
                             if market is not None:
                                 from .rate_budget_policy import get_rate_budget_policy
                                 get_rate_budget_policy().record_429("yfinance", market)
-                            breaker.record_429("yfinance", market)
 
                     # Rate limit between individual ticker fetches within batch
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
@@ -1200,6 +1201,8 @@ class BulkDataFetcher:
                 logger.error(f"Batch error: {e}")
                 for symbol in batch_symbols:
                     all_results[symbol] = {'has_error': True, 'error': str(e)}
+                if self._is_rate_limit_error(str(e)):
+                    batch_rate_limit_failures = len(batch_symbols)
 
             if progress_callback:
                 try:
@@ -1214,8 +1217,18 @@ class BulkDataFetcher:
 
             # Batch-level backoff: if >50% of batch hit rate limits, back off
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0
+            # A closed circuit trips on mostly rate-limited batches; a probe
+            # batch fails on any 429, or the circuit would stay half-open.
+            if batch_failure_rate > 0.5 or (
+                breaker_state == "half_open_probe" and batch_rate_limit_failures
+            ):
+                breaker.record_429("yfinance", market)
             if batch_failure_rate > 0.5:
                 consecutive_backoffs += 1
+                if market is not None and breaker.check("yfinance", market) == "open":
+                    # The circuit just opened. Backing off for as long as the
+                    # cooldown would turn the next batch into a probe.
+                    continue
                 backoff_time = min(
                     backoff_base_s * (backoff_factor ** (consecutive_backoffs - 1)),
                     backoff_max_s,
@@ -1229,7 +1242,7 @@ class BulkDataFetcher:
                 consecutive_backoffs = 0  # Reset on successful batch
                 # Reset the circuit breaker counter so a healthy batch
                 # promptly closes a half-open circuit.
-                if batch_rate_limit_failures == 0:
+                if batch_rate_limit_failures == 0 and batch_successes:
                     breaker.record_success("yfinance", market)
                 # Normal rate limit between batches
                 if batch_num < total_batches - 1:
