@@ -157,6 +157,59 @@ def test_fetch_and_cache_benchmark_cleans_non_finite_rows_before_cache_db_and_re
     assert captured["db"]["Close"].tolist() == [100.0]
 
 
+class _TokenRedis:
+    """SET NX, GET, DEL, and the compare-and-delete release script."""
+
+    def __init__(self):
+        self.values = {}
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        return True
+
+    def delete(self, key):
+        return int(self.values.pop(key, None) is not None)
+
+    def eval(self, _script, _numkeys, key, token):
+        return self.delete(key) if self.values.get(key) == token else 0
+
+
+def _fetch_spy_with_lock(redis, on_fetch=lambda: None):
+    service = BenchmarkCacheService(redis_client=redis, session_factory=lambda: None)
+    data = _ohlcv_frame([100.0], ["2026-04-10"])
+
+    def fetch(benchmark_symbol, period):
+        on_fetch()
+        return data
+
+    service._fetch_from_yfinance = fetch  # type: ignore[assignment]
+    service._store_in_redis = lambda **kwargs: None  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+    service._fetch_and_cache_benchmark("SPY", "US", "2y")
+
+
+def test_slow_lock_holder_leaves_its_successors_lock_in_place():
+    redis = _TokenRedis()
+
+    def lock_expires_and_worker_b_takes_it():
+        (lock_key,) = redis.values
+        redis.values[lock_key] = "worker-b-token"
+
+    _fetch_spy_with_lock(redis, on_fetch=lock_expires_and_worker_b_takes_it)
+
+    assert list(redis.values.values()) == ["worker-b-token"]
+
+
+def test_lock_holder_releases_its_own_lock():
+    redis = _TokenRedis()
+
+    _fetch_spy_with_lock(redis)
+
+    assert redis.values == {}
+
+
 def test_fetch_and_cache_benchmark_uses_cn_index_provider_before_yfinance():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     service._redis_client = None

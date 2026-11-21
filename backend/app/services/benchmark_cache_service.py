@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any, Optional, Callable
 from datetime import date, datetime, timedelta
+from uuid import uuid4
 import pandas as pd
 from sqlalchemy.orm import Session
 
@@ -42,6 +43,15 @@ from .price_row_normalization import (
 from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
+
+# Delete the lock only while it still holds our token, so a holder that
+# outlived LOCK_EXPIRY_SECONDS never deletes its successor's lock.
+_LOCK_RELEASE_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 
 class BenchmarkCacheService:
@@ -449,13 +459,14 @@ class BenchmarkCacheService:
             return benchmark_data
 
         lock_key = self._redis_lock_key(benchmark_symbol, period, market=market)
+        lock_token = uuid4().hex
         # Try to acquire lock
         lock_acquired = False
         if self._redis_client:
             try:
                 lock_acquired = self._redis_client.set(
                     lock_key,
-                    "locked",
+                    lock_token,
                     nx=True,  # Only set if not exists
                     ex=self.LOCK_EXPIRY_SECONDS
                 )
@@ -511,10 +522,9 @@ class BenchmarkCacheService:
             return benchmark_data
 
         finally:
-            # Release lock
             if self._redis_client and lock_acquired:
                 try:
-                    self._redis_client.delete(lock_key)
+                    self._redis_client.eval(_LOCK_RELEASE_LUA, 1, lock_key, lock_token)
                 except Exception as e:
                     logger.warning(f"Error releasing lock: {e}")
 
