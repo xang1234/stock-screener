@@ -733,10 +733,9 @@ def discover_correlation_clusters(
     )
 
 
-@router.get(
+@router.post(
     "/{theme_id}/validate",
     response_model=ThemeValidationResponse,
-    # Mutating GET: commits constituent and cluster validation fields.
     dependencies=[Depends(reject_legacy_theme_writes)],
 )
 def validate_theme(
@@ -784,10 +783,9 @@ def find_theme_entrants(
     }
 
 
-@router.get(
+@router.post(
     "/{theme_id}/similar",
     response_model=SimilarThemesResponse,
-    # Mutating GET: commits missing or stale ThemeEmbedding rows.
     dependencies=[Depends(reject_legacy_theme_writes)],
 )
 def find_similar_themes(

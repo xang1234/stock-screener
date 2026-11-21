@@ -273,8 +273,8 @@ GUARDED_ROUTES = [
     ("POST", "/taxonomy/assign"),
     ("POST", "/taxonomy/assign/async"),
     ("PUT", "/taxonomy/1/reassign"),
-    ("GET", "/1/validate"),
-    ("GET", "/1/similar"),
+    ("POST", "/1/validate"),
+    ("POST", "/1/similar"),
 ]
 
 
