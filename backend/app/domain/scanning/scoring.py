@@ -46,6 +46,38 @@ STRONG_BUY_THRESHOLD: float = 80.0
 BUY_THRESHOLD: float = 70.0
 WATCH_THRESHOLD: float = 60.0
 
+# Max points per criterion for each built-in screener. The scanners score
+# against these and ExplainStockUseCase reads them for flat breakdowns.
+CRITERION_MAX_POINTS_BY_SCREENER: dict[str, dict[str, float]] = {
+    "minervini": {
+        "rs_rating": 20,
+        "stage": 20,
+        "ma_alignment": 15,
+        "position_52w": 15,
+        "vcp": 20,
+    },
+    "canslim": {
+        "current_earnings": 20,
+        "annual_earnings": 15,
+        "new_highs": 15,
+        "supply_demand": 15,
+        "leader": 20,
+        "institutional": 15,
+    },
+    "ipo": {
+        "ipo_age": 25,
+        "performance_since_ipo": 25,
+        "price_stability": 20,
+        "volume_patterns": 15,
+        "revenue_growth": 15,
+    },
+    "volume_breakthrough": {
+        "five_year_high": 43,
+        "one_year_high": 43,
+        "since_ipo_high": 43,
+    },
+}
+
 # Downgrade map: current rating → downgraded rating (one level lower)
 _DOWNGRADE: dict[RatingCategory, RatingCategory] = {
     RatingCategory.STRONG_BUY: RatingCategory.BUY,

@@ -29,6 +29,8 @@ import logging
 from typing import Dict, Optional
 import pandas as pd
 
+from app.domain.scanning.scoring import CRITERION_MAX_POINTS_BY_SCREENER
+
 from .base_screener import BaseStockScreener, ScreenerResult, StockData, DataRequirements
 from .screener_registry import register_screener
 
@@ -43,6 +45,8 @@ class VolumeBreakthroughScanner(BaseStockScreener):
     Identifies stocks experiencing exceptional volume spikes by comparing
     current day's volume against historical highs across multiple timeframes.
     """
+
+    CRITERION_MAX_POINTS = CRITERION_MAX_POINTS_BY_SCREENER["volume_breakthrough"]
 
     @property
     def screener_name(self) -> str:
@@ -184,8 +188,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
             logger.error(f"Error scanning {symbol} for volume breakthroughs: {e}", exc_info=True)
             return self._error_result(symbol, str(e))
 
-    # Maximum raw score (3 breakthroughs x 43 points each)
-    MAX_RAW_SCORE = 129.0
+    MAX_RAW_SCORE = float(sum(CRITERION_MAX_POINTS.values()))
 
     def _build_result(
         self,
@@ -278,7 +281,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if pd.isna(check_volume):
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["five_year_high"],
                 "is_breakthrough": False,
                 "current_volume": 0,
                 "all_time_high": 0,
@@ -314,7 +317,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if pd.isna(all_time_high):
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["five_year_high"],
                 "is_breakthrough": False,
                 "current_volume": int(check_volume),
                 "all_time_high": 0,
@@ -348,7 +351,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
 
         return {
             "points": base_points + bonus_points,
-            "max_points": 43,
+            "max_points": self.CRITERION_MAX_POINTS["five_year_high"],
             "is_breakthrough": is_breakthrough,
             "current_volume": int(check_volume),
             "all_time_high": int(all_time_high),
@@ -380,7 +383,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if pd.isna(check_volume):
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["one_year_high"],
                 "is_breakthrough": False,
                 "current_volume": 0,
                 "one_year_high": 0,
@@ -405,7 +408,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if len(year_volumes) < 50:  # Need reasonable history
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["one_year_high"],
                 "is_breakthrough": False,
                 "current_volume": int(check_volume),
                 "one_year_high": 0,
@@ -421,7 +424,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if pd.isna(one_year_high):
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["one_year_high"],
                 "is_breakthrough": False,
                 "current_volume": int(check_volume),
                 "one_year_high": 0,
@@ -451,7 +454,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
 
         return {
             "points": base_points + bonus_points,
-            "max_points": 43,
+            "max_points": self.CRITERION_MAX_POINTS["one_year_high"],
             "is_breakthrough": is_breakthrough,
             "current_volume": int(check_volume),
             "one_year_high": int(one_year_high),
@@ -487,7 +490,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if pd.isna(check_volume):
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["since_ipo_high"],
                 "is_breakthrough": False,
                 "current_volume": 0,
                 "since_ipo_high": 0,
@@ -553,7 +556,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
         if pd.isna(since_ipo_high):
             return {
                 "points": 0,
-                "max_points": 43,
+                "max_points": self.CRITERION_MAX_POINTS["since_ipo_high"],
                 "is_breakthrough": False,
                 "current_volume": int(check_volume),
                 "since_ipo_high": 0,
@@ -575,7 +578,7 @@ class VolumeBreakthroughScanner(BaseStockScreener):
 
         return {
             "points": base_points + bonus_points,
-            "max_points": 43,
+            "max_points": self.CRITERION_MAX_POINTS["since_ipo_high"],
             "is_breakthrough": is_breakthrough,
             "current_volume": int(check_volume),
             "since_ipo_high": int(since_ipo_high),

@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
+from app.domain.scanning.scoring import CRITERION_MAX_POINTS_BY_SCREENER
+
 from .base_screener import (
     BaseStockScreener,
     DataRequirements,
@@ -29,6 +31,8 @@ class IPOScanner(BaseStockScreener):
     Focuses on recent IPOs with strong growth and stability patterns.
     Ideal for finding emerging growth stocks in their early public trading phase.
     """
+
+    CRITERION_MAX_POINTS = CRITERION_MAX_POINTS_BY_SCREENER["ipo"]
 
     def __init__(self):
         """Initialize IPO scanner."""
@@ -242,7 +246,7 @@ class IPOScanner(BaseStockScreener):
 
             return {
                 "points": round(points, 2),
-                "max_points": 25,
+                "max_points": self.CRITERION_MAX_POINTS["ipo_age"],
                 "ipo_date": ipo_date.strftime("%Y-%m-%d") if ipo_date else None,
                 "days_since_ipo": days_since_ipo,
                 "months_since_ipo": round(months_since_ipo, 1),
@@ -256,7 +260,7 @@ class IPOScanner(BaseStockScreener):
             logger.warning(f"Error calculating IPO age: {e}")
             return {
                 "points": 0,
-                "max_points": 25,
+                "max_points": self.CRITERION_MAX_POINTS["ipo_age"],
                 "ipo_date": None,
                 "days_since_ipo": None,
                 "category": "Unknown",
@@ -300,7 +304,7 @@ class IPOScanner(BaseStockScreener):
 
             return {
                 "points": round(points, 2),
-                "max_points": 25,
+                "max_points": self.CRITERION_MAX_POINTS["performance_since_ipo"],
                 "ipo_price": round(ipo_price, 2),
                 "current_price": round(current_price, 2),
                 "gain_pct": round(gain_pct, 2),
@@ -312,7 +316,7 @@ class IPOScanner(BaseStockScreener):
             logger.warning(f"Error calculating IPO performance: {e}")
             return {
                 "points": 0,
-                "max_points": 25,
+                "max_points": self.CRITERION_MAX_POINTS["performance_since_ipo"],
                 "gain_pct": None,
                 "passes": False,
                 "reason": f"Error: {str(e)}"
@@ -358,7 +362,7 @@ class IPOScanner(BaseStockScreener):
 
             return {
                 "points": round(points, 2),
-                "max_points": 20,
+                "max_points": self.CRITERION_MAX_POINTS["price_stability"],
                 "volatility_pct": round(recent_volatility, 2),
                 "annualized_volatility": round(annualized_volatility, 2),
                 "passes": recent_volatility < 5,
@@ -369,7 +373,7 @@ class IPOScanner(BaseStockScreener):
             logger.warning(f"Error calculating price stability: {e}")
             return {
                 "points": 0,
-                "max_points": 20,
+                "max_points": self.CRITERION_MAX_POINTS["price_stability"],
                 "volatility_pct": None,
                 "passes": False,
                 "reason": f"Error: {str(e)}"
@@ -393,7 +397,7 @@ class IPOScanner(BaseStockScreener):
                 # Not enough data
                 return {
                     "points": 0,
-                    "max_points": 15,
+                    "max_points": self.CRITERION_MAX_POINTS["volume_patterns"],
                     "volume_trend": None,
                     "passes": False,
                     "reason": "Insufficient volume data"
@@ -423,7 +427,7 @@ class IPOScanner(BaseStockScreener):
 
             return {
                 "points": round(points, 2),
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["volume_patterns"],
                 "volume_ratio": round(volume_ratio, 2),
                 "early_volume": int(early_volume),
                 "recent_volume": int(recent_volume),
@@ -436,7 +440,7 @@ class IPOScanner(BaseStockScreener):
             logger.warning(f"Error calculating volume patterns: {e}")
             return {
                 "points": 0,
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["volume_patterns"],
                 "volume_trend": None,
                 "passes": False,
                 "reason": f"Error: {str(e)}"
@@ -458,7 +462,7 @@ class IPOScanner(BaseStockScreener):
         if not quarterly_growth or quarterly_growth.get('sales_growth_qq') is None:
             return {
                 "points": 0,
-                "max_points": 15,
+                "max_points": self.CRITERION_MAX_POINTS["revenue_growth"],
                 "revenue_growth_qq": None,
                 "passes": False,
                 "reason": "No revenue growth data"
@@ -481,7 +485,7 @@ class IPOScanner(BaseStockScreener):
 
         return {
             "points": round(points, 2),
-            "max_points": 15,
+            "max_points": self.CRITERION_MAX_POINTS["revenue_growth"],
             "revenue_growth_qq": revenue_growth,
             "passes": revenue_growth >= 20,
             "reason": f"Revenue growth Q/Q: {revenue_growth:.1f}%"

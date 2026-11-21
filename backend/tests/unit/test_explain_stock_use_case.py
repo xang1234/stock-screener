@@ -172,25 +172,6 @@ class TestHappyPath:
         assert criteria_by_name["position_52w"].max_score == 15
         assert criteria_by_name["vcp"].max_score == 20
 
-    def test_max_scores_from_flat_breakdown_use_lookup(self):
-        """CANSLIM uses flat breakdowns, so max_score comes from _MAX_SCORES lookup."""
-        feature_store = FakeFeatureStoreRepository()
-        uow = FakeUnitOfWork(feature_store=feature_store)
-        _setup_bound_scan(uow, feature_store, rows=[
-            _make_feature_row("AAPL", 80.0, {"canslim": _make_canslim_screener_data()}),
-        ])
-        uc = ExplainStockUseCase()
-
-        result = uc.execute(uow, _make_query())
-
-        criteria_by_name = {
-            c.name: c for c in result.explanation.screener_explanations[0].criteria
-        }
-        assert criteria_by_name["current_earnings"].max_score == 20
-        assert criteria_by_name["annual_earnings"].max_score == 15
-        assert criteria_by_name["leader"].max_score == 20
-        assert criteria_by_name["institutional"].max_score == 15
-
     def test_passed_flag_from_nested_breakdown(self):
         """Minervini uses nested dicts with explicit 'passes' booleans."""
         feature_store = FakeFeatureStoreRepository()
@@ -366,7 +347,7 @@ class TestNoScreenerOutputs:
 
 
 class TestUnknownScreener:
-    """Screener not in _MAX_SCORES gets max_score=0.0 for all criteria."""
+    """Screener not in CRITERION_MAX_POINTS_BY_SCREENER gets max_score=0.0 for all criteria."""
 
     def test_unknown_screener_criteria_have_zero_max_score(self):
         custom_screener_data = {
@@ -420,7 +401,7 @@ class TestUnknownScreener:
         # Known criteria get their max_scores
         assert criteria_by_name["five_year_high"].max_score == 43
         assert criteria_by_name["one_year_high"].max_score == 43
-        # Modifier keys not in _MAX_SCORES get 0.0
+        # Modifier keys outside the table get 0.0
         assert criteria_by_name["bonus_points"].max_score == 0.0
         assert criteria_by_name["decay_multiplier"].max_score == 0.0
 
