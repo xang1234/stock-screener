@@ -170,3 +170,17 @@ def test_a_held_lock_reports_its_own_markets_last_warmup(service, lock, publishe
 
     assert status["status"] == "updating"
     assert status["last_warmup"]["market"] == "hk"
+
+
+def test_an_earlier_runs_running_heartbeat_does_not_mark_a_new_lock_stuck(service, lock, monkeypatch):
+    # The previous HK holder died mid-run 45 min ago, leaving a "running" heartbeat.
+    monkeypatch.setattr(
+        service, "_get_heartbeat_info", lambda market=None: {"status": "running", "minutes": 45}
+    )
+    lock.acquire("refresh_hk", "hk-2", market="HK")  # just acquired, no heartbeat of its own yet
+
+    status = _health(service, lock)
+
+    assert status["status"] == "updating"
+    assert "can_force_cancel" not in status
+    assert status["task_running"]["task_id"] == "hk-2"

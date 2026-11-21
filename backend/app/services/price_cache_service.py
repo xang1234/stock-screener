@@ -1143,9 +1143,17 @@ class PriceCacheService:
                 stuck = {**held, "status": "stuck", "can_refresh": True, "can_force_cancel": True}
                 updating = {**held, "status": "updating", "can_refresh": False}
 
+                started_at = parse_activity_timestamp(task["started_at"])
                 hb_info = self._get_heartbeat_info(market)
-                if hb_info and hb_info.get('status') == 'running':
-                    minutes = hb_info.get('minutes')
+                minutes = (hb_info or {}).get('minutes')
+                # A heartbeat older than the lock is an earlier run's (e.g. a holder
+                # that died mid-run), so it says nothing about this holder.
+                hb_predates_lock = (
+                    minutes is not None
+                    and started_at is not None
+                    and datetime.now(timezone.utc) - timedelta(minutes=minutes) < started_at
+                )
+                if hb_info and hb_info.get('status') == 'running' and not hb_predates_lock:
                     if minutes is not None and minutes > 30:
                         return {
                             **stuck,
@@ -1160,7 +1168,6 @@ class PriceCacheService:
 
                 # No running heartbeat. A terminal one may be an earlier run's, so
                 # judge the holder by its market's last warmup and its lock age.
-                started_at = parse_activity_timestamp(task["started_at"])
                 completed_at = parse_activity_timestamp((held["last_warmup"] or {}).get('completed_at'))
                 if completed_at is not None and started_at is not None and completed_at > started_at:
                     # Its warmup finished; the lock is released next.
