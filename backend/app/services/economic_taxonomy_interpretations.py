@@ -263,14 +263,17 @@ class EconomicTaxonomyInterpretationService:
                 break
             try:
                 selected = session.get(ClassificationAttempt, UUID(str(entry["selected_attempt_id"])))
-                if selected is not None and self._attempt_completed(session, selected):
-                    self._validated_override(
-                        session,
-                        UUID(str(override_id)),
-                        lineage_id=source_lineage_id,
-                        selected_attempt_id=selected.id,
-                    )
-                    return selected
+                if selected is None:
+                    raise InvalidInterpretation("attempt_not_found")
+                if not self._attempt_completed(session, selected):
+                    raise InvalidInterpretation("attempt_not_completed")
+                self._validated_override(
+                    session,
+                    UUID(str(override_id)),
+                    lineage_id=source_lineage_id,
+                    selected_attempt_id=selected.id,
+                )
+                return selected
             except (KeyError, TypeError, ValueError) as exc:
                 # InvalidInterpretation is a ValueError: fall back to the default.
                 logger.warning(

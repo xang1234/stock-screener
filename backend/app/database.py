@@ -83,5 +83,7 @@ def safe_rollback(db):
     """Rollback that won't raise on a corrupted DB."""
     try:
         db.rollback()
-    except Exception:
-        logger.warning("Session rollback failed", exc_info=True)
+    except Exception as exc:
+        # No exc_info: the chained cause is the statement that failed, and its
+        # bound parameters would land in the log.
+        logger.warning("Session rollback failed: %s: %s", type(exc).__name__, exc)

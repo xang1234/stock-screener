@@ -2,6 +2,8 @@ import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.models.economic_taxonomy_runtime import (
     ClassificationAttempt,
     GenerationInputManifest,
@@ -55,3 +57,40 @@ def test_rejected_override_serves_default_and_logs_reason(monkeypatch, caplog):
     assert str(override_id) in message
     assert str(lineage_id) in message
     assert "override_not_pinned" in message
+
+
+@pytest.mark.parametrize(
+    ("attempt_present", "completed", "reason"),
+    [(False, True, "attempt_not_found"), (True, False, "attempt_not_completed")],
+)
+def test_unusable_selected_attempt_serves_default_and_logs_reason(
+    monkeypatch, caplog, attempt_present, completed, reason
+):
+    lineage_id, override_id = uuid4(), uuid4()
+    selected = SimpleNamespace(id=uuid4())
+    default = SimpleNamespace(id=uuid4())
+    rows = {
+        (TaxonomyAuthority, "1"): SimpleNamespace(serving_generation_id="g"),
+        (ServingGeneration, "g"): SimpleNamespace(generation_input_manifest_id="m"),
+        (GenerationInputManifest, "m"): SimpleNamespace(
+            selections=[
+                {
+                    "lineage": str(lineage_id),
+                    "selected_attempt_id": str(selected.id),
+                    "interpretation_override_revision_id": str(override_id),
+                }
+            ]
+        ),
+    }
+    if attempt_present:
+        rows[(ClassificationAttempt, str(selected.id))] = selected
+    service = EconomicTaxonomyInterpretationService(session_factory=None)
+    monkeypatch.setattr(service, "_attempt_completed", lambda _s, _a: completed)
+    monkeypatch.setattr(service, "_default_attempt", lambda _s, _l: default)
+
+    with caplog.at_level(logging.WARNING):
+        assert service.serving_attempt(_Session(rows), lineage_id) is default
+
+    [record] = caplog.records
+    assert reason in record.getMessage()
+    assert str(override_id) in record.getMessage()
