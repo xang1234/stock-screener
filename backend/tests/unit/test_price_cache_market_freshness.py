@@ -8,6 +8,7 @@ US holiday (Independence Day observed) and an HK trading day; HK trades
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timezone
 
 import pandas as pd
@@ -154,6 +155,29 @@ def test_calendar_failure_makes_non_us_data_stale(session_factory):
     service = _service(session_factory, _BrokenCalendar())
 
     assert service._is_data_fresh(date(2026, 7, 3), market="HK") is False
+
+
+@pytest.mark.parametrize(
+    ("et_hour", "et_minute", "expected"),
+    [
+        (16, 15, date(2026, 11, 18)),  # inside the grace period: Wednesday's close
+        (16, 45, date(2026, 11, 19)),  # after 4:30 PM ET: today's close
+    ],
+)
+def test_us_calendar_failure_falls_back_to_the_us_clock_and_warns(
+    session_factory, monkeypatch, caplog, et_hour, et_minute, expected,
+):
+    import app.services.price_cache_service as module
+
+    now_et = module.EASTERN.localize(datetime(2026, 11, 19, et_hour, et_minute))  # Thursday
+    monkeypatch.setattr(module, "get_eastern_now", lambda: now_et)
+    service = _service(session_factory, _BrokenCalendar())
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        assert service._get_expected_data_date("US") == expected
+
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
 
 
 def test_calendar_falls_back_to_standalone_service_outside_runtime(monkeypatch):

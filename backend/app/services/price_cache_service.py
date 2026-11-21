@@ -1320,10 +1320,8 @@ class PriceCacheService:
         try:
             return self._freshness_policy.last_completed_trading_day(market)
         except Exception as exc:
-            if market == "US":
-                return self._legacy_us_expected_data_date()
             logger.warning("Calendar unavailable for %s expected session: %s", market, exc)
-            return None
+            return self._legacy_us_expected_data_date() if market == "US" else None
 
     def _legacy_us_expected_data_date(self) -> Optional[date]:
         """
@@ -1331,11 +1329,11 @@ class PriceCacheService:
 
         Logic:
         - During market hours: Yesterday's close is sufficient
-        - After 5 PM on trading day: Today's close expected
+        - From 4:30 PM ET on trading day: Today's close expected
         - Before 9:30 AM on trading day: Yesterday's close is fine
         - Weekend/Holiday: Last trading day before today
 
-        Grace period: Between 4:00-5:00 PM, don't expect today's
+        Grace period: Between 4:00-4:29 PM, don't expect today's
         close yet (data providers may have delay).
 
         Returns:
