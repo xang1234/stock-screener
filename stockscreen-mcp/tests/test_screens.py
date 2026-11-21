@@ -17,23 +17,29 @@ from stockscreen_mcp.screens import (
 from conftest import PRESETS, REPO, condition
 
 
-# Shared with frontend/src/features/scan/filterExpression.test.js.
-CASES = json.loads((REPO / "contracts" / "scan_filter_condition_cases.json").read_text())
-TRUTH_TABLE = json.loads((REPO / "contracts" / "scan_filter_truth_table.json").read_text())
+def _contract(name):
+    # Shared with frontend/src/features/scan/filterExpression.test.js. Outside the
+    # repository checkout (an unpacked sdist) the cases are absent and these skip.
+    path = REPO / "contracts" / name
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
-@pytest.mark.parametrize("case", CASES["conditions"])
+CASES = _contract("scan_filter_condition_cases.json")
+TRUTH_TABLE = _contract("scan_filter_truth_table.json")
+
+
+@pytest.mark.parametrize("case", CASES.get("conditions", []))
 def test_condition_matches_the_frontend(case):
     assert evaluate_condition(case["row"], case["condition"]) is case["matches"]
 
 
-@pytest.mark.parametrize("case", CASES["expression_rows"])
+@pytest.mark.parametrize("case", CASES.get("expression_rows", []))
 def test_expression_matches_the_frontend(case):
     expression = CASES["expression"] | {"group_join": case["group_join"]}
     assert evaluate_expression(case["row"], expression) is case["matches"]
 
 
-@pytest.mark.parametrize("case", TRUTH_TABLE["rows"])
+@pytest.mark.parametrize("case", TRUTH_TABLE.get("rows", []))
 def test_expression_matches_the_browser_and_backend_truth_table(case):
     assert evaluate_expression(case["row"], TRUTH_TABLE["expression"]) is case["matches"]
 

@@ -46,8 +46,10 @@ STRONG_BUY_THRESHOLD: float = 80.0
 BUY_THRESHOLD: float = 70.0
 WATCH_THRESHOLD: float = 60.0
 
-# Max points per criterion for each built-in screener. The scanners score
-# against these and ExplainStockUseCase reads them for flat breakdowns.
+# Max points per criterion for each built-in screener. The scanners report
+# these as max_points and ExplainStockUseCase reads them for flat breakdowns.
+# The points each scanner awards are still literals in the scanner, so change
+# both together; test_criterion_max_points fails when they disagree.
 CRITERION_MAX_POINTS_BY_SCREENER: dict[str, dict[str, float]] = {
     "minervini": {
         "rs_rating": 20,

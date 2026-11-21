@@ -1,4 +1,8 @@
-"""The built-in scanners and ExplainStockUseCase share one max-points table."""
+"""Each built-in scanner awards points within the shared max-points table.
+
+The awarded points are still literals in each scanner, so ``score <= max_points``
+is what catches a table edit the scanner doesn't follow.
+"""
 
 import pytest
 
