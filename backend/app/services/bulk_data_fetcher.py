@@ -1119,7 +1119,7 @@ class BulkDataFetcher:
 
         # Circuit breaker check is per-batch — when open, skip remaining
         # batches rather than spinning through dozens of independent retries.
-        from .provider_circuit_breaker import CircuitOpenError, get_circuit_breaker
+        from .provider_circuit_breaker import get_circuit_breaker
         breaker = get_circuit_breaker()
 
         for batch_num in range(total_batches):
@@ -1179,15 +1179,13 @@ class BulkDataFetcher:
                         all_results[symbol] = fundamentals
 
                     except Exception as e:
-                        error_str = str(e).lower()
                         logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
                         all_results[symbol] = {'has_error': True, 'error': str(e)}
-                        if any(ind in error_str for ind in ("rate", "429", "too many", "limit", "throttl")):
+                        if self._is_rate_limit_error(str(e)):
                             batch_rate_limit_failures += 1
                             if market is not None:
                                 from .rate_budget_policy import get_rate_budget_policy
                                 get_rate_budget_policy().record_429("yfinance", market)
-                            breaker.record_429("yfinance", market)
 
                     # Rate limit between individual ticker fetches within batch
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
@@ -1215,6 +1213,7 @@ class BulkDataFetcher:
             # Batch-level backoff: if >50% of batch hit rate limits, back off
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0
             if batch_failure_rate > 0.5:
+                breaker.record_429("yfinance", market)
                 consecutive_backoffs += 1
                 backoff_time = min(
                     backoff_base_s * (backoff_factor ** (consecutive_backoffs - 1)),
