@@ -7,9 +7,9 @@ all Celery workers agree, and short-circuits doomed calls until the
 cooldown expires. State is per-(provider, market), so an open circuit on
 ``finviz:hk`` doesn't pause ``finviz:us``.
 
-Falls back silently to a no-op (always-closed) when Redis is unavailable
-— callers continue to use the underlying rate-limiter backoff in that
-case.
+When no Redis client is available, the same state machine runs in-process
+(per worker, not shared). A Redis error mid-call is treated as closed, so
+callers fall back to the underlying rate-limiter backoff.
 """
 from __future__ import annotations
 
@@ -308,7 +308,8 @@ class ProviderCircuitBreaker:
         """Force-reset state (admin/test helper)."""
         client = self._redis()
         if client is None:
-            self._fallback_state.pop(self._fallback_key(provider, market), None)
+            with self._fallback_lock:
+                self._fallback_state.pop(self._fallback_key(provider, market), None)
             return
         try:
             client.delete(self.state_key(provider, market))
@@ -350,16 +351,21 @@ class ProviderCircuitBreaker:
             if not entry:
                 return "closed"
             state = entry["state"]
+            now = time.time()
+            cooldown = self.cooldown_s(market)
             if state == "open":
-                if time.time() - entry["opened_at"] >= self.cooldown_s(market):
+                if now - entry["opened_at"] >= cooldown:
                     entry["state"] = "half_open"
-                    entry["probe_taken"] = True
+                    entry["probe_at"] = now
                     return "half_open_probe"
                 return "open"
             if state == "half_open":
-                if entry.get("probe_taken"):
+                # Like the Redis probe key's EX, a probe whose caller never
+                # reports back expires after one cooldown. The lease is at
+                # least 1 s, so a zero cooldown still admits one probe at a time.
+                if "probe_at" in entry and now - entry["probe_at"] < max(cooldown, 1):
                     return "open"
-                entry["probe_taken"] = True
+                entry["probe_at"] = now
                 return "half_open_probe"
             return "closed"
 
@@ -374,8 +380,9 @@ class ProviderCircuitBreaker:
             if entry["state"] == "half_open":
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
-                entry.pop("probe_taken", None)
-            elif entry["consecutive_429"] >= self.threshold:
+                entry.pop("probe_at", None)
+            elif entry["state"] != "open" and entry["consecutive_429"] >= self.threshold:
+                # As in Redis, a 429 while already open keeps the cooldown.
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
             return entry["state"] == "open"
@@ -384,12 +391,12 @@ class ProviderCircuitBreaker:
         with self._fallback_lock:
             key = self._fallback_key(provider, market)
             entry = self._fallback_state.get(key)
-            if not entry:
-                return
+            if not entry or entry["state"] == "open":
+                return  # as in Redis: a late success does not touch an open circuit
             if entry["state"] == "half_open":
                 entry["state"] = "closed"
             entry["consecutive_429"] = 0
-            entry.pop("probe_taken", None)
+            entry.pop("probe_at", None)
 
 
 # Module-level singleton
