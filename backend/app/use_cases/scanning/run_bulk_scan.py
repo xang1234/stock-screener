@@ -168,7 +168,9 @@ class RunBulkScanUseCase:
                     )
                     uow.commit()
                 except Exception:
-                    pass
+                    logger.warning(
+                        "Could not mark scan %s as failed", cmd.scan_id, exc_info=True
+                    )
                 raise
 
     # ------------------------------------------------------------------

@@ -1851,6 +1851,7 @@ def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path
         snapshot = service.fetch_de_snapshot()
 
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    assert snapshot.source_metadata["baseline_status"] == "baseline_unavailable"
     assert any(
         "baseline CSV at" in record.message and "missing on disk" in record.message
         for record in caplog.records

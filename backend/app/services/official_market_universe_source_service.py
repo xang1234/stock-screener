@@ -1295,12 +1295,13 @@ class OfficialMarketUniverseSourceService:
         #
         # When the baseline CSV is absent from disk entirely (container layout
         # drift, image-build glitch, etc.) ``_load_de_csv_fallback`` returns an
-        # empty list and the superset check trivially passes — silently
-        # disabling the safety net. Log a loud warning so the gap is
-        # observable rather than vanishing.
+        # empty list and the superset check cannot run, so the snapshot reports
+        # ``baseline_unavailable`` and a warning is logged.
         live_symbols = {row["symbol"] for row in rows}
         baseline_rows = self._load_de_csv_fallback()
+        baseline_status = "ok"
         if not baseline_rows and not Path(settings.de_universe_fallback_csv_path).exists():
+            baseline_status = "baseline_unavailable"
             logger.warning(
                 "DE baseline CSV at %s is missing on disk; the curated-baseline "
                 "superset check cannot run and the live universe will publish "
@@ -1310,7 +1311,7 @@ class OfficialMarketUniverseSourceService:
         csv_symbols = {row["symbol"] for row in baseline_rows}
         missing_csv_symbols = csv_symbols - live_symbols
         baseline_metadata: dict[str, Any] = {
-            "baseline_status": "ok",
+            "baseline_status": baseline_status,
             "baseline_missing_count": 0,
             "baseline_missing_symbols": [],
             "baseline_missing_symbols_truncated": False,
