@@ -1061,7 +1061,10 @@ class ValidationService:
         return {
             "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
-            "recent_entry_sessions": _recent_entry_sessions(sessions),
+            # A historical overview's window ends at its as-of date, not at the latest session.
+            "recent_entry_sessions": _recent_entry_sessions(
+                [day for day in sessions if day <= effective_as_of_date]
+            ),
             "marked_events": marked_events,
             "events": events,
             "degraded_reasons": _dedupe(degraded_reasons),
@@ -1076,8 +1079,9 @@ class ValidationService:
         recent_events: list[EvaluatedValidationEvent] | None,
         cycle_states: Mapping[date, str],
     ) -> list[ValidationGroup]:
-        """One group per value the lookback's ``events`` hold. ``recent_events`` are the recent
-        window's events, which can include picks signalled before the lookback; None when the
+        """One group per value that the lookback's ``events`` or ``recent_events`` hold.
+        ``recent_events`` are the recent window's events, which can include picks signalled
+        before the lookback, so a value can have recent picks and an empty base. None when the
         overview has no recent window."""
 
         def by_value(members: list[EvaluatedValidationEvent], dimension: str):
@@ -1104,7 +1108,9 @@ class ValidationService:
                         else summarize_horizon(recent_members[value], horizon_sessions=RECENT_HORIZON)
                     ),
                 )
-                for value in sorted(members, key=partial(_group_order, dimension))
+                for value in sorted(
+                    members.keys() | (recent_members or {}).keys(), key=partial(_group_order, dimension)
+                )
             )
         return groups
 

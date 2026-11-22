@@ -2345,6 +2345,42 @@ def test_each_group_reports_the_recent_window_over_its_own_picks(session):
     ] == [("2", 2, 1), ("3", 1, 1)]
 
 
+def test_a_group_value_only_recent_picks_hold_still_gets_a_row(session):
+    # On a 30-day lookback starting 2025-12-31, the Stage 3 pick signalled 12-30
+    # is outside the base but enters inside the recent window.
+    payload = _winter_overview(
+        session,
+        [("OLD", date(2025, 12, 30)), ("NEW", date(2026, 1, 5))],
+        {"OLD": _winter_bars(), "NEW": _winter_bars()},
+        details={"OLD": {"stage": 3}},
+        lookback_days=30,
+    )
+
+    assert [
+        (g.value, g.horizons[1].sample_size, g.recent.sample_size)
+        for g in payload.groups
+        if g.dimension == "stage"
+    ] == [("2", 1, 1), ("3", 0, 1)]
+
+
+def test_a_historical_overview_anchors_the_recent_window_at_its_as_of_date(session):
+    as_of = date(2026, 1, 23)
+    service = _service(last_completed=date(2026, 1, 30), sessions=WINTER_SESSIONS)
+
+    recent = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=90,
+        as_of_date=as_of,
+    ).recent
+
+    eligible = [day for day in WINTER_SESSIONS if day <= as_of]
+    assert (recent.entries_from, recent.entries_through) == (
+        eligible[-24].isoformat(),
+        eligible[-5].isoformat(),
+    )
+
+
 def test_groups_have_no_recent_window_when_the_overview_has_none(session):
     _add_universe(session, "NVDA")
     _add_pick(session, _add_run(session, date(2026, 1, 5)), "NVDA", 90.0)
