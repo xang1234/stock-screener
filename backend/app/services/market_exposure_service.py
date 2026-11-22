@@ -3,7 +3,7 @@
 A transparent, rules-based 0-100 recommended-exposure score for a market,
 blended from inputs already in the DB:
 
-  * index OHLCV (distribution days, follow-through day, 50/200-DMA, trend)
+  * index OHLCV (distribution days, market cycle, 50/200-DMA, trend)
   * market breadth (net 4% movers)
   * VIX (US only)
 
@@ -24,6 +24,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..domain.common.benchmarks import get_primary_benchmark_symbol
+from ..domain.markets.market_cycle import CycleBar, CycleState, market_cycle
 from ..domain.markets.registry import US_VIX_PRICE_SYMBOL
 from ..models.market_breadth import MarketBreadth
 from ..models.market_exposure import MarketExposure
@@ -34,12 +35,6 @@ from .breadth.query import breadth_query
 # --- Distribution day detection -------------------------------------------
 DISTRIBUTION_LOOKBACK = 25       # rolling sessions
 DISTRIBUTION_DOWN_THRESHOLD = 0.002  # index down >= 0.2%; volume > prior session
-
-# --- Follow-through day (v1 heuristic — see detect_follow_through_day) ------
-FTD_GAIN_PCT = 0.015     # >= +1.5% up day
-FTD_WINDOW = 15          # look back this many sessions for a qualifying day
-FTD_LOW_LOOKBACK = 20    # window used to locate the "recent low"
-FTD_MIN_RALLY_DAY = 4    # day 4+ off the recent low (heuristic proxy)
 
 # --- Moving averages / trend ----------------------------------------------
 MA_FAST = 50
@@ -77,7 +72,12 @@ CAP_BELOW_200DMA = 50.0         # never "aggressive" below the 200-DMA
 DIST_HEAVY = 8                  # genuinely heavy distribution
 CAP_HEAVY_DISTRIBUTION = 45.0
 
-FTD_FLOOR = 45.0                # recent FTD after a correction raises the floor
+FTD_FLOOR = 45.0                # an FTD in the last FTD_FLOOR_SESSIONS bars raises the floor
+FTD_FLOOR_SESSIONS = 15
+# The cycle runs over a fixed trailing window, so a date's state depends only on
+# the bars before it and not on where the loaded frame starts. A daily run and a
+# later backfill then agree whenever the frame holds this many sessions.
+CYCLE_LOOKBACK_SESSIONS = 252
 
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
@@ -126,42 +126,19 @@ def count_distribution_days(
     return int(mask.tail(lookback).sum())
 
 
-def detect_follow_through_day(
-    ohlcv_df: pd.DataFrame,
-    gain_pct: float = FTD_GAIN_PCT,
-    window: int = FTD_WINDOW,
-    low_lookback: int = FTD_LOW_LOOKBACK,
-    min_rally_day: int = FTD_MIN_RALLY_DAY,
-) -> tuple[bool, Optional[date]]:
-    """v1 HEURISTIC follow-through-day flag. Returns (found, date_of_ftd).
+def _session_bars(ohlcv_df: pd.DataFrame) -> pd.DataFrame:
+    """One bar per session in date order, keeping the later bar for a repeated
+    date, and only bars whose Close and Low are positive and finite.
 
-    CEILING: this is NOT a true IBD follow-through detector — it does not track
-    a confirmed rally attempt with a state machine. It flags the most recent
-    session within ``window`` where Close rose >= ``gain_pct`` on rising volume,
-    occurring at least ``min_rally_day`` sessions after the trailing
-    ``low_lookback`` low. It is used only to *raise the score floor* after a
-    correction, never to lift the score on its own. Full rally-attempt FSM is v2.
+    ``PriorVolume`` is the previous session's volume, taken before any bar is
+    removed, so a bar after a removed one compares with the session that
+    actually preceded it.
     """
-    if ohlcv_df is None or len(ohlcv_df) < min_rally_day + 1:
-        return False, None
-    close = ohlcv_df["Close"]
-    pct = close.pct_change(fill_method=None)
-    vol_up = ohlcv_df["Volume"] > ohlcv_df["Volume"].shift(1)
-    strong_up = (pct >= gain_pct) & vol_up
-
-    low_window = close.tail(low_lookback)
-    if low_window.empty:
-        return False, None
-    low_label = low_window.index[int(low_window.values.argmin())]
-    low_pos = ohlcv_df.index.get_loc(low_label)
-
-    candidates = strong_up.tail(window)
-    for ts in reversed(list(candidates.index)):
-        if not bool(candidates.loc[ts]):
-            continue
-        if ohlcv_df.index.get_loc(ts) - low_pos >= min_rally_day:
-            return True, ts.date()
-    return False, None
+    bars = ohlcv_df.sort_index()
+    bars = bars[~bars.index.duplicated(keep="last")]
+    bars = bars.assign(PriorVolume=bars["Volume"].astype(float).shift(1))
+    prices = bars[["Close", "Low"]]
+    return bars[((prices > 0) & (prices < float("inf"))).all(axis=1)]
 
 
 def compute_trend(ohlcv_df: pd.DataFrame) -> dict:
@@ -315,7 +292,7 @@ def compute_exposure(
         return resolution.error_payload(market=market, as_of_date=as_of_date)
 
     # Slice "as of" — tz-agnostic date mask (handles naive + tz-aware indexes).
-    df = bundle.data[bundle.data.index.date <= as_of_date]
+    df = _session_bars(bundle.data[bundle.data.index.date <= as_of_date])
     if df.empty:
         return {"error": "no_benchmark_data", "market": market, "date": as_of_date.isoformat()}
     # The most recent bar must BE as_of_date. Otherwise we'd write a row dated
@@ -335,11 +312,26 @@ def compute_exposure(
 
     trend = compute_trend(df)
     dist = count_distribution_days(df)
-    ftd, ftd_date = detect_follow_through_day(df)
+    window = df.tail(CYCLE_LOOKBACK_SESSIONS)
+    cycle = market_cycle([
+        CycleBar(*bar)
+        for bar in zip(
+            window.index.date,
+            window["Close"],
+            window["Low"],
+            window["Volume"].astype(float),
+            window["PriorVolume"],
+            strict=True,
+        )
+    ])[-1]
+    recent_ftd = (
+        cycle.state is CycleState.UPTREND
+        and cycle.ftd_date in set(df.index.date[-FTD_FLOOR_SESSIONS:])
+    )
     vix = _vix_on_date(db, as_of_date) if market == "US" else None
     net_4pct = _net_4pct_on_date(db, market, as_of_date)
 
-    score, components = _score(trend, dist, ftd, vix, net_4pct)
+    score, components = _score(trend, dist, recent_ftd, vix, net_4pct)
 
     return {
         "market": market,
@@ -351,8 +343,12 @@ def compute_exposure(
         "benchmark_ma200": trend["ma200"],
         "trend": trend["trend"],
         "distribution_day_count": dist,
-        "follow_through_day": ftd,
-        "follow_through_date": ftd_date,
+        "follow_through_day": cycle.ftd_date is not None,
+        "follow_through_date": cycle.ftd_date,
+        "cycle_state": cycle.state.value,
+        "rally_day": cycle.rally_day,
+        "rally_low_date": cycle.rally_low_date,
+        "failed_ftd_date": cycle.failed_ftd_date,
         "vix": vix,
         "net_4pct": net_4pct,
         "components": components,
@@ -444,8 +440,9 @@ def build_exposure_payload(
     """Shared reader for the Daily Snapshot payloads (live + static).
 
     Returns the latest stored row's headline + a ``history`` list of
-    {date, exposure_score, stance} over the trailing ``history_days``. None when
-    no rows exist yet (the UI renders a muted placeholder).
+    {date, exposure_score, stance, cycle_state, rally_day, follow_through,
+    failed_ftd} over the trailing ``history_days``. None when no rows exist yet
+    (the UI renders a muted placeholder).
 
     ``as_of_date`` pins the payload to a date: the live snapshot omits it (uses
     the absolute latest row), while the static export passes the published run's
@@ -473,15 +470,19 @@ def build_exposure_payload(
         .order_by(MarketExposure.date.asc())
         .all()
     )
-    # follow_through marks the actual FTD *event* day: the row whose detected
-    # follow_through_date is its own date (later rows still see that FTD in their
-    # trailing window, but only the event day has date == follow_through_date).
+    # follow_through and failed_ftd mark event days only: later rows keep the
+    # FTD's date while it holds, but only the FTD session has it as its own date.
     history = [
         {
             "date": r.date.isoformat(),
             "exposure_score": r.exposure_score,
             "stance": r.stance,
-            "follow_through": bool(r.follow_through_day and r.follow_through_date == r.date),
+            "cycle_state": r.cycle_state,
+            "rally_day": r.rally_day,
+            "follow_through": bool(
+                r.cycle_state and r.follow_through_day and r.follow_through_date == r.date
+            ),
+            "failed_ftd": r.failed_ftd_date == r.date,
         }
         for r in rows
     ]
@@ -492,6 +493,9 @@ def build_exposure_payload(
         "stance": latest.stance,
         "distribution_day_count": latest.distribution_day_count,
         "follow_through_day": latest.follow_through_day,
+        "follow_through_date": latest.follow_through_date.isoformat() if latest.follow_through_date else None,
+        "cycle_state": latest.cycle_state,
+        "rally_day": latest.rally_day,
         "trend": latest.trend,
         "vix": latest.vix,
         "benchmark_symbol": latest.benchmark_symbol,

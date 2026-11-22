@@ -4,6 +4,7 @@ from typing import Annotated, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..domain.markets.market_cycle import CycleState
 from .scanning import ScanResultItem
 
 
@@ -183,7 +184,10 @@ class MarketHealthExposureHistoryPoint(BaseModel):
     date: str
     exposure_score: float
     stance: str
+    cycle_state: Optional[CycleState] = None
+    rally_day: Optional[int] = None
     follow_through: bool = False
+    failed_ftd: bool = False
 
 
 class MarketHealthExposure(BaseModel):
@@ -196,6 +200,9 @@ class MarketHealthExposure(BaseModel):
     stance: str
     distribution_day_count: int
     follow_through_day: bool
+    follow_through_date: Optional[str] = None
+    cycle_state: Optional[CycleState] = None
+    rally_day: Optional[int] = None
     trend: Optional[str] = None
     vix: Optional[float] = None
     benchmark_symbol: Optional[str] = None

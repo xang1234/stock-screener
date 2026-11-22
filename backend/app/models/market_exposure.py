@@ -1,7 +1,7 @@
 """Market exposure / health model.
 
 One row per ``(date, market)`` holding a transparent 0-100 recommended-exposure
-score plus the inputs that justify it (distribution days, follow-through day,
+score plus the inputs that justify it (distribution days, market cycle,
 MA/trend, VIX, breadth). Computed daily by the market pipeline and read by the
 Daily Snapshot payloads (live + static). Partitioned by ``market`` exactly like
 ``MarketBreadth`` — same calendar dates, independent universes.
@@ -44,10 +44,16 @@ class MarketExposure(Base):
     benchmark_ma200 = Column(Float, nullable=True)
     trend = Column(String(20), nullable=True)  # bullish | neutral | bearish
 
-    # Distribution / follow-through
     distribution_day_count = Column(Integer, nullable=False, default=0, server_default="0")
+
+    # Market cycle (app.domain.markets.market_cycle). follow_through_* hold the
+    # FTD confirming the current uptrend while its rally low holds.
     follow_through_day = Column(Boolean, nullable=False, default=False, server_default=false())
     follow_through_date = Column(Date, nullable=True)
+    cycle_state = Column(String(16), nullable=True)  # uptrend | correction | rally_attempt
+    rally_day = Column(Integer, nullable=True)
+    rally_low_date = Column(Date, nullable=True)
+    failed_ftd_date = Column(Date, nullable=True)
 
     # Volatility + breadth inputs (transparency)
     vix = Column(Float, nullable=True)  # None for non-US / when unavailable

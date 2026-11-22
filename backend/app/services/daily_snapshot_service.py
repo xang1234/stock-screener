@@ -50,7 +50,7 @@ from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
 
-DAILY_SNAPSHOT_SCHEMA_VERSION = 4
+DAILY_SNAPSHOT_SCHEMA_VERSION = 5
 DAILY_SNAPSHOT_CACHE_TTL_SECONDS = 600
 DAILY_SNAPSHOT_TOP_RESULTS = 20
 ACTION_STATE_VALUES = tuple(state.value for state in ActionState)
