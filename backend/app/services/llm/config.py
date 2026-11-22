@@ -148,7 +148,8 @@ def resolve_ollama_api_base(saved: Optional[str]) -> str:
     cloud host while the workers were already sending extraction to a local daemon.
 
     ``saved`` is passed in rather than read here so each caller keeps its own
-    session. An unreadable value must fall through, never raise.
+    session. ``LLMService`` differs in one case: when its read of the row fails,
+    it skips step 3 and refuses Ollama dispatch rather than guess the cloud host.
     """
     return saved or os.environ.get("OLLAMA_API_BASE") or OLLAMA_API_BASE_DEFAULT
 

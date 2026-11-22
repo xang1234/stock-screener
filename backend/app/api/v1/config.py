@@ -2,7 +2,6 @@
 import hmac
 import json
 import logging
-import os
 from copy import deepcopy
 from datetime import datetime
 from typing import Optional
@@ -414,11 +413,9 @@ async def update_ollama_settings(
     # Test connection
     status = await check_ollama_status(api_base)
 
-    # Save setting
+    # The saved row is the only runtime source. Every process reads it, while an
+    # environment write would reach this API process alone.
     set_setting(db, "ollama_api_base", api_base, "llm", "Ollama API base URL")
-
-    # Also set environment variable for LiteLLM
-    os.environ["OLLAMA_API_BASE"] = api_base
 
     return {
         "status": "success",

@@ -45,10 +45,12 @@ _ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
 _OPENCODE_GO_API_BASE_DEFAULT = "https://opencode.ai/zen/go/v1"
 _OLLAMA_API_BASE_DEFAULT = "https://ollama.com"
 _OPENCODE_GO_SESSION_ID = f"social-{uuid4().hex}"
+# Returned by ``_load_ollama_api_base`` when the saved row could not be read.
+_OLLAMA_API_BASE_UNREADABLE = object()
 
 
-def _load_ollama_api_base() -> Optional[str]:
-    """Read the admin's saved Ollama destination, or ``None``.
+def _load_ollama_api_base() -> object:
+    """Read the admin's saved Ollama destination.
 
     ``POST /config/ollama`` writes the ``ollama_api_base`` row, and that row is
     the one source that reflects what an admin actually selected. It is read here
@@ -57,13 +59,14 @@ def _load_ollama_api_base() -> Optional[str]:
     worker containers, and the settings module cannot depend on the database.
 
     The import is local so this module keeps working in contexts without a
-    database (for example a plain import in a script), and a session that cannot
-    be opened is treated as "nothing saved" rather than as a hard failure: the
-    environment override and the cloud default behind it still apply.
+    database (for example a plain import in a script). A failed lookup is not
+    "nothing saved": the admin may have chosen a local daemon, and falling back
+    to the cloud default would send prompts to ollama.com. It is reported as
+    ``_OLLAMA_API_BASE_UNREADABLE`` so Ollama dispatch can refuse instead.
 
     Returns:
-        The saved base URL, or ``None`` when nothing is stored or the lookup is
-        unavailable.
+        The saved base URL, ``None`` when no row is stored, or
+        ``_OLLAMA_API_BASE_UNREADABLE`` when the lookup failed.
     """
     try:
         from ...database import SessionLocal
@@ -74,9 +77,12 @@ def _load_ollama_api_base() -> Optional[str]:
             row = session.scalar(
                 select(AppSetting.value).where(AppSetting.key == "ollama_api_base")
             )
-    except Exception:  # noqa: BLE001 - any lookup failure means "nothing saved".
-        logger.debug("Ollama base: no saved setting readable, using env or default")
-        return None
+    except Exception:  # noqa: BLE001 - reported to the caller as unreadable, not swallowed.
+        logger.warning(
+            "Ollama base: saved setting unreadable; Ollama calls need OLLAMA_API_BASE",
+            exc_info=True,
+        )
+        return _OLLAMA_API_BASE_UNREADABLE
     return row or None
 
 
@@ -146,12 +152,13 @@ class LLMService:
         self._groq_key_manager = get_groq_key_manager()
         self._zai_key_manager = get_zai_key_manager()
 
-    def _setup_api_keys(self, runtime_ollama_base: Optional[str] = None):
+    def _setup_api_keys(self, runtime_ollama_base: object = None):
         """Set up API keys from settings or environment.
 
         Args:
-            runtime_ollama_base: The admin's saved Ollama destination, if the
-                caller could read it. ``POST /config/ollama`` persists it to the
+            runtime_ollama_base: The admin's saved Ollama destination, ``None``
+                when nothing is saved, or ``_OLLAMA_API_BASE_UNREADABLE`` when
+                the read failed. ``POST /config/ollama`` persists it to the
                 ``ollama_api_base`` row, which only a caller holding a database
                 session can see -- the API route and each worker through
                 ``SessionLocal``. Passing it in keeps one source authoritative
@@ -213,8 +220,8 @@ class LLMService:
         # An earlier version read ``settings.ollama_api_base`` first. That was wrong:
         # the field carries a truthy default ("https://ollama.com"), so an admin who
         # pointed the deployment at a local daemon through ``POST /config/ollama`` --
-        # which writes the ``ollama_api_base`` row *and* ``OLLAMA_API_BASE``, but
-        # cannot reach a Settings instance built from the environment -- kept getting
+        # which writes the ``ollama_api_base`` row, but cannot reach a Settings
+        # instance built from the environment -- kept getting
         # the cloud host back, including from a freshly constructed LLMService
         # (reproduced: saved base http://127.0.0.1:9, resolved https://ollama.com).
         # Extraction prompts could then be sent to the wrong destination, or fail
@@ -223,14 +230,19 @@ class LLMService:
         # Resolution order is therefore explicit, not first-truthy:
         #   1. the admin's saved selection, passed in by the caller that could read it
         #   2. ``OLLAMA_API_BASE`` in the process environment
-        #   3. the cloud default
+        #   3. the cloud default -- only when the row was read and is empty. If the
+        #      read failed, the admin's choice is unknown, so the base stays None
+        #      and ``_apply_provider_overrides`` refuses Ollama dispatch.
         # The Settings field is no longer consulted: it cannot reflect the saved row,
         # and a truthy fallback in front of the environment is what caused the bug.
-        self._ollama_api_base = (
-            runtime_ollama_base
-            or os.environ.get("OLLAMA_API_BASE")
-            or _OLLAMA_API_BASE_DEFAULT
-        )
+        if runtime_ollama_base is _OLLAMA_API_BASE_UNREADABLE:
+            self._ollama_api_base = os.environ.get("OLLAMA_API_BASE") or None
+        else:
+            self._ollama_api_base = (
+                runtime_ollama_base
+                or os.environ.get("OLLAMA_API_BASE")
+                or _OLLAMA_API_BASE_DEFAULT
+            )
 
     async def completion(
         self,
@@ -429,6 +441,8 @@ class LLMService:
         is_ollama = self._is_ollama_model(model)
         if is_opencode_go and not self._opencode_go_api_key:
             raise LLMError("opencode_go_api_key_not_configured")
+        if is_ollama and not self._ollama_api_base:
+            raise LLMPreDispatchError("ollama_api_base_unreadable")
 
         if key_manager and len(key_manager) > 0:
             provider_key = key_manager.get_key()
