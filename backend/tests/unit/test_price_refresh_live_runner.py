@@ -149,6 +149,60 @@ def test_live_price_refresh_runner_progress_counts_only_refreshed_symbols():
     assert published == [(1, 0, 0), (1, 0, 1), (2, 0, 1), (2, 1, 1)]
 
 
+def test_live_price_refresh_runner_progress_adds_to_finished_batches_when_symbols_are_skipped():
+    from app.services.price_refresh_live_runner import (
+        LivePriceRefreshRunner,
+        LivePriceRefreshRunnerDependencies,
+    )
+    from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
+
+    def fetch_with_backoff(_bulk_fetcher, symbols, *, period, market, progress_callback=None):
+        del period, market
+        progress_callback(len(symbols) - 1)  # Yahoo skipped one symbol in each batch
+        return {s: {"has_error": False, "price_data": SimpleNamespace(empty=False)} for s in symbols}
+
+    class _FakePriceCache:
+        def store_refreshed_batch(self, *_args, **_kwargs):
+            pass
+
+    published = []
+
+    class _FakeReporter:
+        def publish_progress(self, *_args, current, refreshed, failed, **_kwargs):
+            published.append(current)
+
+    class _FakeLock:
+        def extend_lock(self, *_args, **_kwargs):
+            pass
+
+    LivePriceRefreshRunner(
+        LivePriceRefreshRunnerDependencies(
+            fetch_with_backoff=fetch_with_backoff,
+            track_symbol_failures=lambda *_args, **_kwargs: None,
+            data_fetch_lock_factory=lambda: _FakeLock(),
+            raise_if_transient_database_error=lambda _exc: None,
+        )
+    ).run(
+        task=SimpleNamespace(request=SimpleNamespace(id="task-1")),
+        bulk_fetcher=object(),
+        price_cache=_FakePriceCache(),
+        db=object(),
+        jobs=(
+            PriceRefreshJob(kind=PriceRefreshJobKind.STALE, symbols=("A", "B", "C", "D"), period="7d"),
+        ),
+        total=4,
+        batch_size=2,
+        market="US",
+        effective_market="US",
+        activity_lifecycle="daily_refresh",
+        symbol_markets={s: "US" for s in "ABCD"},
+        activity_reporter=_FakeReporter(),
+    )
+
+    # Mid-batch-2 progress builds on batch 1's 2 instead of stalling at it.
+    assert published == [1, 2, 3, 4]
+
+
 def test_retry_scheduler_skips_permanent_no_price_data_failures():
     from app.services.price_refresh_live_runner import PriceRefreshRetryScheduler
 

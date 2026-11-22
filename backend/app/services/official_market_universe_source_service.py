@@ -1444,7 +1444,10 @@ class OfficialMarketUniverseSourceService:
         if not csv_path.exists():
             return []
 
-        frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        try:
+            frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        except pd.errors.EmptyDataError:  # a zero-byte file has no rows either
+            return []
         rows: list[dict[str, Any]] = []
         for record in frame.to_dict("records"):
             symbol = str(record.get("symbol") or "").strip()
@@ -1972,7 +1975,10 @@ class OfficialMarketUniverseSourceService:
         if not csv_path.exists():
             return []
 
-        frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        try:
+            frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        except pd.errors.EmptyDataError:  # a zero-byte file has no rows either
+            return []
         rows: list[dict[str, Any]] = []
         seen_symbols: set[str] = set()
         for record in frame.to_dict("records"):
@@ -2165,7 +2171,10 @@ class OfficialMarketUniverseSourceService:
         if not csv_path.exists():
             return []
 
-        frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        try:
+            frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        except pd.errors.EmptyDataError:  # a zero-byte file has no rows either
+            return []
         rows: list[dict[str, Any]] = []
         for record in frame.to_dict("records"):
             symbol = str(record.get("symbol") or "").strip().upper()

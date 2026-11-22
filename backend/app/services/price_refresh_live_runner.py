@@ -58,17 +58,18 @@ class LivePriceRefreshRunner:
         def market_for_symbol(symbol: str) -> str:
             return symbol_markets.get(str(symbol).upper(), effective_market)
 
-        processed = 0
+        current_batch = 0
         # Mid-batch progress cannot tell successes from failures yet, so it
         # reports the totals of the batches that have finished.
         completed = PriceRefreshExecutionSummary.empty(total=total)
 
         def progress_callback(batch_processed: int) -> None:
-            nonlocal processed
+            nonlocal current_batch
 
             # Yahoo leaves skipped symbols out of these callbacks, but the
-            # finished-batch totals count them.
-            processed = max(processed + batch_processed, completed.processed)
+            # finished-batch totals count them, so build on those totals.
+            current_batch += batch_processed
+            processed = completed.processed + current_batch
 
             percent = (processed / total) * 100 if total else 100.0
 
@@ -91,9 +92,10 @@ class LivePriceRefreshRunner:
             batch: PriceRefreshBatchOutcome,
             summary: PriceRefreshExecutionSummary,
         ) -> None:
-            nonlocal completed
+            nonlocal completed, current_batch
 
             completed = summary
+            current_batch = 0
             percent = (summary.processed / total) * 100 if total else 100.0
             activity_reporter.publish_progress(
                 db,

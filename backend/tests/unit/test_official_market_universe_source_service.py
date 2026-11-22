@@ -1825,11 +1825,12 @@ def test_load_de_csv_fallback_emits_isin_for_schema_parity(monkeypatch, tmp_path
         assert set(row.keys()) == expected_keys
 
 
-def test_fetch_de_snapshot_reports_a_headers_only_baseline_as_unavailable(monkeypatch, tmp_path):
+@pytest.mark.parametrize("content", ["symbol,name,isin\n", ""], ids=["headers-only", "zero-byte"])
+def test_fetch_de_snapshot_reports_an_empty_baseline_as_unavailable(monkeypatch, tmp_path, content):
     from app.config import settings as app_settings
 
-    empty = tmp_path / "headers-only.csv"
-    empty.write_text("symbol,name,isin\n", encoding="utf-8")
+    empty = tmp_path / "empty.csv"
+    empty.write_text(content, encoding="utf-8")
     monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
     monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(empty))
     monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
