@@ -76,3 +76,12 @@ describe('the Inter font', () => {
     expect(policy).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/);
   });
 });
+
+describe('nginx static files', () => {
+  it('inherit the server security headers', () => {
+    // Any add_header in a location drops every server-level add_header (CSP,
+    // nosniff, X-Frame-Options); `expires` already sets Cache-Control here.
+    const block = read('../nginx.conf').match(/location ~\* \\\.\(ico[^{]*\{([^}]*)\}/)[1];
+    expect(block).not.toMatch(/add_header/);
+  });
+});
