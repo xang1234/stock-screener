@@ -83,8 +83,7 @@ def flatten_custom_filters(criteria: dict | None) -> dict:
     base = dict(criteria)
     nested = base.pop("custom_filters", None) or {}
     base.pop("min_score", None)
-    base.update(nested)
-    return base
+    return {**base, **nested}  # a mapping only, as the scanner always required
 
 
 def _is_mixed_market(universe_market: str | None) -> bool:

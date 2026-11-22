@@ -22,3 +22,11 @@ def test_null_min_score_applies_the_compilers_default_gate():
 
     compiled = compile_custom_criteria(criteria, screeners=["custom"])
     assert result.details["min_score_required"] == compiled.min_score == 70.0
+
+
+def test_nested_custom_filters_must_be_a_mapping():
+    import pytest
+    from app.domain.scanning.custom_criteria_compiler import flatten_custom_filters
+
+    with pytest.raises(TypeError):
+        flatten_custom_filters({"custom_filters": [("price_min", 10)]})
