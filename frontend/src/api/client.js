@@ -3,8 +3,8 @@
  */
 import axios from 'axios';
 
-// API base URL defaults to '/api' so the packaged desktop app can be served by FastAPI.
-// Vite development uses a local proxy to forward '/api' to the backend.
+// '/api' is proxied to the backend by Vite in development and by nginx in Docker.
+// A build can point elsewhere with VITE_API_URL.
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const DEFAULT_API_TIMEOUT_MS = 30000;
 const THEMES_API_TIMEOUT_MS = 300000;
@@ -59,7 +59,7 @@ const apiClient = axios.create({
   },
 });
 
-// Request interceptor for logging (development only)
+// Request interceptor: longer timeout for theme endpoints, request logging in development.
 apiClient.interceptors.request.use(
   (config) => {
     if (isThemesApiUrl(config?.url)) {

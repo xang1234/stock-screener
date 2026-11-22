@@ -1825,22 +1825,6 @@ class StockUniverseService:
         except (ValueError, AttributeError):
             return None
 
-    def _determine_exchange(self, row: Dict) -> str:
-        """
-        Determine exchange from finviz row data.
-
-        Args:
-            row: Finviz data row
-
-        Returns:
-            Exchange code: NYSE, NASDAQ, or AMEX
-        """
-        # Try to get from row if available
-        # Finviz doesn't always provide exchange directly, so we may need to infer
-        # For now, default to NASDAQ (most tech stocks) unless we can determine otherwise
-        # This is a limitation - may need enhancement
-        return row.get('Exchange', 'NASDAQ').upper()
-
     def populate_universe(self, db: Session, exchange_filter: Optional[str] = None) -> Dict:
         """
         Populate stock_universe table from finviz.

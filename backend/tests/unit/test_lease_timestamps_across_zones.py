@@ -19,6 +19,11 @@ from app.services.cache.price_cache_warmup import PriceCacheWarmupStore
 from app.services.operations_job_service import _age_seconds_from
 from app.services.price_cache_service import PriceCacheService
 from tests.unit.test_data_fetch_lock import _make_lock
+from tests.unit.test_fundamentals_cache_service_field_mapping import (
+    _insert as _insert_fundamentals,
+    _row as _fundamentals_row,
+    _service as _fundamentals_service,
+)
 
 pytestmark = pytest.mark.skipif(not hasattr(time, "tzset"), reason="needs time.tzset")
 
@@ -125,3 +130,25 @@ def test_a_lock_outlived_by_its_completed_warmup_reads_as_finishing(aware_comple
 
     assert lock.method_calls == [call.get_any_current_holder()]  # read-only
     assert status["status"] == "updating"
+
+
+def test_a_fundamentals_row_a_worker_refreshes_reads_its_true_age():
+    service, factory = _fundamentals_service()
+    _insert_fundamentals(service)
+    with _process_tz("America/New_York"):
+        _insert_fundamentals(service)  # an existing row takes the update path
+
+    # SQLite drops the zone, so the stored wall clock must already be UTC.
+    stored = _fundamentals_row(factory).updated_at
+    assert abs(datetime.now(timezone.utc).replace(tzinfo=None) - stored) < timedelta(minutes=1)
+
+
+def test_fundamentals_age_readers_use_utc_in_a_new_york_worker():
+    service, _factory = _fundamentals_service()
+    _insert_fundamentals(service)
+    two_days_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2, hours=2)
+
+    with _process_tz("America/New_York"):
+        assert service.get_cache_stats("AAPL")["age_days"] == 0
+        # Local now is 5 h behind UTC, so a local-clock age would read 1 day: fresh.
+        assert not service._is_data_fresh(two_days_ago, max_age_days=1)

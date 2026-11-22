@@ -983,7 +983,12 @@ def test_price_cache_bulk_fallback_passes_market_to_batch_fetcher(monkeypatch):
     db.close()
 
     service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
-    monkeypatch.setattr(service, "store_batch_in_cache", lambda payload, also_store_db=True: len(payload))
+    stored = []
+    monkeypatch.setattr(
+        service,
+        "store_batch_in_cache",
+        lambda payload, also_store_db=True, market=None, **_kwargs: stored.append((list(payload), market)) or len(payload),
+    )
     calls = []
     price_frame = _price_df(date(2026, 4, 29), 105.0)
 
@@ -1023,6 +1028,7 @@ def test_price_cache_bulk_fallback_passes_market_to_batch_fetcher(monkeypatch):
         }
     ]
     assert result["005930.KS"] is price_frame
+    assert stored == [(["005930.KS"], "KR")]
 
 
 def test_price_cache_bulk_fallback_does_not_retry_without_market_on_type_error(monkeypatch):
@@ -1212,7 +1218,7 @@ def test_get_many_reloads_after_close_if_redis_meta_marks_intraday_stale(monkeyp
     monkeypatch.setattr(module, "is_market_open", lambda now=None: False)
     monkeypatch.setattr(service, "_get_expected_data_date", lambda market=None: date(2026, 3, 18))
     monkeypatch.setattr(service, "_get_many_from_database", lambda symbols, period, **_kwargs: {"AAPL": (None, None)})
-    monkeypatch.setattr(service, "store_batch_in_cache", lambda batch_data, also_store_db=True: None)
+    monkeypatch.setattr(service, "store_batch_in_cache", lambda batch_data, also_store_db=True, market=None, **_kwargs: None)
 
     fetched_symbols = []
 

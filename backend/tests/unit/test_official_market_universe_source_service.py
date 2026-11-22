@@ -1825,6 +1825,30 @@ def test_load_de_csv_fallback_emits_isin_for_schema_parity(monkeypatch, tmp_path
         assert set(row.keys()) == expected_keys
 
 
+@pytest.mark.parametrize("content", ["symbol,name,isin\n", ""], ids=["headers-only", "zero-byte"])
+def test_fetch_de_snapshot_reports_an_empty_baseline_as_unavailable(monkeypatch, tmp_path, content):
+    from app.config import settings as app_settings
+
+    empty = tmp_path / "empty.csv"
+    empty.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(empty))
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
+
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", Instrument="SAP SE"),
+    ])
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_xetra(csv_bytes),
+    )
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["baseline_status"] == "baseline_unavailable"
+
+
 def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path, caplog):
     """When the baseline CSV file is absent from disk the superset safety
     check is trivially vacuous — emit a loud warning so the gap is observable."""
@@ -1851,6 +1875,7 @@ def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path
         snapshot = service.fetch_de_snapshot()
 
     assert snapshot.source_metadata["fetch_mode"] == "live_http"
+    assert snapshot.source_metadata["baseline_status"] == "baseline_unavailable"
     assert any(
         "baseline CSV at" in record.message and "missing on disk" in record.message
         for record in caplog.records

@@ -703,7 +703,8 @@ class ThemeExtractionService:
             loop = None
 
         if loop is not None:
-            # Already in async context - create a task
+            # asyncio.run() cannot nest inside a running loop, so run it on a
+            # worker thread and block until it finishes.
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, _call())

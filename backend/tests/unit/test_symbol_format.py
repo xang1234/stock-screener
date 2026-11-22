@@ -8,8 +8,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.services.symbol_format import (
-    SUPPORTED_SUFFIXES,
     SYMBOL_SHAPE_RE,
     is_valid_symbol_shape,
     normalize_symbol,
@@ -69,9 +69,9 @@ class TestNormalizeSymbol:
         assert normalize_symbol("$AAPL") == "AAPL"
 
     def test_non_us_suffixed_tickers(self):
-        # Every suffix in SUPPORTED_SUFFIXES must round-trip through the
-        # normalizer; this pins the policy list against the regex.
-        for suffix in SUPPORTED_SUFFIXES:
+        # Every market suffix must round-trip through the normalizer; this
+        # pins the suffix registry against the regex.
+        for suffix, _market in market_symbol_suffix_registry.suffix_market_pairs():
             candidate = f"7203{suffix}"
             assert normalize_symbol(candidate) == candidate.upper()
 

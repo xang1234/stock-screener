@@ -49,7 +49,7 @@ class UniverseRowFactsResolver:
                 currency=_row_text(row, 1, "currency"),
             )
         except Exception as exc:  # pragma: no cover - DB hiccup shouldn't block fetch
-            logger.debug("Universe row fact lookup failed for %s (%s)", symbol, exc)
+            logger.warning("Universe row fact lookup failed for %s (%s)", symbol, exc)
             return UniverseRowFacts()
         finally:
             if db is not None:

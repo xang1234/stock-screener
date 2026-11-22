@@ -4,7 +4,7 @@ Force a full cache refresh by clearing existing data and re-fetching.
 This script will:
 1. Delete all existing price data from the database
 2. Clear Redis price cache
-3. Re-fetch full 2-year history for all active stocks
+3. Re-fetch full 5-year history for all active stocks
 4. Properly populate both database and Redis cache
 
 Use this to fix the "19 days" issue by ensuring a clean slate.
@@ -80,18 +80,17 @@ try:
     symbols = [s.symbol for s in universe_stocks]
     logger.info(f"Found {len(symbols)} active symbols to refresh")
 
-    # Step 4: Warm cache with full 2y data
+    # Step 4: Warm cache with full 5y data
     print(f"\n4. Fetching 5-year data for {len(symbols)} symbols...")
     print("   This will take ~2-3 hours (respecting yfinance rate limits)...")
     print("   Progress will be logged...")
 
     cache_manager = CacheManager(db)
 
-    # Use smaller batch size to be safe (20 instead of 50)
     result = cache_manager.warm_price_cache(
         symbols,
-        period="5y",  # Explicitly set to 2 years
-        batch_size=200,  # Smaller batches for reliability
+        period="5y",
+        batch_size=200,  # warm_price_cache defaults to 50
         rate_limit=2.0,  # 2 seconds between batches (conservative)
         force_refresh=True  # Force fetch from yfinance
     )

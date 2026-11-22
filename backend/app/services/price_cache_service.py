@@ -2084,18 +2084,11 @@ class PriceCacheService:
         period: str | None = None,
     ) -> int:
         # Only a sub-2y fetch needs its period recorded; omitting the keyword
-        # otherwise keeps two-argument test doubles working, as with ``market``.
+        # otherwise keeps test doubles without a ``period`` parameter working.
         kwargs: Dict[str, Any] = {"also_store_db": also_store_db}
         if PERIOD_DAYS.get(period, DEFAULT_PERIOD_DAYS) < DEFAULT_PERIOD_DAYS:
             kwargs["period"] = period
-        if market is None:
-            return self.store_batch_in_cache(batch_data, **kwargs)
-        try:
-            return self.store_batch_in_cache(batch_data, market=market, **kwargs)
-        except TypeError as exc:
-            if "market" not in str(exc):
-                raise
-            return self.store_batch_in_cache(batch_data, **kwargs)
+        return self.store_batch_in_cache(batch_data, market=market, **kwargs)
 
     @classmethod
     def _trim_to_period(cls, df: pd.DataFrame, period: str) -> pd.DataFrame:
