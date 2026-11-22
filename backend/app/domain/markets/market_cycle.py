@@ -17,11 +17,15 @@ out, so a daily run and a backfill over the same bars always agree.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
+from typing import NamedTuple
 
-import pandas as pd
+# Absorbs float error so a gain of exactly ftd_gain_pct confirms (101.5 / 100 - 1
+# is 0.014999999999999902).
+_GAIN_TOLERANCE = 1e-9
 
 
 class CycleState(StrEnum):
@@ -51,25 +55,30 @@ class MarketCycle:
     failed_ftd_date: date | None = None  # only on the session the FTD failed
 
 
-def market_cycle(ohlcv: pd.DataFrame, params: CycleParams = DEFAULT_CYCLE_PARAMS) -> list[MarketCycle]:
-    """One ``MarketCycle`` per bar of ``ohlcv`` (Close, Low and Volume columns).
+class CycleBar(NamedTuple):
+    date: date
+    close: float
+    low: float
+    volume: float
 
-    Expects one bar per session in date order, with positive finite Close and
-    Low; ``compute_exposure`` enforces this before calling. A missing, zero or
+
+def market_cycle(bars: Sequence[CycleBar], params: CycleParams = DEFAULT_CYCLE_PARAMS) -> list[MarketCycle]:
+    """One ``MarketCycle`` per bar.
+
+    Expects one bar per session in date order, with positive finite close and
+    low; ``compute_exposure`` enforces this before calling. A missing, zero or
     NaN volume on the session or the one before never confirms an FTD. The
-    first bar starts in UPTREND, so the result depends on where the frame
-    starts until the first correction.
+    first bar starts in UPTREND, so the result depends on where the bars
+    start until the first correction.
     """
-    closes = ohlcv["Close"].astype(float).tolist()
-    lows = ohlcv["Low"].astype(float).tolist()
-    volumes = ohlcv["Volume"].astype(float).tolist()
-    dates = ohlcv.index.date
+    closes = [bar.close for bar in bars]
+    volumes = [bar.volume for bar in bars]
 
     state = CycleState.UPTREND
     peak = float("-inf")
     low = low_date = day = ftd_date = None
     cycles: list[MarketCycle] = []
-    for i, (close, bar_low, bar_date) in enumerate(zip(closes, lows, dates)):
+    for i, (bar_date, close, bar_low, _) in enumerate(bars):
         failed_ftd_date = None
         if state is CycleState.UPTREND:
             peak = max(peak, close)
@@ -88,7 +97,7 @@ def market_cycle(ohlcv: pd.DataFrame, params: CycleParams = DEFAULT_CYCLE_PARAMS
             day += 1
             if (
                 day >= params.ftd_min_rally_day
-                and close / closes[i - 1] - 1 >= params.ftd_gain_pct
+                and close / closes[i - 1] - 1 >= params.ftd_gain_pct - _GAIN_TOLERANCE
                 and volumes[i] > volumes[i - 1] > 0
             ):
                 state, peak, ftd_date, day = CycleState.UPTREND, close, bar_date, None

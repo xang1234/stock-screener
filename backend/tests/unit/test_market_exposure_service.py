@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 import app.services.market_exposure_service as svc
-from app.domain.markets.market_cycle import CycleState, MarketCycle, market_cycle
+from app.domain.markets.market_cycle import CycleBar, CycleState, MarketCycle, market_cycle
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy, BenchmarkResolution
 from app.services.market_exposure_service import (
     CAP_BELOW_200DMA,
@@ -47,14 +47,9 @@ UP, CORR, ATT = CycleState.UPTREND, CycleState.CORRECTION, CycleState.RALLY_ATTE
 
 def _bars(closes, lows=None, volumes=None):
     """Daily bars from 2024-01-01; Low defaults to Close and Volume to 1000."""
-    return pd.DataFrame(
-        {
-            "Close": closes,
-            "Low": closes if lows is None else lows,
-            "Volume": [1000] * len(closes) if volumes is None else volumes,
-        },
-        index=pd.date_range("2024-01-01", periods=len(closes), freq="D"),
-    )
+    lows = closes if lows is None else lows
+    volumes = [1000] * len(closes) if volumes is None else volumes
+    return [CycleBar(_day(i), c, lo, v) for i, (c, lo, v) in enumerate(zip(closes, lows, volumes))]
 
 
 def _day(i):
@@ -95,6 +90,17 @@ def test_cycle_follow_through_on_day_4_with_gain_and_rising_volume():
     cycles = market_cycle(_bars(_ATTEMPT_TO_DAY_3 + [93.2], volumes=[1000] * 5 + [1500]))
     assert cycles[4].rally_day == 3
     assert cycles[5] == MarketCycle(UP, rally_low=91, rally_low_date=_day(1), ftd_date=_day(5))
+
+
+@pytest.mark.parametrize(
+    "prior, close, confirms",
+    [(1000, 1014.99, False), (1000, 1015, True), (1000, 1015.01, True), (100, 101.5, True)],
+)
+def test_cycle_follow_through_gain_is_inclusive_at_1_5_pct(prior, close, confirms):
+    # Peak, correction, three rally days ending at ``prior``, then day 4.
+    closes = [prior * 1.2, prior * 0.995, prior * 0.998, prior * 0.999, prior, close]
+    last = market_cycle(_bars(closes, volumes=[1000] * 5 + [1500]))[-1]
+    assert (last.ftd_date is not None) is confirms
 
 
 def test_cycle_no_follow_through_on_day_3():

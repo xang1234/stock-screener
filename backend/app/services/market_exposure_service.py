@@ -24,7 +24,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..domain.common.benchmarks import get_primary_benchmark_symbol
-from ..domain.markets.market_cycle import CycleState, market_cycle
+from ..domain.markets.market_cycle import CycleBar, CycleState, market_cycle
 from ..domain.markets.registry import US_VIX_PRICE_SYMBOL
 from ..models.market_breadth import MarketBreadth
 from ..models.market_exposure import MarketExposure
@@ -306,7 +306,11 @@ def compute_exposure(
 
     trend = compute_trend(df)
     dist = count_distribution_days(df)
-    cycle = market_cycle(df.tail(CYCLE_LOOKBACK_SESSIONS))[-1]
+    window = df.tail(CYCLE_LOOKBACK_SESSIONS)
+    cycle = market_cycle([
+        CycleBar(*bar)
+        for bar in zip(window.index.date, window["Close"], window["Low"], window["Volume"].astype(float))
+    ])[-1]
     recent_ftd = (
         cycle.state is CycleState.UPTREND
         and cycle.ftd_date in set(df.index.date[-FTD_FLOOR_SESSIONS:])
