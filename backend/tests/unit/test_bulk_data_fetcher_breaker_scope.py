@@ -1,8 +1,9 @@
-"""The fundamentals path pulses the circuit breaker once per bad batch, not per symbol."""
+"""How the fetcher's batch paths pulse the circuit breaker."""
 from __future__ import annotations
 
 import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import yfinance as yf
 
@@ -14,7 +15,7 @@ from app.services.provider_circuit_breaker import ProviderCircuitBreaker
 
 
 def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=None, sleeps=None,
-                        error="429 Too Many Requests"):
+                        error="429 Too Many Requests", market="US"):
     monkeypatch.setattr(settings, "circuit_breaker_enabled", True)
     monkeypatch.setattr(settings, "circuit_breaker_threshold", 3)
     breaker = breaker or ProviderCircuitBreaker(redis_client_factory=lambda: None)
@@ -45,7 +46,7 @@ def _fetch_fundamentals(monkeypatch, symbols, rate_limited, batch_size, breaker=
         batch_size=batch_size,
         include_quarterly=False,
         delay_per_ticker=0,
-        market="US",
+        market=market,
     )
     return results, fetched_batches, policy_429s
 
@@ -155,3 +156,39 @@ def test_a_trip_carried_from_earlier_calls_skips_the_backoff(monkeypatch):
     assert fetched_batches == [symbols[:10]]
     assert sleeps == []
     assert all(results[s]["error"] == "circuit_open" for s in symbols[10:])
+
+
+def test_unmarketed_fundamentals_fetch_never_records_to_the_unchecked_breaker(monkeypatch):
+    # market=None skips breaker.check, so any record would drive a circuit nothing reads.
+    breaker = MagicMock()
+    symbols = [f"S{i:02d}" for i in range(40)]
+    _fetch_fundamentals(
+        monkeypatch, symbols, rate_limited=set(symbols[:30]), batch_size=10,
+        breaker=breaker, market=None,
+    )
+
+    assert breaker.method_calls == []
+
+
+def test_unmarketed_price_fetch_never_records_to_the_unchecked_breaker(monkeypatch):
+    breaker = MagicMock()
+    monkeypatch.setattr(breaker_module, "get_circuit_breaker", lambda: breaker)
+    fetcher = BulkDataFetcher(rate_limiter=SimpleNamespace(wait=lambda *a, **k: None))
+    batch_size = fetcher.MIN_PRICE_BATCH_SIZE
+    symbols = [f"S{i:02d}" for i in range(2 * batch_size)]
+    rate_limited = set(symbols[:batch_size])
+
+    def fake_batch(batch_symbols, *, period, initial_batch_size, market=None):
+        return {
+            s: {"symbol": s, "price_data": None, "has_error": True, "error": "429 rate limited"}
+            if s in rate_limited
+            else {"symbol": s, "price_data": object(), "has_error": False, "error": None}
+            for s in batch_symbols
+        }
+
+    monkeypatch.setattr(fetcher, "_fetch_price_batch_with_retries", fake_batch)
+    fetcher._fetch_yfinance_prices_in_batches(
+        symbols, period="2y", start_batch_size=batch_size, market=None,
+    )
+
+    assert breaker.method_calls == []

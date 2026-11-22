@@ -426,6 +426,36 @@ class LLMService:
             return "zai", manager
         return None, None
 
+    def has_configured_provider(self) -> bool:
+        """Whether some model in the preset chain has the key it dispatches with.
+
+        Mirrors the key resolution in ``_apply_provider_overrides``. Keep them in step.
+        """
+        for model in get_fallback_chain(self.preset):
+            if self._model_has_key(model):
+                return True
+        return False
+
+    def _model_has_key(self, model: str) -> bool:
+        _, key_manager = self._get_provider_key_manager(model)
+        if key_manager is not None and len(key_manager) > 0:
+            return True
+        if self._is_zai_model(model):
+            return bool(getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY"))
+        if model.startswith("groq/"):
+            # LiteLLM reads GROQ_API_KEY, which _setup_api_keys exports.
+            return bool(os.environ.get("GROQ_API_KEY"))
+        if self._is_minimax_model(model):
+            return bool(self._minimax_api_key)
+        if model.startswith("opencode-go/"):
+            return bool(self._opencode_go_api_key)
+        if self._is_ollama_model(model):
+            # A local daemon needs no key; Ollama Cloud does, and an unreadable base never dispatches.
+            if not self._ollama_api_base:
+                return False
+            return self._ollama_api_base.rstrip("/") != _OLLAMA_API_BASE_DEFAULT or bool(self._ollama_api_key)
+        return True  # other LiteLLM providers read their own environment keys
+
     def _apply_provider_overrides(
         self,
         params: Dict[str, Any],
