@@ -57,6 +57,14 @@ class ScanCreateRequest(BaseModel):
     )
     criteria: Optional[dict] = Field(default=None, description="Scan criteria")
 
+    @field_validator("criteria")
+    @classmethod
+    def _custom_filters_is_an_object(cls, criteria: Optional[dict]) -> Optional[dict]:
+        nested = (criteria or {}).get("custom_filters")
+        if nested is not None and not isinstance(nested, dict):
+            raise ValueError("criteria.custom_filters must be an object")
+        return criteria
+
     # Multi-screener fields
     screeners: List[str] = Field(
         default=["minervini"],

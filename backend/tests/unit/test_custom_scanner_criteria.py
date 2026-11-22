@@ -30,3 +30,12 @@ def test_nested_custom_filters_must_be_a_mapping():
 
     with pytest.raises(TypeError):
         flatten_custom_filters({"custom_filters": [("price_min", 10)]})
+
+
+def test_scan_request_rejects_non_object_custom_filters():
+    import pytest
+    from pydantic import ValidationError
+    from app.schemas.scanning import ScanCreateRequest
+
+    with pytest.raises(ValidationError, match="custom_filters must be an object"):
+        ScanCreateRequest(criteria={"custom_filters": [["price_min", 10]]})
