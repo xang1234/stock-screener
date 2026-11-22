@@ -7,9 +7,9 @@ all Celery workers agree, and short-circuits doomed calls until the
 cooldown expires. State is per-(provider, market), so an open circuit on
 ``finviz:hk`` doesn't pause ``finviz:us``.
 
-Falls back silently to a no-op (always-closed) when Redis is unavailable
-— callers continue to use the underlying rate-limiter backoff in that
-case.
+When no Redis client is available, the same state machine runs in-process
+(per worker, not shared). A Redis error mid-call is treated as closed, so
+callers fall back to the underlying rate-limiter backoff.
 """
 from __future__ import annotations
 
@@ -350,16 +350,20 @@ class ProviderCircuitBreaker:
             if not entry:
                 return "closed"
             state = entry["state"]
+            now = time.time()
+            cooldown = self.cooldown_s(market)
             if state == "open":
-                if time.time() - entry["opened_at"] >= self.cooldown_s(market):
+                if now - entry["opened_at"] >= cooldown:
                     entry["state"] = "half_open"
-                    entry["probe_taken"] = True
+                    entry["probe_at"] = now
                     return "half_open_probe"
                 return "open"
             if state == "half_open":
-                if entry.get("probe_taken"):
+                # Like the Redis probe key's EX, a probe whose caller never
+                # reports back expires after one cooldown.
+                if "probe_at" in entry and now - entry["probe_at"] < cooldown:
                     return "open"
-                entry["probe_taken"] = True
+                entry["probe_at"] = now
                 return "half_open_probe"
             return "closed"
 
@@ -374,7 +378,7 @@ class ProviderCircuitBreaker:
             if entry["state"] == "half_open":
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
-                entry.pop("probe_taken", None)
+                entry.pop("probe_at", None)
             elif entry["consecutive_429"] >= self.threshold:
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
@@ -389,7 +393,7 @@ class ProviderCircuitBreaker:
             if entry["state"] == "half_open":
                 entry["state"] = "closed"
             entry["consecutive_429"] = 0
-            entry.pop("probe_taken", None)
+            entry.pop("probe_at", None)
 
 
 # Module-level singleton
