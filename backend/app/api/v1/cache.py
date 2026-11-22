@@ -343,11 +343,10 @@ def force_cancel_refresh():
                 "message": "No task is currently running"
             }
 
-        # Check if task is actually stuck. Derive market from lock key for
-        # the market-scoped heartbeat lookup.
+        # Check if task is actually stuck, using the holder's own market for
+        # the heartbeat lookup (None for the shared and legacy unsuffixed keys).
         lock_key = running.get('lock_key', '')
-        suffix = lock_key.rsplit(':', 1)[-1]
-        market_str = None if suffix in ('shared', '') else suffix
+        market_str = running.get('market')
 
         price_cache = get_price_cache()
         minutes = price_cache._get_minutes_since_heartbeat(market=market_str)
@@ -361,9 +360,9 @@ def force_cancel_refresh():
             }
         # minutes is None (heartbeat expired) or > 30 — allow cancel
 
-        # Release only the market whose heartbeat was checked; other markets'
+        # Release only the lock whose heartbeat was checked; other markets'
         # locks may belong to refreshes that are still progressing.
-        lock.force_release(market=market_str)
+        lock.force_release_key(lock_key)
 
         # Clear heartbeat for the active market scope.
         price_cache.clear_warmup_heartbeat(market=market_str)

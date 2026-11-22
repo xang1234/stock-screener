@@ -257,6 +257,16 @@ class DataFetchLock:
             logger.warning("Data fetch lock force released (key=%s)", key)
         return bool(result)
 
+    def force_release_key(self, key: str) -> bool:
+        """Force release one lock key as reported by ``get_any_current_holder``.
+
+        Unlike ``force_release``, this also covers the legacy unsuffixed key.
+        """
+        result = self.redis.delete(key)
+        if result:
+            logger.warning("Data fetch lock force released (key=%s)", key)
+        return bool(result)
+
     def get_current_holder(self, market: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get info about the current lock holder for the given market scope."""
         key = _lock_key_for_market(market)

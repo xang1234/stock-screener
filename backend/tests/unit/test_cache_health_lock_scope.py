@@ -226,3 +226,17 @@ def test_force_cancel_releases_only_the_stuck_markets_lock(service, lock):
     assert result["task_id"] == "us-1"
     assert _holder_id(lock, "US") is None
     assert _holder_id(lock, "HK") == "hk-1"
+
+
+def test_force_cancel_releases_a_stuck_legacy_unsuffixed_lock(service, lock, redis):
+    from app.api.v1 import cache as cache_api
+
+    redis.values[LOCK_KEY] = f"refresh:legacy-1:{_ten_minutes_ago()}"
+
+    with patch.object(cache_api, "get_data_fetch_lock", return_value=lock), patch.object(
+        cache_api, "get_price_cache", return_value=service
+    ):
+        result = cache_api.force_cancel_refresh()
+
+    assert result["status"] == "cancelled"
+    assert LOCK_KEY not in redis.values

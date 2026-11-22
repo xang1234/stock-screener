@@ -107,12 +107,15 @@ class TestDbCancellationToken:
         assert session.rollbacks == 1
         assert token.is_cancelled() is True
 
-    def test_failed_rollback_is_logged_not_raised(self):
+    def test_failed_rollback_is_logged_not_raised(self, caplog):
         token, mock_session = _make_token()
         mock_session.query.side_effect = RuntimeError("connection lost")
         mock_session.rollback.side_effect = RuntimeError("connection lost")
 
-        assert token.is_cancelled() is False
+        with caplog.at_level("WARNING"):
+            assert token.is_cancelled() is False
+        mock_session.rollback.assert_called_once()
+        assert "Failed to roll back" in caplog.text
 
     def test_close_closes_session(self):
         token, mock_session = _make_token()

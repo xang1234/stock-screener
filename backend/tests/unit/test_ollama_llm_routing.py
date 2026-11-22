@@ -560,3 +560,29 @@ def test_a_local_daemon_needs_no_key_to_route() -> None:
     assert provider == "ollama"
     assert key is None
     assert params["api_base"] == "http://ollama:11434"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_saved_selection_sends_no_completion_to_ollama(monkeypatch) -> None:
+    """End to end through ``completion()``: nothing is dispatched to an Ollama host."""
+    import app.services.llm.llm_service as mod
+
+    _break_session_local(monkeypatch)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    dispatched = []
+
+    async def _record(**params):
+        dispatched.append(params)
+        raise AssertionError("dispatched")
+
+    monkeypatch.setattr(mod, "acompletion", _record)
+    service = mod.LLMService(use_case="extraction")
+
+    with pytest.raises(mod.LLMError):
+        await service.completion(
+            [{"role": "user", "content": "hi"}],
+            model="ollama/deepseek-v4.1-flash",
+            allow_fallbacks=False,
+            num_retries=0,
+        )
+    assert dispatched == []
