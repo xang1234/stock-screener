@@ -16,6 +16,7 @@ function Capture() {
 describe('PipelineProvider', () => {
   afterEach(() => {
     vi.useRealTimers();
+    api.getPipelineStatus.mockReset();
   });
 
   it('stops polling once a run reports skipped', async () => {
@@ -38,5 +39,82 @@ describe('PipelineProvider', () => {
     expect(api.getPipelineStatus).toHaveBeenCalledTimes(1);
     expect(pipeline.isPipelineRunning).toBe(false);
     expect(pipeline.isCardVisible).toBe(true);
+  });
+
+  it('keeps the latest status when an earlier response arrives late', async () => {
+    vi.useFakeTimers();
+    let resolveSlow;
+    api.getPipelineStatus
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSlow = resolve; }))
+      .mockResolvedValue({ status: 'completed', percent: 100 });
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PipelineProvider>
+          <Capture />
+        </PipelineProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => pipeline.startPipeline('run-2'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await act(async () => {
+      resolveSlow({ status: 'running', percent: 20 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(pipeline.pipelineStatus.status).toBe('completed');
+    expect(pipeline.isPipelineRunning).toBe(false);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['themeRankings'] });
+    const calls = api.getPipelineStatus.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(api.getPipelineStatus).toHaveBeenCalledTimes(calls);
+  });
+
+  it('stops polling and lets the card close when the run is not found', async () => {
+    vi.useFakeTimers();
+    api.getPipelineStatus.mockRejectedValue({ response: { status: 404 } });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PipelineProvider>
+          <Capture />
+        </PipelineProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => pipeline.startPipeline('gone'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(api.getPipelineStatus).toHaveBeenCalledTimes(1);
+    expect(pipeline.pipelineStatus.status).toBe('failed');
+    expect(pipeline.isPipelineRunning).toBe(false);
+  });
+
+  it('does not poll without a run id', async () => {
+    vi.useFakeTimers();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PipelineProvider>
+          <Capture />
+        </PipelineProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => pipeline.startPipeline(undefined));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(api.getPipelineStatus).not.toHaveBeenCalled();
+    expect(pipeline.isCardVisible).toBe(false);
   });
 });

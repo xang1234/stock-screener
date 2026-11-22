@@ -15,6 +15,7 @@ import {
 
 import { STATIC_SITE_MODE } from './config/runtimeMode';
 
+import AppErrorBoundary from './components/App/AppErrorBoundary';
 import Layout from './components/Layout/Layout';
 import { BrandMark } from './components/Layout/AppNav';
 import { PageSkeleton } from './components/common/LoadingSkeletons';
@@ -194,7 +195,7 @@ function App() {
     <ColorModeContext.Provider value={colorMode}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        {appShell}
+        <AppErrorBoundary>{appShell}</AppErrorBoundary>
       </ThemeProvider>
     </ColorModeContext.Provider>
   );

@@ -5,6 +5,7 @@ const NON_PERSISTED_QUERY_ROOTS = new Set([
   'runtimeActivity',
   'allFilteredSymbols',
   'calculationStatus',
+  'pipelineStatus',
   'setupDetails',
   // Scanned as-is, so a restored copy must never stand in for the live list.
   'userWatchlistSymbols',
