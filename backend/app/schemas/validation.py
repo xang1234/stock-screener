@@ -84,6 +84,20 @@ class ValidationGroup(BaseModel):
     label: str
     value: str
     horizons: list[ValidationHorizonSummary]
+    # The overview's recent window over this group's events.
+    recent: ValidationHorizonSummary | None = None
+
+
+class ValidationRecentWindow(BaseModel):
+    """The ``horizon_sessions`` outcomes of events entered on the last ``sessions`` sessions
+    whose window has closed by the market calendar. Each outcome's status follows
+    ``summarize_horizon``, so a pick whose prices haven't caught up still counts as pending."""
+
+    horizon_sessions: int
+    sessions: int
+    entries_from: str | None
+    entries_through: str | None
+    summary: ValidationHorizonSummary
 
 
 class ValidationSourceBreakdown(BaseModel):
@@ -104,6 +118,8 @@ class ValidationOverviewResponse(BaseModel):
     benchmark_symbol: str | None = None
     stop_loss_pct: float
     horizons: list[ValidationHorizonSummary]
+    # None when the market calendar holds too few sessions for the window.
+    recent: ValidationRecentWindow | None = None
     recent_events: list[ValidationEvent]
     groups: list[ValidationGroup]
     freshness: ValidationFreshness

@@ -169,9 +169,9 @@ Caveats: replay picks use today's screener code and today's universe, so they're
 
 ### Delivery
 
-1. Step 0 measurement, written up in this file.
-2. `market_state` group dimension, which needs priority 1's stored state.
-3. `recent` block in `ValidationService` and the Backtest page.
+1. Step 0 measurement, written up in this file. Not run yet. The Daily-page strip waits on its decision rule.
+2. Done: `market_state` group dimension on scan and replay picks.
+3. Done: `recent` on the overview and on each group, and the Backtest page's recent section and group column. The window always holds the last 20 entry sessions whose 5-session window has closed, at any lookback, and ends at the overview's as-of date. Events load from well before the lookback cutoff for the overlap rule, so a pick signalled before the cutoff still counts by its entry session. A group value that only such picks hold gets a row with an empty base.
 4. `recent_5` in the static scoreboard and `StaticScoreboardPage.jsx`.
 
 ## Non-goals

@@ -113,6 +113,8 @@ function ValidationPage() {
         <ValidationSection
           degradedReasons={overview.degraded_reasons}
           horizons={overview.horizons}
+          recent={overview.recent}
+          lookbackDays={overview.lookback_days}
           recentEvents={overview.recent_events}
           groups={overview.groups}
           benchmarkSymbol={overview.benchmark_symbol}

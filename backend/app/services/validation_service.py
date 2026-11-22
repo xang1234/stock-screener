@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from functools import partial
@@ -18,11 +18,13 @@ from sqlalchemy import and_, case, exists, func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING, RATING_TO_INT
+from app.domain.markets.market_cycle import CycleState
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.scanning.opportunity_state.model import ACTION_STATES
 from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.portability import json_text
+from app.models.market_exposure import MarketExposure
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import (
@@ -32,6 +34,7 @@ from app.schemas.validation import (
     ValidationGroup,
     ValidationHorizonSummary,
     ValidationOverviewResponse,
+    ValidationRecentWindow,
     ValidationSourceBreakdown,
     ValidationSourceKind,
 )
@@ -54,6 +57,9 @@ PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
 HORIZONS = (1, 5, 20, 60)
+# The recent window: events entered in the last 20 sessions whose 5-session window has closed.
+RECENT_ENTRY_SESSIONS = 20
+RECENT_HORIZON = 5
 THIN_SAMPLE_SIZE = 20
 THIN_EFFECTIVE_DATES = 5
 STOP_LOSS_PCT = 7.0
@@ -77,22 +83,28 @@ NO_EVENTS_REASONS = {
 # theme are left out: they split the picks into too many groups to mean anything.
 GROUP_DIMENSIONS = {
     ValidationSourceKind.SCAN_PICK: (
+        "market_state",
         "rating",
         "stage",
         "action_state",
         "setup_pattern",
         "extension_band",
     ),
-    ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band", "extension_band"),
+    ValidationSourceKind.REPLAY_PICK: ("market_state", "stage", "rs_band", "extension_band"),
     ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "extension_band"),
 }
 # Labels that title-casing the dimension name gets wrong.
-GROUP_LABELS = {"rs_band": "RS Band", "extension_band": "Extension vs 50DMA"}
+GROUP_LABELS = {
+    "market_state": "Market Cycle at Signal",
+    "rs_band": "RS Band",
+    "extension_band": "Extension vs 50DMA",
+}
 EXTENSION_BANDS = ("below 50DMA", "0-10%", "10-20%", "20-30%", "30%+")
 # Where each band after the first starts, in percent above the 50-day average.
 EXTENSION_BAND_EDGES = (0.0, 10.0, 20.0, 30.0)
 # The value order of each dimension that has one, such as ratings best first.
 GROUP_VALUE_ORDER = {
+    "market_state": (CycleState.UPTREND, CycleState.RALLY_ATTEMPT, CycleState.CORRECTION),
     "rating": tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
     "rs_band": tuple(f"{low}-{low + 9}" for low in range(90, -1, -10)),
     "action_state": tuple(state.value for state in ACTION_STATES),
@@ -729,11 +741,37 @@ def _horizon_outcomes(
     return outcomes
 
 
-def _group_values(event: EvaluatedValidationEvent) -> dict[str, Any]:
-    """The event's value for every dimension: its attributes, and the band of its extension."""
+def _cycle_states(
+    db: Session, market: str, events: list[EvaluatedValidationEvent]
+) -> dict[date, str]:
+    """The market's stored cycle state on each date from the first event's signal date to the
+    last. Dates with no row, or a row stored before the state was backfilled, are absent."""
+    if not events:
+        return {}
+    dates = [_event_date(event.raw.event_at) for event in events]
+    return dict(
+        db.query(MarketExposure.date, MarketExposure.cycle_state)
+        .filter(
+            MarketExposure.market == market,
+            MarketExposure.date.between(min(dates), max(dates)),
+            MarketExposure.cycle_state.is_not(None),
+        )
+        .all()
+    )
+
+
+def _group_values(
+    event: EvaluatedValidationEvent, cycle_states: Mapping[date, str]
+) -> dict[str, Any]:
+    """The event's value for every dimension: its attributes, the band of its extension, and
+    the market's cycle state on its signal date."""
     pct = event.pct_above_50dma
     band = None if pct is None else EXTENSION_BANDS[bisect_right(EXTENSION_BAND_EDGES, pct)]
-    return {**event.raw.attributes, "extension_band": band}
+    return {
+        **event.raw.attributes,
+        "extension_band": band,
+        "market_state": cycle_states.get(_event_date(event.raw.event_at)),
+    }
 
 
 def _group_order(dimension: str, value: str) -> tuple[int, float, str]:
@@ -795,6 +833,42 @@ def summarize_horizon(
     )
 
 
+def _recent_entry_sessions(sessions: Sequence[date]) -> list[date] | None:
+    """The last ``RECENT_ENTRY_SESSIONS`` of ``sessions`` whose ``RECENT_HORIZON``-session
+    window ends by the last of them. None when ``sessions`` is too short to hold them all.
+
+    The lookback doesn't shorten it: events load from well before the lookback cutoff for
+    the overlap rule, so a pick signalled before the cutoff still counts by its entry."""
+    span = RECENT_ENTRY_SESSIONS + RECENT_HORIZON - 1
+    if len(sessions) < span:
+        return None
+    return list(sessions[-span : len(sessions) - RECENT_HORIZON + 1])
+
+
+def _entered_in(
+    events: list[EvaluatedValidationEvent], entry_sessions: list[date]
+) -> list[EvaluatedValidationEvent]:
+    """The events entered on ``entry_sessions``. An event with no cached history has no entry
+    session, so it is left out."""
+    window = set(entry_sessions)
+    return [event for event in events if event.entry_at in window]
+
+
+def _recent_window(
+    events: list[EvaluatedValidationEvent], entry_sessions: list[date] | None
+) -> ValidationRecentWindow | None:
+    """``events`` must be overlap-marked and not cut to the lookback."""
+    if entry_sessions is None:
+        return None
+    return ValidationRecentWindow(
+        horizon_sessions=RECENT_HORIZON,
+        sessions=len(entry_sessions),
+        entries_from=entry_sessions[0].isoformat(),
+        entries_through=entry_sessions[-1].isoformat(),
+        summary=summarize_horizon(_entered_in(events, entry_sessions), horizon_sessions=RECENT_HORIZON),
+    )
+
+
 class ValidationService:
     """Compose signal sources, price outcomes, and deterministic summaries."""
 
@@ -833,7 +907,7 @@ class ValidationService:
             db,
             source_kind=source_kind,
             lookback_days=lookback_days,
-            as_of_date=effective_as_of_date,
+            as_of_date=as_of_date,
             market=market,
         )
         return ValidationOverviewResponse(
@@ -843,8 +917,22 @@ class ValidationService:
             benchmark_symbol=payload["benchmark_symbol"],
             stop_loss_pct=STOP_LOSS_PCT,
             horizons=payload["horizons"],
+            recent=_recent_window(payload["marked_events"], payload["recent_entry_sessions"]),
             recent_events=payload["recent_events"],
-            groups=self._build_groups(payload["events"], source_kind),
+            groups=self._build_groups(
+                payload["events"],
+                source_kind,
+                recent_events=(
+                    None
+                    if payload["recent_entry_sessions"] is None
+                    else _entered_in(payload["marked_events"], payload["recent_entry_sessions"])
+                ),
+                cycle_states=(
+                    _cycle_states(db, market, payload["marked_events"])
+                    if "market_state" in GROUP_DIMENSIONS[source_kind]
+                    else {}
+                ),
+            ),
             freshness=self._build_freshness(
                 db,
                 as_of_date=effective_as_of_date,
@@ -937,27 +1025,23 @@ class ValidationService:
             through = exc.verified_through
             calendar_reasons.append("calendar_coverage_expired")
         benchmark_candidates = benchmark_registry.get_candidate_symbols(market)
-        evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
-            raw_events,
-            benchmark_candidates=benchmark_candidates,
-            # Ending at ``through``, which never passes verified coverage, drops today's partial
-            # bar while the session is open. A bar fetched mid-session stays partial until the
-            # after-close refresh, which can run after this cut-off moves.
-            # Starting no later than the cutoff keeps the session before ``through`` in the
-            # calendar even when every event falls on ``through``. The earlier sessions serve
-            # only extension, which reads the 50 before each entry, since windows look forward.
-            sessions=self._market_calendar.trading_days(
-                market,
-                min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)])
-                - EXTENSION_LOOKBEHIND,
-                through,
-            ),
+        # Ending at ``through``, which never passes verified coverage, drops today's partial
+        # bar while the session is open. A bar fetched mid-session stays partial until the
+        # after-close refresh, which can run after this cut-off moves.
+        # Starting no later than the cutoff keeps the session before ``through`` in the
+        # calendar even when every event falls on ``through``. The earlier sessions serve
+        # only extension, which reads the 50 before each entry, since windows look forward.
+        sessions = self._market_calendar.trading_days(
+            market,
+            min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)])
+            - EXTENSION_LOOKBEHIND,
+            through,
         )
-        events = [
-            event
-            for event in mark_overlapping_windows(evaluated_events)
-            if _event_date(event.raw.event_at) >= cutoff_date
-        ]
+        evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
+            raw_events, benchmark_candidates=benchmark_candidates, sessions=sessions
+        )
+        marked_events = mark_overlapping_windows(evaluated_events)
+        events = [event for event in marked_events if _event_date(event.raw.event_at) >= cutoff_date]
         if not events and not degraded_reasons:
             degraded_reasons.append(NO_EVENTS_REASONS[source_kind])
         degraded_reasons.extend(calendar_reasons)
@@ -977,30 +1061,57 @@ class ValidationService:
         return {
             "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
+            # A historical overview's window ends at its as-of date. A live one ends at the
+            # market's last completed session, which can be dated ahead of New York's date.
+            "recent_entry_sessions": _recent_entry_sessions(
+                sessions if as_of_date is None else [day for day in sessions if day <= as_of_date]
+            ),
+            "marked_events": marked_events,
             "events": events,
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
         }
 
     def _build_groups(
-        self, events: list[EvaluatedValidationEvent], source_kind: ValidationSourceKind
+        self,
+        events: list[EvaluatedValidationEvent],
+        source_kind: ValidationSourceKind,
+        *,
+        recent_events: list[EvaluatedValidationEvent] | None,
+        cycle_states: Mapping[date, str],
     ) -> list[ValidationGroup]:
-        groups: list[ValidationGroup] = []
-        values = [_group_values(event) for event in events]
-        for dimension in GROUP_DIMENSIONS[source_kind]:
-            members: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
-            for event, event_values in zip(events, values):
-                value = event_values.get(dimension)
+        """One group per value that the lookback's ``events`` or ``recent_events`` hold.
+        ``recent_events`` are the recent window's events, which can include picks signalled
+        before the lookback, so a value can have recent picks and an empty base. None when the
+        overview has no recent window."""
+
+        def by_value(members: list[EvaluatedValidationEvent], dimension: str):
+            grouped: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
+            for event in members:
+                value = _group_values(event, cycle_states).get(dimension)
                 if value is not None and value != "":
-                    members[str(value)].append(event)
+                    grouped[str(value)].append(event)
+            return grouped
+
+        groups: list[ValidationGroup] = []
+        for dimension in GROUP_DIMENSIONS[source_kind]:
+            members = by_value(events, dimension)
+            recent_members = None if recent_events is None else by_value(recent_events, dimension)
             groups.extend(
                 ValidationGroup(
                     dimension=dimension,
                     label=GROUP_LABELS.get(dimension) or dimension.replace("_", " ").title(),
                     value=value,
                     horizons=self._summarize_horizons(members[value]),
+                    recent=(
+                        None
+                        if recent_members is None
+                        else summarize_horizon(recent_members[value], horizon_sessions=RECENT_HORIZON)
+                    ),
                 )
-                for value in sorted(members, key=partial(_group_order, dimension))
+                for value in sorted(
+                    members.keys() | (recent_members or {}).keys(), key=partial(_group_order, dimension)
+                )
             )
         return groups
 

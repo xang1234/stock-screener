@@ -24,9 +24,11 @@ import { formatPatternName } from '../../utils/formatUtils';
 
 const GROUP_HORIZONS = [1, 5, 20, 60];
 const MINIMUM_SAMPLE = 20;
+const MARKET_STATE_LABELS = { uptrend: 'Uptrend', rally_attempt: 'Rally attempt', correction: 'Correction' };
 // Dimensions whose values have a display name; the others show their value as it is.
 const GROUP_VALUE_LABELS = {
   action_state: (value) => ACTION_STATE_META[value]?.label ?? value,
+  market_state: (value) => MARKET_STATE_LABELS[value] ?? value,
   setup_pattern: formatPatternName,
 };
 
@@ -97,6 +99,68 @@ function MetricRow({ label, value }) {
         {value}
       </Typography>
     </Box>
+  );
+}
+
+// The excess median covers only picks with a benchmark bar on both dates; say so when that's fewer.
+function excessMedian(horizon) {
+  const value = formatPercentValue(horizon?.median_excess_return_pct);
+  const sample = horizon?.sample_size ?? 0;
+  const excessSample = horizon?.excess_sample_size ?? 0;
+  return excessSample < sample ? `${value} (n=${excessSample})` : value;
+}
+
+function ValidationRecentWindow({ recent, horizons, benchmarkSymbol, lookbackDays }) {
+  if (!recent) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        No recent window: the market calendar holds too few sessions.
+      </Typography>
+    );
+  }
+  const { summary } = recent;
+  const base = horizons?.find((horizon) => horizon.horizon_sessions === recent.horizon_sessions);
+  const pairs = [
+    ['Sample', summary.sample_size, base?.sample_size ?? 0],
+    ['Positive', formatRate(summary.positive_rate), formatRate(base?.positive_rate)],
+    ['Median', formatPercentValue(summary.median_return_pct), formatPercentValue(base?.median_return_pct)],
+    [`Median vs ${benchmarkSymbol || 'Benchmark'}`, excessMedian(summary), excessMedian(base)],
+    ['Stopped out', formatRate(summary.stopped_out_rate), formatRate(base?.stopped_out_rate)],
+  ];
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', mb: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+            {`Last ${recent.sessions} entry sessions`}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {`Entered ${formatDate(recent.entries_from)} to ${formatDate(recent.entries_through)}, ${recent.horizon_sessions}-session results`}
+          </Typography>
+          {summary.thin && summary.sample_size > 0 && <Chip size="small" variant="outlined" label={thinLabel(summary)} />}
+        </Stack>
+        {summary.sample_size === 0 && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            No pick in this window has a closed {recent.horizon_sessions}-session result yet.
+          </Typography>
+        )}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1 }}>
+          {pairs.map(([label, recentValue, baseValue]) => (
+            <Box key={label}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {label}
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {recentValue}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {`${lookbackDays}D: ${baseValue}`}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -218,6 +282,7 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
               <TableCell align="right">{`Avg vs ${benchmarkSymbol || 'Benchmark'} (no stop)`}</TableCell>
               <TableCell align="right">{`Avg with ${stopLossPct}% stop`}</TableCell>
               <TableCell align="right">Stopped out</TableCell>
+              <TableCell align="right">Recent 5S positive</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -226,34 +291,43 @@ export function ValidationGroupsTable({ groups, benchmarkSymbol, stopLossPct }) 
               const sampleSize = horizon?.sample_size ?? 0;
               const excessSampleSize = horizon?.excess_sample_size ?? 0;
               const isSmallSample = horizon?.thin ?? true;
+              const baseSx = isSmallSample ? { color: 'text.secondary' } : undefined;
+              const { recent } = group;
               return (
                 <Fragment key={`${group.dimension}:${group.value}`}>
                   {group.dimension !== groups[index - 1]?.dimension && (
                     <TableRow>
-                      <TableCell colSpan={7} sx={{ fontWeight: 700 }}>{group.label}</TableCell>
+                      <TableCell colSpan={8} sx={{ fontWeight: 700 }}>{group.label}</TableCell>
                     </TableRow>
                   )}
-                  <TableRow
-                    title={isSmallSample ? thinLabel(horizon) : undefined}
-                    sx={isSmallSample ? { '& td': { color: 'text.secondary' } } : undefined}
-                  >
-                    <TableCell>{GROUP_VALUE_LABELS[group.dimension]?.(group.value) ?? group.value}</TableCell>
-                    <TableCell align="right">{sampleSize}</TableCell>
-                    <TableCell align="right">{formatRate(horizon?.positive_rate)}</TableCell>
-                    <TableCell align="right">{formatPercentValue(horizon?.avg_return_pct)}</TableCell>
-                    <TableCell align="right">
+                  <TableRow>
+                    <TableCell sx={baseSx}>{GROUP_VALUE_LABELS[group.dimension]?.(group.value) ?? group.value}</TableCell>
+                    <TableCell align="right" sx={baseSx} title={isSmallSample ? thinLabel(horizon) : undefined}>
+                      {sampleSize}
+                    </TableCell>
+                    <TableCell align="right" sx={baseSx}>{formatRate(horizon?.positive_rate)}</TableCell>
+                    <TableCell align="right" sx={baseSx}>{formatPercentValue(horizon?.avg_return_pct)}</TableCell>
+                    <TableCell align="right" sx={baseSx}>
                       {formatPercentValue(horizon?.avg_excess_return_pct)}
                       {excessSampleSize < sampleSize && ` (n=${excessSampleSize})`}
                     </TableCell>
-                    <TableCell align="right">{formatPercentValue(horizon?.avg_stopped_return_pct)}</TableCell>
-                    <TableCell align="right">{formatRate(horizon?.stopped_out_rate)}</TableCell>
+                    <TableCell align="right" sx={baseSx}>{formatPercentValue(horizon?.avg_stopped_return_pct)}</TableCell>
+                    <TableCell align="right" sx={baseSx}>{formatRate(horizon?.stopped_out_rate)}</TableCell>
+                    <TableCell align="right" sx={recent?.thin ? { color: 'text.secondary' } : undefined}>
+                      {recent ? `${formatRate(recent.positive_rate)} (n=${recent.sample_size})` : '-'}
+                      {recent?.thin && recent.sample_size > 0 && (
+                        <Typography component="span" variant="caption" sx={{ display: 'block' }}>
+                          {thinLabel(recent)}
+                        </Typography>
+                      )}
+                    </TableCell>
                   </TableRow>
                 </Fragment>
               );
             })}
             {(!groups || groups.length === 0) && (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography variant="body2" color="text.secondary">
                     No grouped results for this selection.
                   </Typography>
@@ -279,7 +353,7 @@ export function ValidationDegradedAlert({ degradedReasons }) {
   );
 }
 
-export function ValidationSection({ title, degradedReasons, horizons, recentEvents, groups, showSourceKind = true, benchmarkSymbol, stopLossPct }) {
+export function ValidationSection({ title, degradedReasons, horizons, recent, lookbackDays, recentEvents, groups, showSourceKind = true, benchmarkSymbol, stopLossPct }) {
   return (
     <Stack spacing={1.5}>
       {title && (
@@ -288,6 +362,7 @@ export function ValidationSection({ title, degradedReasons, horizons, recentEven
         </Typography>
       )}
       <ValidationDegradedAlert degradedReasons={degradedReasons} />
+      <ValidationRecentWindow recent={recent} horizons={horizons} benchmarkSymbol={benchmarkSymbol} lookbackDays={lookbackDays} />
       <ValidationSummaryCards horizons={horizons} benchmarkSymbol={benchmarkSymbol} stopLossPct={stopLossPct} />
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>

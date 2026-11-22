@@ -16,6 +16,7 @@ from app.database import Base, get_db
 from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.main import app
+from app.models.market_exposure import MarketExposure
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.services import server_auth
@@ -56,6 +57,7 @@ def session():
             ThemeCluster.__table__,
             ThemeAlert.__table__,
             BacktestReplayPick.__table__,
+            MarketExposure.__table__,
         ],
     )
     db = TestingSessionLocal()
@@ -66,6 +68,7 @@ def session():
         Base.metadata.drop_all(
             engine,
             tables=[
+                MarketExposure.__table__,
                 BacktestReplayPick.__table__,
                 ThemeAlert.__table__,
                 ThemeCluster.__table__,
@@ -183,6 +186,16 @@ def _seed_validation_data(session):
             triggered_at=datetime.now(UTC) - timedelta(days=2),
         )
     )
+    session.add_all(
+        MarketExposure(
+            market="US",
+            date=today - timedelta(days=offset),
+            exposure_score=60.0,
+            stance="neutral",
+            cycle_state="uptrend",
+        )
+        for offset in range(5)
+    )
     session.commit()
     return today
 
@@ -226,12 +239,28 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
     assert payload["horizons"][1]["skipped_missing_history"] == 1
     assert [h["pending_windows"] for h in payload["horizons"]] == [0, 0, 0, 2]
     assert payload["recent_events"][0]["attributes"]["symbol"] == "NVDA"
+    assert [
+        (g["label"], g["value"], g["horizons"][0]["sample_size"])
+        for g in payload["groups"]
+        if g["dimension"] == "market_state"
+    ] == [("Market Cycle at Signal", "uptrend", 1)]
     assert payload["benchmark_symbol"] == "SPY"
     assert (
         payload["recent_events"][0]["excess_return_1s_pct"],
         payload["recent_events"][0]["excess_return_5s_pct"],
     ) == (2.0, 8.0)
     assert "missing_price_cache" in payload["degraded_reasons"]
+    # A live request ends the window at the calendar's last completed session, here
+    # today + 30 with every day a session, so its last entry is five sessions back.
+    recent = payload["recent"]
+    assert {key: recent[key] for key in ("horizon_sessions", "sessions", "entries_from", "entries_through")} == {
+        "horizon_sessions": 5,
+        "sessions": 20,
+        "entries_from": (today + timedelta(days=7)).isoformat(),
+        "entries_through": (today + timedelta(days=26)).isoformat(),
+    }
+    assert (recent["summary"]["horizon_sessions"], recent["summary"]["sample_size"]) == (5, 0)
+    assert payload["groups"] and all(group["recent"]["horizon_sessions"] == 5 for group in payload["groups"])
 
 
 @pytest.mark.asyncio
