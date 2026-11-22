@@ -10,6 +10,11 @@ describe('getCurrencyPrefix', () => {
     expect(getCurrencyPrefix('KRW')).toBe('₩');
     expect(getCurrencyPrefix('TWD')).toBe('NT$');
     expect(getCurrencyPrefix('CNY')).toBe('¥');
+    expect(getCurrencyPrefix('CAD')).toBe('C$');
+    expect(getCurrencyPrefix('EUR')).toBe('€');
+    expect(getCurrencyPrefix('SGD')).toBe('S$');
+    expect(getCurrencyPrefix('AUD')).toBe('A$');
+    expect(getCurrencyPrefix('MYR')).toBe('RM');
   });
 
   it('falls back to $ for null/undefined/unknown codes', () => {
@@ -29,6 +34,7 @@ describe('formatLocalCurrency', () => {
     expect(formatLocalCurrency(875, 'TWD')).toBe('NT$875.00');
     expect(formatLocalCurrency(189.5, 'CNY')).toBe('¥189.50');
     expect(formatLocalCurrency(189.5, 'USD')).toBe('$189.50');
+    expect(formatLocalCurrency(4.2, 'MYR')).toBe('RM4.20');
   });
 
   it('returns "-" for null values so empty cells stay consistent', () => {
