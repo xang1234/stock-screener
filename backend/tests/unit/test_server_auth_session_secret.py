@@ -6,7 +6,7 @@ import hmac
 import logging
 import stat
 import sys
-import tempfile
+import os
 import threading
 
 import pytest
@@ -75,17 +75,16 @@ def test_explicit_secret_wins_and_writes_no_file(secret_path, monkeypatch):
 
 def test_concurrent_first_start_converges_on_one_secret(secret_path, monkeypatch):
     workers = 8
-    # Hold every worker after its existence check until all of them are ready
-    # to publish, so each one races the others for the final name.
+    # Release every worker at once so they all race for the exclusive create.
     barrier = threading.Barrier(workers)
-    real_mkstemp = tempfile.mkstemp
+    real_open = os.open
 
-    def racing_mkstemp(*args, **kwargs):
-        created = real_mkstemp(*args, **kwargs)
-        barrier.wait(timeout=10)
-        return created
+    def racing_open(file, flags, *args, **kwargs):
+        if flags & os.O_CREAT:
+            barrier.wait(timeout=10)
+        return real_open(file, flags, *args, **kwargs)
 
-    monkeypatch.setattr(server_auth.tempfile, "mkstemp", racing_mkstemp)
+    monkeypatch.setattr(server_auth.os, "open", racing_open)
     results: list[str] = []
     errors: list[Exception] = []
 
@@ -114,3 +113,50 @@ def test_unwritable_data_dir_fails_instead_of_using_password(tmp_path, secret_pa
 
     with pytest.raises(RuntimeError, match="SERVER_AUTH_SESSION_SECRET"):
         server_auth.issue_session_token()
+
+
+def test_works_where_hard_links_are_unsupported(secret_path, monkeypatch):
+    # Docker Desktop bind mounts and SMB shares refuse link(2).
+    def no_links(*_args, **_kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", no_links)
+
+    assert server_auth._session_secret() == secret_path.read_text(encoding="ascii")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_planted_symlink_is_refused(tmp_path, secret_path):
+    known = tmp_path / "known.txt"
+    known.write_text("attacker-known-value", encoding="ascii")
+    secret_path.symlink_to(known)
+
+    with pytest.raises(RuntimeError):
+        server_auth._session_secret()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no FIFOs on Windows")
+def test_a_planted_fifo_does_not_hang_startup(secret_path):
+    os.mkfifo(secret_path)
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        server_auth._session_secret()
+
+
+def test_a_corrupt_secret_file_fails_with_guidance(secret_path):
+    secret_path.write_bytes(b"\xff\xfe\x00")
+
+    with pytest.raises(RuntimeError, match="SERVER_AUTH_SESSION_SECRET"):
+        server_auth._session_secret()
+
+
+@pytest.mark.asyncio
+async def test_startup_fails_when_the_secret_cannot_be_created(tmp_path, secret_path, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(server_auth, "_SESSION_SECRET_PATH", tmp_path / "missing" / "secret")
+    monkeypatch.setattr(main, "initialize_runtime", lambda: None)
+
+    with pytest.raises(RuntimeError, match="SERVER_AUTH_SESSION_SECRET"):
+        async with main.lifespan(object()):
+            pass

@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import secrets
-import tempfile
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,29 +173,59 @@ def _session_secret() -> str:
         ) from exc
 
 
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_SECRET_MAX_BYTES = 4096
+
+
+def _read_secret_file(path: Path) -> str:
+    """Read the secret, refusing symlinks, special files and other users' files.
+
+    Returns "" for an empty or undecodable file.
+    """
+    # O_NONBLOCK keeps a planted FIFO from hanging startup.
+    fd = os.open(path, os.O_RDONLY | _NO_FOLLOW | getattr(os, "O_NONBLOCK", 0))
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"Session-signing secret {path} is not a regular file.")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise RuntimeError(
+                f"Session-signing secret {path} is owned by another user. "
+                "Delete it to generate a new one, or set SERVER_AUTH_SESSION_SECRET."
+            )
+        raw = os.read(fd, _SECRET_MAX_BYTES)
+    finally:
+        os.close(fd)
+    try:
+        return raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return ""
+
+
 @functools.cache
 def _load_or_create_session_secret(path: Path) -> str:
-    if not path.exists():
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.")  # mode 0600
-        try:
-            with os.fdopen(fd, "w", encoding="ascii") as handle:
-                handle.write(secrets.token_urlsafe(32))
-                handle.flush()
-                os.fsync(handle.fileno())
-            # A hard link creates the name only if it is absent, with the
-            # content already in place, so racing processes see one winner.
-            os.link(tmp, path)
-            logger.info("Generated server auth session secret", extra={"path": str(path)})
-        except FileExistsError:
-            pass  # Another process won the race; the read below uses its secret.
-        finally:
-            os.unlink(tmp)
-    secret = path.read_text(encoding="utf-8").strip()
-    if not secret:
+    # O_EXCL on the final name: racing processes see exactly one creator. It
+    # needs no hard links, so it works on bind mounts and network filesystems.
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NO_FOLLOW, 0o600)
+    except FileExistsError:
+        secret = _read_secret_file(path)
+        # The creator may not have written yet; give it a moment.
+        for _ in range(50):
+            if secret:
+                return secret
+            time.sleep(0.02)
+            secret = _read_secret_file(path)
         raise RuntimeError(
-            f"Session-signing secret file {path} is empty. "
+            f"Session-signing secret file {path} is empty or unreadable. "
             "Delete it to generate a new one, or set SERVER_AUTH_SESSION_SECRET."
         )
+    secret = secrets.token_urlsafe(32)
+    with os.fdopen(fd, "w", encoding="ascii") as handle:
+        handle.write(secret)
+        handle.flush()
+        os.fsync(handle.fileno())
+    logger.info("Generated server auth session secret", extra={"path": str(path)})
     return secret
 
 
