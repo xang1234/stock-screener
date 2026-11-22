@@ -361,8 +361,9 @@ def force_cancel_refresh():
             }
         # minutes is None (heartbeat expired) or > 30 — allow cancel
 
-        # Force-release all market lock keys (safe even if only one is held).
-        lock.force_release_all()
+        # Release only the market whose heartbeat was checked; other markets'
+        # locks may belong to refreshes that are still progressing.
+        lock.force_release(market=market_str)
 
         # Clear heartbeat for the active market scope.
         price_cache.clear_warmup_heartbeat(market=market_str)
