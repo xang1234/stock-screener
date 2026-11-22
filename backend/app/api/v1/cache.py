@@ -402,7 +402,7 @@ def get_dashboard_cache_statistics():
         db = SessionLocal()
         try:
             from sqlalchemy import func
-            from datetime import timedelta
+            from datetime import timedelta, timezone
 
             # Get total active stocks count
             total_stocks = db.query(func.count(StockUniverse.id)).filter(
@@ -410,7 +410,8 @@ def get_dashboard_cache_statistics():
             ).scalar()
 
             # Get fundamentals counts using efficient SQL aggregates
-            seven_days_ago = datetime.now() - timedelta(days=7)
+            # updated_at is stored as UTC, so the cut-off must be UTC too.
+            seven_days_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
 
             # Total cached (all rows in stock_fundamentals)
             cached_count = db.query(func.count(StockFundamental.id)).scalar()

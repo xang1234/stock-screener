@@ -141,3 +141,14 @@ def test_a_fundamentals_row_a_worker_refreshes_reads_its_true_age():
     # SQLite drops the zone, so the stored wall clock must already be UTC.
     stored = _fundamentals_row(factory).updated_at
     assert abs(datetime.now(timezone.utc).replace(tzinfo=None) - stored) < timedelta(minutes=1)
+
+
+def test_fundamentals_age_readers_use_utc_in_a_new_york_worker():
+    service, _factory = _fundamentals_service()
+    _insert_fundamentals(service)
+    two_days_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2, hours=2)
+
+    with _process_tz("America/New_York"):
+        assert service.get_cache_stats("AAPL")["age_days"] == 0
+        # Local now is 5 h behind UTC, so a local-clock age would read 1 day: fresh.
+        assert not service._is_data_fresh(two_days_ago, max_age_days=1)
