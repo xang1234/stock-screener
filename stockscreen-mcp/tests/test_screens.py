@@ -19,9 +19,11 @@ from conftest import PRESETS, REPO, condition
 
 def _contract(name):
     # Shared with frontend/src/features/scan/filterExpression.test.js. Outside the
-    # repository checkout (an unpacked sdist) the cases are absent and these skip.
-    path = REPO / "contracts" / name
-    return json.loads(path.read_text()) if path.exists() else {}
+    # repository checkout (an unpacked sdist) the cases are absent and these skip;
+    # inside it a missing file fails collection.
+    if not (REPO / "backend").exists():
+        return {}
+    return json.loads((REPO / "contracts" / name).read_text())
 
 
 CASES = _contract("scan_filter_condition_cases.json")
