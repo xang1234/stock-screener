@@ -327,6 +327,10 @@ function CandlestickChart({
     if (!chartRef.current) {
       return;
     }
+    // Taken before the empty-data return, so a range kept from a rebuild
+    // never lands on a later, different series.
+    const keptRange = keptRangeRef.current;
+    keptRangeRef.current = null;
     if (!chartData) {
       // The chart instance outlives symbol changes, so clear the previous
       // symbol's series while the next one loads (or fails to).
@@ -391,9 +395,6 @@ function CandlestickChart({
       latestCandleRef.current = latestLegend;
       setLegendData(latestLegend);
     }
-
-    const keptRange = keptRangeRef.current;
-    keptRangeRef.current = null;
 
     // Check if we should restore the range (symbol changed and new data loaded)
     if (shouldRestoreRangeRef.current) {
