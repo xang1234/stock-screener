@@ -135,6 +135,19 @@ def test_cycle_recovers_on_a_close_above_the_pre_correction_peak():
     assert cycles[3] == MarketCycle(UP)
 
 
+def test_cycle_recovers_straight_from_correction():
+    cycles = market_cycle(_bars([100, 91, 101]))
+    assert [c.state for c in cycles] == [UP, CORR, UP]
+
+
+def test_cycle_follow_through_on_day_25_confirms_before_the_attempt_expires():
+    closes = [100, 91] + [round(91 + 0.05 * k, 2) for k in range(1, 25)]
+    closes.append(round(closes[-1] * 1.02, 2))
+    volumes = [1000] * (len(closes) - 1) + [1500]
+    last = market_cycle(_bars(closes, volumes=volumes))[-1]
+    assert (last.state, last.ftd_date) == (UP, _day(len(closes) - 1))
+
+
 def test_count_distribution_days_counts_down_days_on_higher_volume():
     # 3 down days (-0.3%) each on rising volume -> distribution days.
     # A 4th down day on FALLING volume must NOT count; the final up day must not.
@@ -676,6 +689,42 @@ def test_failed_ftd_drops_the_floor_and_is_stored(monkeypatch):
     assert stored == ("correction", None, as_of, as_of, False, None)
 
 
+_CYCLE_FIELDS = ("exposure_score", "cycle_state", "rally_day", "follow_through_date", "failed_ftd_date")
+
+
+def test_cycle_for_a_date_does_not_depend_on_where_the_frame_starts(monkeypatch):
+    # A daily run and a later backfill load frames that start on different days.
+    # The 110 high falls inside one frame only; it must not decide the FTD.
+    closes = [110.0] + [100.0] * 300 + [94.0, 94.2, 94.3, 94.4, 96.0]
+    volumes = [1000] * (len(closes) - 1) + [1500]
+    full = _df(closes, volumes)
+    later_start = full.iloc[1:]
+
+    def fields(df):
+        result = _compute(df, monkeypatch)
+        return tuple(result[key] for key in _CYCLE_FIELDS)
+
+    assert fields(full) == fields(later_start)
+
+
+def test_compute_exposure_keeps_one_bar_per_session(monkeypatch):
+    # A repeated session would otherwise count as an extra rally day and
+    # confirm an FTD on what is really day 3. The later bar for a date wins.
+    df = _df([100, 91, 91.5, 91.6, 91.7, 93.2], [1000] * 5 + [1500])
+    df.index = df.index[:4].append(df.index[3:5])
+    result = _compute(df, monkeypatch)
+    assert (result["cycle_state"], result["rally_day"], result["follow_through_day"]) == (
+        "rally_attempt", 3, False,
+    )
+
+
+@pytest.mark.parametrize("bad_close", [0.0, -5.0, float("nan"), float("inf")])
+def test_compute_exposure_skips_bars_without_a_positive_finite_price(monkeypatch, bad_close):
+    df = _df([100, 91, 91.5, bad_close, 91.6, 91.7, 93.2], [1000] * 6 + [1500])
+    result = _compute(df, monkeypatch)
+    assert (result["cycle_state"], result["follow_through_date"]) == ("uptrend", df.index[-1].date())
+
+
 def test_ensure_exposure_history_seeds_then_skips(monkeypatch):
     from app.database import SessionLocal
     from app.models.market_exposure import MarketExposure
@@ -819,6 +868,22 @@ def test_build_exposure_payload_carries_the_cycle_and_marks_event_days():
         pinned = build_exposure_payload(db, "US", as_of_date=d2)
         headline = (pinned["cycle_state"], pinned["follow_through_day"], pinned["follow_through_date"])
         assert headline == ("uptrend", True, "2026-06-01")
+    finally:
+        db.close()
+
+
+def test_build_exposure_payload_shows_no_v1_ftd_marker_on_rows_without_a_cycle():
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+
+    day = date(2026, 6, 1)
+    db = SessionLocal()
+    try:
+        db.add(MarketExposure(market="US", date=day, exposure_score=45.0, stance="Downtrend/Caution",
+                              follow_through_day=True, follow_through_date=day))
+        db.commit()
+        point = build_exposure_payload(db, "US")["history"][0]
+        assert (point["cycle_state"], point["follow_through"]) == (None, False)
     finally:
         db.close()
 

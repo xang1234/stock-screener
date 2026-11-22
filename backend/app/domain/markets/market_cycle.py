@@ -54,8 +54,11 @@ class MarketCycle:
 def market_cycle(ohlcv: pd.DataFrame, params: CycleParams = DEFAULT_CYCLE_PARAMS) -> list[MarketCycle]:
     """One ``MarketCycle`` per bar of ``ohlcv`` (Close, Low and Volume columns).
 
-    A missing, zero or NaN volume on the session or the one before never
-    confirms an FTD.
+    Expects one bar per session in date order, with positive finite Close and
+    Low; ``compute_exposure`` enforces this before calling. A missing, zero or
+    NaN volume on the session or the one before never confirms an FTD. The
+    first bar starts in UPTREND, so the result depends on where the frame
+    starts until the first correction.
     """
     closes = ohlcv["Close"].astype(float).tolist()
     lows = ohlcv["Low"].astype(float).tolist()

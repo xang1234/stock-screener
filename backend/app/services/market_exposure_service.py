@@ -74,6 +74,10 @@ CAP_HEAVY_DISTRIBUTION = 45.0
 
 FTD_FLOOR = 45.0                # an FTD in the last FTD_FLOOR_SESSIONS bars raises the floor
 FTD_FLOOR_SESSIONS = 15
+# The cycle runs over a fixed trailing window, so a date's state depends only on
+# the bars before it and not on where the loaded frame starts. A daily run and a
+# later backfill then agree whenever the frame holds this many sessions.
+CYCLE_LOOKBACK_SESSIONS = 252
 
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
@@ -120,6 +124,15 @@ def count_distribution_days(
     vol_up = ohlcv_df["Volume"] > ohlcv_df["Volume"].shift(1)
     mask = (pct <= -down_threshold) & vol_up
     return int(mask.tail(lookback).sum())
+
+
+def _session_bars(ohlcv_df: pd.DataFrame) -> pd.DataFrame:
+    """One bar per session in date order, keeping the later bar for a repeated
+    date, and only bars whose Close and Low are positive and finite."""
+    bars = ohlcv_df.sort_index()
+    bars = bars[~bars.index.duplicated(keep="last")]
+    prices = bars[["Close", "Low"]]
+    return bars[((prices > 0) & (prices < float("inf"))).all(axis=1)]
 
 
 def compute_trend(ohlcv_df: pd.DataFrame) -> dict:
@@ -273,7 +286,7 @@ def compute_exposure(
         return resolution.error_payload(market=market, as_of_date=as_of_date)
 
     # Slice "as of" — tz-agnostic date mask (handles naive + tz-aware indexes).
-    df = bundle.data[bundle.data.index.date <= as_of_date]
+    df = _session_bars(bundle.data[bundle.data.index.date <= as_of_date])
     if df.empty:
         return {"error": "no_benchmark_data", "market": market, "date": as_of_date.isoformat()}
     # The most recent bar must BE as_of_date. Otherwise we'd write a row dated
@@ -293,7 +306,7 @@ def compute_exposure(
 
     trend = compute_trend(df)
     dist = count_distribution_days(df)
-    cycle = market_cycle(df)[-1]
+    cycle = market_cycle(df.tail(CYCLE_LOOKBACK_SESSIONS))[-1]
     recent_ftd = (
         cycle.state is CycleState.UPTREND
         and cycle.ftd_date in set(df.index.date[-FTD_FLOOR_SESSIONS:])
@@ -449,7 +462,9 @@ def build_exposure_payload(
             "stance": r.stance,
             "cycle_state": r.cycle_state,
             "rally_day": r.rally_day,
-            "follow_through": bool(r.follow_through_day and r.follow_through_date == r.date),
+            "follow_through": bool(
+                r.cycle_state and r.follow_through_day and r.follow_through_date == r.date
+            ),
             "failed_ftd": r.failed_ftd_date == r.date,
         }
         for r in rows
