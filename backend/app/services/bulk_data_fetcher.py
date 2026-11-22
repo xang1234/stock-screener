@@ -1217,17 +1217,22 @@ class BulkDataFetcher:
 
             # Batch-level backoff: if >50% of batch hit rate limits, back off
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0
-            # A closed circuit trips on mostly rate-limited batches; a probe
-            # batch fails on any 429, or the circuit would stay half-open.
-            if batch_failure_rate > 0.5 or (
-                breaker_state == "half_open_probe" and batch_rate_limit_failures
-            ):
+            # A closed circuit trips on mostly rate-limited batches. A probe
+            # batch fails on any 429 or when nothing succeeded; either way it
+            # must resolve, or the circuit stays half-open.
+            probe_failed = breaker_state == "half_open_probe" and (
+                batch_rate_limit_failures or not batch_successes
+            )
+            if batch_failure_rate > 0.5 or probe_failed:
                 breaker.record_429("yfinance", market)
             if batch_failure_rate > 0.5:
                 consecutive_backoffs += 1
-                if market is not None and breaker.check("yfinance", market) == "open":
-                    # The circuit just opened. Backing off for as long as the
-                    # cooldown would turn the next batch into a probe.
+                circuit_opened = probe_failed or consecutive_backoffs >= breaker.threshold
+                if market is not None and breaker.enabled and circuit_opened:
+                    # Backing off for as long as the cooldown would turn the next
+                    # batch into a probe. Counted locally: check() would spend it.
+                    # ponytail: another process's success can reset the shared
+                    # count, so this may skip one backoff the circuit didn't need.
                     continue
                 backoff_time = min(
                     backoff_base_s * (backoff_factor ** (consecutive_backoffs - 1)),

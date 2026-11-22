@@ -120,3 +120,20 @@ def test_half_open_probe_where_every_symbol_fails_does_not_close_the_circuit(mon
                         breaker=breaker, error="503 Service Unavailable")
 
     assert entry["state"] != "closed"
+    # The failed probe reopened the circuit, so after another cooldown it probes
+    # again rather than answering "open" forever.
+    entry["opened_at"] -= breaker.cooldown_s("US")
+    assert breaker.check("yfinance", "US") == "half_open_probe"
+
+
+def test_skipping_the_backoff_does_not_spend_the_recovery_probe(monkeypatch):
+    # With no cooldown, an extra check() after the trip would take the probe
+    # without fetching, leaving the in-process circuit open for good.
+    breaker = ProviderCircuitBreaker(redis_client_factory=lambda: None)
+    monkeypatch.setattr(breaker, "cooldown_s", lambda _market: 0)
+    symbols = [f"S{i:02d}" for i in range(40)]
+    _results, fetched_batches, _ = _fetch_fundamentals(
+        monkeypatch, symbols, rate_limited=set(symbols[:30]), batch_size=10, breaker=breaker
+    )
+
+    assert fetched_batches[3] == symbols[30:]  # the fourth batch ran as the probe
