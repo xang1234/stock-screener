@@ -34,8 +34,8 @@ vi.mock('./pageLoaders', async (importOriginal) => {
     loadMarketScanPage: loaders['/'],
     loadThemesPage: loaders['/themes'],
     // App's import-time preload goes through loaderForPath. The real one
-    // returns the real loaders, and a cold ThemesPage import (~1 s) ran beside
-    // the test and outlasted findByText on busy CI runners.
+    // returns the real loaders, and a cold MarketScanPage or ThemesPage import
+    // (~1 s) ran beside the test and outlasted findByText on busy CI runners.
     loaderForPath: (path) => loaders[path] ?? null,
   };
 });
@@ -89,6 +89,8 @@ async function importAppAt(path) {
   return (await import('./App')).default;
 }
 
+// Call after importAppAt, right before render: an earlier test's persister can
+// still write on its 1 s throttle, and a cold import can outlast that.
 function persistCapabilities(capabilities) {
   const previousPageClient = new QueryClient();
   previousPageClient.setQueryData(['appCapabilities'], capabilities, { updatedAt: Date.now() - 60_000 });
@@ -121,12 +123,12 @@ describe('App refresh with a persisted cache', () => {
   });
 
   it('paints the app from an authenticated cache, then shows login once the live check says the session expired', async () => {
+    const App = await importAppAt('/');
     persistCapabilities({
       ...DEFAULT_CAPABILITIES,
       auth: { ...DEFAULT_CAPABILITIES.auth, required: true, authenticated: true },
     });
     const resolveLive = deferLiveCapabilities();
-    const App = await importAppAt('/');
 
     render(<App />);
 
@@ -143,9 +145,9 @@ describe('App refresh with a persisted cache', () => {
   });
 
   it('keeps a deep link the cached features hide until the live check enables it', async () => {
+    const App = await importAppAt('/themes');
     persistCapabilities(withThemes(false));
     const resolveLive = deferLiveCapabilities();
-    const App = await importAppAt('/themes');
 
     render(<App />);
 
@@ -161,9 +163,9 @@ describe('App refresh with a persisted cache', () => {
   });
 
   it('redirects a deep link home once the live check confirms the feature is off', async () => {
+    const App = await importAppAt('/themes');
     persistCapabilities(withThemes(false));
     const resolveLive = deferLiveCapabilities();
-    const App = await importAppAt('/themes');
 
     render(<App />);
 

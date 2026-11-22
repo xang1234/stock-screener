@@ -52,13 +52,13 @@ vi.mock('../../pageLoaders', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    loaderForPath: (path) => {
-      const loader = actual.loaderForPath(path);
-      return loader && (() => {
-        loadedPaths.push(path);
-        return loader();
-      });
-    },
+    // Record the prefetch without running it: a real cold page import runs
+    // beside later tests and can outlast their waits on a busy CI runner.
+    loaderForPath: (path) => actual.loaderForPath(path) && (() => {
+      loadedPaths.push(path);
+      return Promise.resolve();
+    }),
+    loadStockDetails: () => Promise.resolve(),
   };
 });
 vi.mock('../../pages/BreadthPage', () => ({ default: () => null }));
