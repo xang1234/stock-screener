@@ -1293,20 +1293,23 @@ class OfficialMarketUniverseSourceService:
         # collapse an otherwise healthy 800+ row Xetra snapshot to the tiny
         # fallback CSV.
         #
-        # When the baseline CSV is absent from disk entirely (container layout
+        # When the baseline CSV is absent or has no rows (container layout
         # drift, image-build glitch, etc.) ``_load_de_csv_fallback`` returns an
         # empty list and the superset check cannot run, so the snapshot reports
         # ``baseline_unavailable`` and a warning is logged.
         live_symbols = {row["symbol"] for row in rows}
         baseline_rows = self._load_de_csv_fallback()
         baseline_status = "ok"
-        if not baseline_rows and not Path(settings.de_universe_fallback_csv_path).exists():
+        if not baseline_rows:
             baseline_status = "baseline_unavailable"
             logger.warning(
-                "DE baseline CSV at %s is missing on disk; the curated-baseline "
+                "DE baseline CSV at %s is %s; the curated-baseline "
                 "superset check cannot run and the live universe will publish "
                 "unverified. Restore the seed file to re-enable the safety guard.",
                 settings.de_universe_fallback_csv_path,
+                "missing on disk"
+                if not Path(settings.de_universe_fallback_csv_path).exists()
+                else "empty",
             )
         csv_symbols = {row["symbol"] for row in baseline_rows}
         missing_csv_symbols = csv_symbols - live_symbols

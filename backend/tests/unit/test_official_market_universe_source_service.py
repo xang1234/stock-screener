@@ -1825,6 +1825,29 @@ def test_load_de_csv_fallback_emits_isin_for_schema_parity(monkeypatch, tmp_path
         assert set(row.keys()) == expected_keys
 
 
+def test_fetch_de_snapshot_reports_a_headers_only_baseline_as_unavailable(monkeypatch, tmp_path):
+    from app.config import settings as app_settings
+
+    empty = tmp_path / "headers-only.csv"
+    empty.write_text("symbol,name,isin\n", encoding="utf-8")
+    monkeypatch.setattr(app_settings, "de_universe_source_url", _DE_CSV_URL)
+    monkeypatch.setattr(app_settings, "de_universe_fallback_csv_path", str(empty))
+    monkeypatch.setattr(app_settings, "de_live_min_universe_size", 0)
+
+    csv_bytes = _xetra_csv_content([
+        _xetra_row(Mnemonic="SAP", ISIN="DE0007164600", Instrument="SAP SE"),
+    ])
+    service = OfficialMarketUniverseSourceService()
+    monkeypatch.setattr(
+        service, "_http_get",
+        lambda url, allow_insecure_fallback=False, extra_headers=None: _fetched_xetra(csv_bytes),
+    )
+
+    snapshot = service.fetch_de_snapshot()
+
+    assert snapshot.source_metadata["baseline_status"] == "baseline_unavailable"
+
+
 def test_fetch_de_snapshot_warns_when_baseline_csv_missing(monkeypatch, tmp_path, caplog):
     """When the baseline CSV file is absent from disk the superset safety
     check is trivially vacuous — emit a loud warning so the gap is observable."""

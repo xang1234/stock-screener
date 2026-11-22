@@ -66,7 +66,9 @@ class LivePriceRefreshRunner:
         def progress_callback(batch_processed: int) -> None:
             nonlocal processed
 
-            processed += batch_processed
+            # Yahoo leaves skipped symbols out of these callbacks, but the
+            # finished-batch totals count them.
+            processed = max(processed + batch_processed, completed.processed)
 
             percent = (processed / total) * 100 if total else 100.0
 
