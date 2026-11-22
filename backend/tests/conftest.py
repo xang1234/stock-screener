@@ -110,6 +110,21 @@ def _reset_test_database():
 
 
 @pytest.fixture(autouse=True)
+def isolated_session_secret(tmp_path_factory, monkeypatch):
+    """Never create or cache the checkout's real data/.server_auth_session_secret."""
+    from app.services import server_auth
+
+    monkeypatch.setattr(
+        server_auth,
+        "_SESSION_SECRET_PATH",
+        tmp_path_factory.mktemp("session-secret") / ".server_auth_session_secret",
+    )
+    server_auth._load_or_create_session_secret.cache_clear()
+    yield
+    server_auth._load_or_create_session_secret.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def shared_test_database():
     """Give each test an empty database with the current model schema."""
     _reset_test_database()

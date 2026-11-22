@@ -67,7 +67,7 @@ The Hermes assistant sidecar (the `hermes` service in `docker-compose.yml`) read
 | `API_PORT` | `8000` | Server port |
 | `CORS_ORIGINS` | `http://localhost:5173` (local) | Comma-separated allowed origins |
 | `SERVER_AUTH_PASSWORD` | (empty) | Required for browser login in server/Docker deployments |
-| `SERVER_AUTH_SESSION_SECRET` | (empty) | Optional cookie-signing secret; defaults to `SERVER_AUTH_PASSWORD` |
+| `SERVER_AUTH_SESSION_SECRET` | (empty) | Optional cookie-signing secret. If unset, the backend generates a random one on first start and keeps it in `data/.server_auth_session_secret` (mode 0600); startup fails if that directory is not writable |
 | `SERVER_AUTH_SECURE_COOKIE` | `false` | Force Secure auth cookies; set `true` when TLS terminates at a trusted HTTPS proxy |
 | `SERVER_EXPOSE_API_DOCS` | `false` | Keep `/docs`, `/redoc`, and `/openapi.json` disabled unless you explicitly need them |
 | `ADMIN_API_KEY` | (empty) | Required for `/api/v1/config/*` endpoints |
