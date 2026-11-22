@@ -242,9 +242,9 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
             logger.warning("Price fetch for %d uncached theme symbols failed", len(misses), exc_info=True)
 
     spy_df = cached_prices.get("SPY")
-    spy_close = spy_df['Close'].tolist() if spy_df is not None and not spy_df.empty else []
+    spy_close = spy_df['Close'] if spy_df is not None and not spy_df.empty else None
 
-    if not spy_close:
+    if spy_close is None:
         logger.warning("No SPY price data found for RS calculation")
 
     rs_calc = RSSparklineCalculator()
@@ -261,9 +261,17 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
 
         # Calculate sparklines
         stock_series = pd.Series(closes)
-        spy_series = pd.Series(spy_close[:len(closes)]) if spy_close else pd.Series([1.0] * len(closes))
-
-        rs_result = rs_calc.calculate_rs_sparkline(stock_series, spy_series)
+        if spy_close is not None:
+            # Pair by date: a freshly fetched stock and a cached SPY can end on
+            # different sessions, and their histories can start on different days.
+            paired = pd.concat(
+                [price_df['Close'], spy_close.reindex(price_df.index)], axis=1, keys=["stock", "spy"]
+            ).dropna()
+            rs_result = rs_calc.calculate_rs_sparkline(
+                paired["stock"].reset_index(drop=True), paired["spy"].reset_index(drop=True)
+            )
+        else:
+            rs_result = rs_calc.calculate_rs_sparkline(stock_series, pd.Series([1.0] * len(closes)))
         price_result = price_calc.calculate_price_sparkline(stock_series)
 
         # Calculate price changes for each period

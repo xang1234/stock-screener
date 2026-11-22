@@ -124,3 +124,24 @@ async def test_theme_data_serves_cached_symbols_when_the_miss_fetch_fails(
     stocks = {s["symbol"]: s for s in response.json()["subgroups"][0]["stocks"]}
     assert stocks["AAPL"]["price_data"]
     assert not stocks["NEWCO"]["price_data"]
+
+
+def test_rs_pairs_stock_and_spy_by_date(monkeypatch):
+    # SPY has a longer history and a newer last session than the stock.
+    spy = _frame(date.today(), days=260)
+    stock = spy.iloc[-80:-5].copy()
+    stock["Close"] = stock["Close"] * 2  # exactly twice SPY on every shared date
+
+    class _Cache:
+        def get_many(self, symbols, period, cache_only=False):
+            return {"SPY": spy, "AAPL": stock}
+
+    monkeypatch.setattr(user_themes, "get_price_cache", lambda: _Cache())
+    db = SessionLocal()
+    try:
+        data = user_themes._fetch_stock_market_data(["AAPL"], db)
+    finally:
+        db.close()
+
+    # A constant ratio normalizes to a flat line; pairing by position would not.
+    assert data["AAPL"]["rs_data"] == [1.0] * 30
