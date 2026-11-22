@@ -16,6 +16,7 @@ function Capture() {
 describe('PipelineProvider', () => {
   afterEach(() => {
     vi.useRealTimers();
+    api.getPipelineStatus.mockReset();
   });
 
   it('stops polling once a run reports skipped', async () => {
@@ -75,5 +76,45 @@ describe('PipelineProvider', () => {
       await vi.advanceTimersByTimeAsync(10000);
     });
     expect(api.getPipelineStatus).toHaveBeenCalledTimes(calls);
+  });
+
+  it('stops polling and lets the card close when the run is not found', async () => {
+    vi.useFakeTimers();
+    api.getPipelineStatus.mockRejectedValue({ response: { status: 404 } });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PipelineProvider>
+          <Capture />
+        </PipelineProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => pipeline.startPipeline('gone'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(api.getPipelineStatus).toHaveBeenCalledTimes(1);
+    expect(pipeline.pipelineStatus.status).toBe('failed');
+    expect(pipeline.isPipelineRunning).toBe(false);
+  });
+
+  it('does not poll without a run id', async () => {
+    vi.useFakeTimers();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PipelineProvider>
+          <Capture />
+        </PipelineProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => pipeline.startPipeline(undefined));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(api.getPipelineStatus).not.toHaveBeenCalled();
+    expect(pipeline.isCardVisible).toBe(false);
   });
 });

@@ -6,12 +6,15 @@ import { Box, Button, Typography } from '@mui/material';
 const CHUNK_LOAD_ERROR = /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Unable to preload CSS/i;
 const RELOADED_KEY = 'app-chunk-reload';
 
-// ponytail: one auto-reload per tab session; a second deploy in the same session
-// shows the fallback instead. Store a timestamp if that becomes common.
+// A reload that still hits a missing chunk within this window is a loop, not a
+// new deploy, so the fallback shows instead.
+const RELOAD_LOOP_WINDOW_MS = 30000;
+
 function reloadOnce() {
   try {
-    if (sessionStorage.getItem(RELOADED_KEY)) return;
-    sessionStorage.setItem(RELOADED_KEY, '1');
+    const last = Number(sessionStorage.getItem(RELOADED_KEY));
+    if (last && Date.now() - last < RELOAD_LOOP_WINDOW_MS) return;
+    sessionStorage.setItem(RELOADED_KEY, String(Date.now()));
   } catch {
     return; // Without the guard a reload could loop, so leave it to the button.
   }
@@ -26,6 +29,20 @@ export default class AppErrorBoundary extends Component {
   static getDerivedStateFromError(error) {
     return { error };
   }
+
+  // The router sits inside this boundary, so Back is the only navigation left
+  // once it shows; clear the error so the previous page renders again.
+  componentDidMount() {
+    window.addEventListener('popstate', this.reset);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('popstate', this.reset);
+  }
+
+  reset = () => {
+    if (this.state.error) this.setState({ error: null });
+  };
 
   componentDidCatch(error) {
     if (CHUNK_LOAD_ERROR.test(error?.message ?? '')) reloadOnce();

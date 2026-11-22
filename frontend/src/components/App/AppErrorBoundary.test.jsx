@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AppErrorBoundary from './AppErrorBoundary';
 
@@ -58,5 +58,28 @@ describe('AppErrorBoundary', () => {
     render(<AppErrorBoundary><MissingChunkPage /></AppErrorBoundary>);
     await screen.findByText('Something went wrong');
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('reloads again for a later deploy in the same tab', async () => {
+    sessionStorage.setItem('app-chunk-reload', String(Date.now() - 60000));
+    render(<AppErrorBoundary><MissingChunkPage /></AppErrorBoundary>);
+    await screen.findByText('Something went wrong');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the error when the user goes back', () => {
+    let crash = true;
+    function MaybeCrash() {
+      if (crash) throw new Error('boom');
+      return <p>previous page</p>;
+    }
+    render(<AppErrorBoundary><MaybeCrash /></AppErrorBoundary>);
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+
+    crash = false;
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(screen.getByText('previous page')).toBeInTheDocument();
   });
 });

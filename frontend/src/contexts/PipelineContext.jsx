@@ -15,23 +15,42 @@ const QUEUED_STATUS = {
   message: 'Pipeline queued...',
 };
 
+// A 4xx never changes on retry: the run is gone, so stop polling and let the card close.
+const isClientError = (error) => {
+  const status = error?.response?.status;
+  return status >= 400 && status < 500;
+};
+
+const RUN_NOT_FOUND_STATUS = {
+  ...QUEUED_STATUS,
+  status: 'failed',
+  message: 'Pipeline status unavailable',
+  error_message: 'Pipeline run not found',
+};
+
 export function PipelineProvider({ children }) {
   const queryClient = useQueryClient();
   const [pipelineRunId, setPipelineRunId] = useState(null);
   const [isMinimized, setIsMinimized] = useState(true);
 
   // One request in flight per run, so a slow response cannot land after a newer one.
-  const { data } = useQuery({
+  const { data, error } = useQuery({
     queryKey: ['pipelineStatus', pipelineRunId],
     queryFn: () => getPipelineStatus(pipelineRunId),
-    enabled: pipelineRunId !== null,
+    enabled: Boolean(pipelineRunId),
+    retry: false, // The next poll is the retry.
     refetchInterval: (query) => (
-      TERMINAL_PIPELINE_STATUSES.has(query.state.data?.status) ? false : 2000
+      TERMINAL_PIPELINE_STATUSES.has(query.state.data?.status) || isClientError(query.state.error)
+        ? false
+        : 2000
     ),
   });
 
-  const pipelineStatus = pipelineRunId === null ? null : (data ?? QUEUED_STATUS);
-  const isCardVisible = pipelineRunId !== null;
+  const isCardVisible = Boolean(pipelineRunId);
+  let pipelineStatus = null;
+  if (isCardVisible) {
+    pipelineStatus = isClientError(error) ? RUN_NOT_FOUND_STATUS : (data ?? QUEUED_STATUS);
+  }
   const isPipelineRunning = isCardVisible && !TERMINAL_PIPELINE_STATUSES.has(pipelineStatus.status);
 
   const isCompleted = data?.status === 'completed';
@@ -44,7 +63,7 @@ export function PipelineProvider({ children }) {
   }, [isCompleted, queryClient]);
 
   const startPipeline = useCallback((runId) => {
-    setPipelineRunId(runId);
+    setPipelineRunId(runId || null);
     setIsMinimized(true);
   }, []);
 
