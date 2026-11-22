@@ -287,9 +287,11 @@ function CandlestickChart({
     });
   }, [interactive]);
 
-  // Subscribe to visible time range changes
+  // Subscribe to visible time range changes. The visual-input deps re-subscribe
+  // the chart the init effect rebuilds when they change.
   useEffect(() => {
-    if (!chartRef.current || !onVisibleRangeChange) return;
+    const chart = chartRef.current;
+    if (!chart || !onVisibleRangeChange) return;
 
     const debouncedRangeChange = debounce((range) => {
       if (range) {
@@ -297,18 +299,24 @@ function CandlestickChart({
       }
     }, 100);
 
-    const timeScale = chartRef.current.timeScale();
-    const unsubscribe = timeScale.subscribeVisibleTimeRangeChange((range) => {
+    const handleRangeChange = (range) => {
       if (range) {
         debouncedRangeChange(range);
       }
-    });
+    };
+
+    const timeScale = chart.timeScale();
+    timeScale.subscribeVisibleTimeRangeChange(handleRangeChange);
 
     return () => {
       debouncedRangeChange.cancel();
-      if (unsubscribe) unsubscribe();
+      // Same guard as the RS band effect: a rebuilt or unmounted chart is
+      // already disposed, and unsubscribing from it would throw.
+      if (chartRef.current === chart) {
+        timeScale.unsubscribeVisibleTimeRangeChange(handleRangeChange);
+      }
     };
-  }, [onVisibleRangeChange, symbol]);
+  }, [onVisibleRangeChange, symbol, height, isDarkMode, compact]);
 
   // Update chart data when data changes
   useEffect(() => {
