@@ -193,6 +193,7 @@ def test_a_lock_held_long_after_its_warmup_finished_is_stuck(service, lock, redi
         return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
     redis.values[_lock_key_for_market("US")] = f"refresh_us:us-1:{hours_ago(2)}"
+    service.complete_warmup_heartbeat("completed", market="US")  # written before post-warmup work
     monkeypatch.setattr(
         service, "get_warmup_metadata",
         lambda market=None: {"status": "completed", "completed_at": hours_ago(1)},

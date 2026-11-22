@@ -49,7 +49,10 @@ class _FrozenCalendar:
 class _BrokenCalendar:
     def __getattr__(self, name):
         def _raise(*args, **kwargs):
-            raise CalendarCoverageExpired("coverage expired")
+            raise CalendarCoverageExpired(
+                market="US", requested_date=date(2026, 7, 2), verified_through=date(2026, 6, 30),
+                source_url="test", operations_doc="test",
+            )
 
         return _raise
 
