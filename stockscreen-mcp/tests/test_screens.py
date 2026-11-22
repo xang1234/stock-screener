@@ -206,3 +206,11 @@ def test_explain_expression_keeps_the_verdict_and_its_reasons_together(required,
     expression = {"required": required, "groups": groups, "group_join": group_join}
 
     assert explain_expression(row, expression) == expected
+
+
+def test_an_integer_past_the_double_range_reads_as_infinity():
+    # JSON.parse gives Infinity for a 309-digit integer; json.loads gives an int float() cannot hold.
+    row = json.loads('{"x": ' + "9" * 309 + "}")
+    assert evaluate_condition(row, condition("x", "text", pattern="infinity")) is True
+    assert evaluate_condition(row, condition("x", "range", min=0, max=100)) is False
+    explain_condition(row, condition("x", "range", min=0, max=100))  # raised OverflowError

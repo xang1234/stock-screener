@@ -42,6 +42,14 @@ def row_value(row: dict[str, Any], field: str) -> Any:
     return row.get(field)
 
 
+def _float(value: int | float) -> float:
+    """float() that, like JS, turns an int past the double range into +/-Infinity instead of raising."""
+    try:
+        return float(value)
+    except OverflowError:
+        return math.inf if value > 0 else -math.inf
+
+
 def _js_string(value: Any) -> str:
     """JS String() of a JSON value: 1.0 is "1", a list joins its items with commas (null items empty)."""
     if value is None:
@@ -54,7 +62,7 @@ def _js_string(value: Any) -> str:
         return "[object Object]"
     if not isinstance(value, (int, float)):
         return str(value)
-    number = float(value)
+    number = _float(value)
     if math.isnan(number):
         return "NaN"
     if math.isinf(number):
@@ -87,19 +95,23 @@ _JS_NUMERIC = re.compile(
 )
 
 
+# StrWhiteSpaceChar: str.strip() would keep the BOM and drop \x1c-\x1f and \x85, which JS keeps.
+_JS_WHITESPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+
 def _js_number(value: Any) -> float:
     """JS Number(): booleans are 0/1, "" is 0, lists go through their text. None is NaN, like undefined."""
     value = _js_primitive(value)
     if isinstance(value, (bool, int, float)):
-        return float(value)
+        return _float(value)
     if not isinstance(value, str):
         return math.nan
-    text = value.strip()
+    text = value.strip(_JS_WHITESPACE)
     if not text:
         return 0.0
     if not _JS_NUMERIC.fullmatch(text):
         return math.nan
-    return float(int(text, 0)) if text[1:2] in ("x", "X", "o", "O", "b", "B") else float(text)
+    return _float(int(text, 0)) if text[1:2] in ("x", "X", "o", "O", "b", "B") else float(text)
 
 
 def _less(a: Any, b: Any) -> bool:
