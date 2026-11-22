@@ -68,8 +68,12 @@ class CompiledCustomCriteria:
         ) or self.min_score is not None
 
 
-def _flatten_filters(criteria: dict | None) -> dict:
-    """Mirror ``CustomScanner._get_filters_config``: support nested + top-level.
+# Pass gate a custom scan applies when its criteria give no ``min_score``.
+DEFAULT_CUSTOM_MIN_SCORE: float = 70.0
+
+
+def flatten_custom_filters(criteria: dict | None) -> dict:
+    """Merge a custom scan's filter keys, as ``CustomScanner`` reads them too.
 
     Top-level keys are the legacy form; the modern form nests under
     ``custom_filters``. Nested wins on conflict.
@@ -79,8 +83,7 @@ def _flatten_filters(criteria: dict | None) -> dict:
     base = dict(criteria)
     nested = base.pop("custom_filters", None) or {}
     base.pop("min_score", None)
-    base.update(nested)
-    return base
+    return {**base, **nested}  # a mapping only, as the scanner always required
 
 
 def _is_mixed_market(universe_market: str | None) -> bool:
@@ -142,7 +145,7 @@ def compile_custom_criteria(
     Returns:
         A ``CompiledCustomCriteria`` summarising what's representable.
     """
-    flat = _flatten_filters(criteria)
+    flat = flatten_custom_filters(criteria)
     spec = FilterSpec()
     representable: list[str] = []
     unrepresentable: list[str] = []
@@ -320,8 +323,8 @@ def compile_custom_criteria(
     ):
         min_score_val: float | None = float(raw_min_score)
     elif raw_min_score is None:
-        # CustomScanner default — applies whenever a score gate is in play.
-        min_score_val = 70.0 if score_field is not None else None
+        # The default applies whenever a score gate is in play.
+        min_score_val = DEFAULT_CUSTOM_MIN_SCORE if score_field is not None else None
     else:
         min_score_val = None
 
