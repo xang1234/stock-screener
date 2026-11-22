@@ -41,6 +41,11 @@ def test_expression_matches_the_frontend(case):
     assert evaluate_expression(case["row"], expression) is case["matches"]
 
 
+@pytest.mark.parametrize("case", CASES.get("expression_cases", []))
+def test_expression_shape_matches_the_frontend(case):
+    assert evaluate_expression(case["row"], case["expression"]) is case["matches"]
+
+
 @pytest.mark.parametrize("case", TRUTH_TABLE.get("rows", []))
 def test_expression_matches_the_browser_and_backend_truth_table(case):
     assert evaluate_expression(case["row"], TRUTH_TABLE["expression"]) is case["matches"]
@@ -201,3 +206,20 @@ def test_explain_expression_keeps_the_verdict_and_its_reasons_together(required,
     expression = {"required": required, "groups": groups, "group_join": group_join}
 
     assert explain_expression(row, expression) == expected
+
+
+def test_an_integer_past_the_double_range_reads_as_infinity():
+    # JSON.parse gives Infinity for a 309-digit integer; json.loads gives an int float() cannot hold.
+    row = json.loads('{"x": ' + "9" * 309 + "}")
+    assert evaluate_condition(row, condition("x", "text", pattern="infinity")) is True
+    assert evaluate_condition(row, condition("x", "range", min=0, max=100)) is False
+    explain_condition(row, condition("x", "range", min=0, max=100))  # raised OverflowError
+
+
+def test_a_long_invalid_digit_run_is_rejected_in_linear_time():
+    import time
+
+    # CPU time, so a paused runner cannot fail it. The backtracking regex took ~240 s here.
+    start = time.process_time()
+    assert evaluate_condition({"x": "1" * 50_000 + "x"}, condition("x", "range", min=70, max=None)) is True
+    assert time.process_time() - start < 5
