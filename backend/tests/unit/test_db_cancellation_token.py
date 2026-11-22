@@ -26,6 +26,30 @@ def _make_token(status: str = "running") -> tuple[DbCancellationToken, MagicMock
     return token, mock_session
 
 
+class _AbortedTransactionSession:
+    """A session that, like PostgreSQL, refuses every query after an error until rollback."""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.fail_next_query = False
+        self.aborted = False
+        self.rollbacks = 0
+
+    def expire_all(self) -> None:
+        pass
+
+    def query(self, *_args):
+        if self.fail_next_query or self.aborted:
+            self.fail_next_query = False
+            self.aborted = True
+            raise RuntimeError("current transaction is aborted")
+        return MagicMock(**{"filter.return_value.scalar.return_value": self.status})
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+        self.aborted = False
+
+
 class TestDbCancellationToken:
     """Test the DB-polling cancellation adapter."""
 
@@ -66,6 +90,27 @@ class TestDbCancellationToken:
     def test_fail_open_on_query_error(self):
         token, mock_session = _make_token()
         mock_session.query.side_effect = RuntimeError("query failed")
+
+        assert token.is_cancelled() is False
+
+    def test_recovers_after_a_db_error_by_rolling_back(self):
+        """One dropped connection must not make Cancel dead for the rest of the scan.
+
+        PostgreSQL rejects every statement in an aborted transaction until the
+        session rolls back, so the reused session has to be rolled back on error.
+        """
+        session = _AbortedTransactionSession(status="cancelled")
+        token = DbCancellationToken(MagicMock(return_value=session), "scan-001")
+
+        session.fail_next_query = True
+        assert token.is_cancelled() is False  # fail-open on the error itself
+        assert session.rollbacks == 1
+        assert token.is_cancelled() is True
+
+    def test_failed_rollback_is_logged_not_raised(self):
+        token, mock_session = _make_token()
+        mock_session.query.side_effect = RuntimeError("connection lost")
+        mock_session.rollback.side_effect = RuntimeError("connection lost")
 
         assert token.is_cancelled() is False
 
