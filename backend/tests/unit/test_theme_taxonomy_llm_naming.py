@@ -80,3 +80,26 @@ def test_fallback_provider_key_alone_still_names_clusters_by_llm(monkeypatch):
     assignments = service._phase3_llm_naming(clusters, dry_run=True)
 
     assert [a["l1_name"] for a in assignments] == ["AI Infrastructure", "AI Infrastructure"]
+
+
+def test_single_zai_key_counts_when_the_key_manager_is_empty(monkeypatch):
+    # Dispatch falls back to ZAI_API_KEY when the manager is empty, e.g. ZAI_API_KEYS=" ".
+    _configure_llm_keys(monkeypatch, zai_keys=[])
+    monkeypatch.setattr(settings, "zai_api_key", "zai-single")
+
+    assert llm_service_module.LLMService(use_case="extraction").has_configured_provider() is True
+
+
+def test_ollama_needs_a_readable_base_and_a_key_for_the_cloud(monkeypatch):
+    _configure_llm_keys(monkeypatch, zai_keys=[])
+    service = llm_service_module.LLMService(use_case="extraction")
+    cloud = llm_service_module._OLLAMA_API_BASE_DEFAULT
+
+    for base, key, expected in [
+        (None, "", False),
+        (cloud, "", False),
+        (cloud, "ollama-key", True),
+        ("http://localhost:11434", "", True),
+    ]:
+        service._ollama_api_base, service._ollama_api_key = base, key
+        assert service._model_has_key("ollama_chat/llama3") is expected, (base, key)
