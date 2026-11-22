@@ -221,6 +221,12 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     initialize_runtime()
+    from .services.server_auth import server_auth_configured, server_auth_required
+
+    if server_auth_required():
+        # Resolves the cookie-signing secret, generating it on first start, so an
+        # unwritable data dir stops startup instead of failing the first login.
+        server_auth_configured()
     runtime_services = initialize_process_runtime_services(session_factory=SessionLocal)
     app.state.runtime_services = runtime_services
     trigger_group_history_reconciliation_on_startup()

@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
 import logging
+import os
+import secrets
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 
 from ..config import settings
+from ..config.settings import get_project_root
 from .errors import (
     AuthTokenDecodeError,
     AuthTokenError,
@@ -22,6 +28,10 @@ from .errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+# In the persisted data dir (./data:/app/data in Docker) so restarts and every
+# API process share one secret.
+_SESSION_SECRET_PATH = get_project_root() / "data" / ".server_auth_session_secret"
 
 
 @dataclass(frozen=True)
@@ -153,7 +163,40 @@ def _session_secret() -> str:
     secret = str(settings.server_auth_session_secret or "").strip()
     if secret:
         return secret
-    return _server_auth_password()
+    path = _SESSION_SECRET_PATH
+    try:
+        return _load_or_create_session_secret(path)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot read or create the session-signing secret at {path} ({exc}). "
+            "Make that directory writable by the app user, or set SERVER_AUTH_SESSION_SECRET."
+        ) from exc
+
+
+@functools.cache
+def _load_or_create_session_secret(path: Path) -> str:
+    if not path.exists():
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.")  # mode 0600
+        try:
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(secrets.token_urlsafe(32))
+                handle.flush()
+                os.fsync(handle.fileno())
+            # A hard link creates the name only if it is absent, with the
+            # content already in place, so racing processes see one winner.
+            os.link(tmp, path)
+            logger.info("Generated server auth session secret", extra={"path": str(path)})
+        except FileExistsError:
+            pass  # Another process won the race; the read below uses its secret.
+        finally:
+            os.unlink(tmp)
+    secret = path.read_text(encoding="utf-8").strip()
+    if not secret:
+        raise RuntimeError(
+            f"Session-signing secret file {path} is empty. "
+            "Delete it to generate a new one, or set SERVER_AUTH_SESSION_SECRET."
+        )
+    return secret
 
 
 def _header_secret_matches(request: Request) -> bool:

@@ -50,6 +50,7 @@ data/*.recovered_*
 data/xui-reader/
 data/hermes/
 data/backups/
+data/.server_auth_session_secret
 docker-data/
 
 # Logs
