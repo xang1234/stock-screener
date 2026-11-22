@@ -169,9 +169,9 @@ Caveats: replay picks use today's screener code and today's universe, so they're
 
 ### Delivery
 
-1. Step 0 measurement, written up in this file.
-2. `market_state` group dimension, which needs priority 1's stored state.
-3. `recent` block in `ValidationService` and the Backtest page.
+1. Step 0 measurement, written up in this file. Not run yet. The Daily-page strip waits on its decision rule.
+2. Done: `market_state` group dimension on scan and replay picks.
+3. Done: `recent` on the overview and on each group, and the Backtest page's recent section and group column. The window starts no earlier than the lookback cutoff, so the 30D view holds 16 to 19 entry sessions, not 20.
 4. `recent_5` in the static scoreboard and `StaticScoreboardPage.jsx`.
 
 ## Non-goals
