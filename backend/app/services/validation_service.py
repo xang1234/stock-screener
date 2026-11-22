@@ -32,6 +32,7 @@ from app.schemas.validation import (
     ValidationGroup,
     ValidationHorizonSummary,
     ValidationOverviewResponse,
+    ValidationRecentWindow,
     ValidationSourceBreakdown,
     ValidationSourceKind,
 )
@@ -54,6 +55,9 @@ PRICE_CACHE_PERIOD = "2y"
 THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 DEFAULT_MARKET = "US"
 HORIZONS = (1, 5, 20, 60)
+# The recent window: events entered in the last 20 sessions whose 5-session window has closed.
+RECENT_ENTRY_SESSIONS = 20
+RECENT_HORIZON = 5
 THIN_SAMPLE_SIZE = 20
 THIN_EFFECTIVE_DATES = 5
 STOP_LOSS_PCT = 7.0
@@ -795,6 +799,42 @@ def summarize_horizon(
     )
 
 
+def _recent_entry_sessions(sessions: Sequence[date], cutoff_date: date) -> list[date] | None:
+    """The last ``RECENT_ENTRY_SESSIONS`` of ``sessions`` whose ``RECENT_HORIZON``-session
+    window ends by the last of them, leaving out any before ``cutoff_date``. None when
+    ``sessions`` is too short to hold them all."""
+    span = RECENT_ENTRY_SESSIONS + RECENT_HORIZON - 1
+    if len(sessions) < span:
+        return None
+    last_entry = len(sessions) - RECENT_HORIZON
+    return [day for day in sessions[-span : last_entry + 1] if day >= cutoff_date]
+
+
+def _summarize_recent(
+    events: list[EvaluatedValidationEvent], entry_sessions: list[date]
+) -> ValidationHorizonSummary:
+    """``summarize_horizon`` at ``RECENT_HORIZON`` over the events entered on
+    ``entry_sessions``. An event with no cached history has no entry session, so it is left out."""
+    return summarize_horizon(
+        [event for event in events if event.entry_at in entry_sessions],
+        horizon_sessions=RECENT_HORIZON,
+    )
+
+
+def _recent_window(
+    events: list[EvaluatedValidationEvent], entry_sessions: list[date] | None
+) -> ValidationRecentWindow | None:
+    if entry_sessions is None:
+        return None
+    return ValidationRecentWindow(
+        horizon_sessions=RECENT_HORIZON,
+        sessions=len(entry_sessions),
+        entries_from=entry_sessions[0].isoformat() if entry_sessions else None,
+        entries_through=entry_sessions[-1].isoformat() if entry_sessions else None,
+        summary=_summarize_recent(events, entry_sessions),
+    )
+
+
 class ValidationService:
     """Compose signal sources, price outcomes, and deterministic summaries."""
 
@@ -843,8 +883,13 @@ class ValidationService:
             benchmark_symbol=payload["benchmark_symbol"],
             stop_loss_pct=STOP_LOSS_PCT,
             horizons=payload["horizons"],
+            recent=_recent_window(payload["events"], payload["recent_entry_sessions"]),
             recent_events=payload["recent_events"],
-            groups=self._build_groups(payload["events"], source_kind),
+            groups=self._build_groups(
+                payload["events"],
+                source_kind,
+                recent_entry_sessions=payload["recent_entry_sessions"],
+            ),
             freshness=self._build_freshness(
                 db,
                 as_of_date=effective_as_of_date,
@@ -937,21 +982,20 @@ class ValidationService:
             through = exc.verified_through
             calendar_reasons.append("calendar_coverage_expired")
         benchmark_candidates = benchmark_registry.get_candidate_symbols(market)
+        # Ending at ``through``, which never passes verified coverage, drops today's partial
+        # bar while the session is open. A bar fetched mid-session stays partial until the
+        # after-close refresh, which can run after this cut-off moves.
+        # Starting no later than the cutoff keeps the session before ``through`` in the
+        # calendar even when every event falls on ``through``. The earlier sessions serve
+        # only extension, which reads the 50 before each entry, since windows look forward.
+        sessions = self._market_calendar.trading_days(
+            market,
+            min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)])
+            - EXTENSION_LOOKBEHIND,
+            through,
+        )
         evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
-            raw_events,
-            benchmark_candidates=benchmark_candidates,
-            # Ending at ``through``, which never passes verified coverage, drops today's partial
-            # bar while the session is open. A bar fetched mid-session stays partial until the
-            # after-close refresh, which can run after this cut-off moves.
-            # Starting no later than the cutoff keeps the session before ``through`` in the
-            # calendar even when every event falls on ``through``. The earlier sessions serve
-            # only extension, which reads the 50 before each entry, since windows look forward.
-            sessions=self._market_calendar.trading_days(
-                market,
-                min([cutoff_date, *(_event_date(event.event_at) for event in raw_events)])
-                - EXTENSION_LOOKBEHIND,
-                through,
-            ),
+            raw_events, benchmark_candidates=benchmark_candidates, sessions=sessions
         )
         events = [
             event
@@ -977,13 +1021,18 @@ class ValidationService:
         return {
             "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
+            "recent_entry_sessions": _recent_entry_sessions(sessions, cutoff_date),
             "events": events,
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
         }
 
     def _build_groups(
-        self, events: list[EvaluatedValidationEvent], source_kind: ValidationSourceKind
+        self,
+        events: list[EvaluatedValidationEvent],
+        source_kind: ValidationSourceKind,
+        *,
+        recent_entry_sessions: list[date] | None,
     ) -> list[ValidationGroup]:
         groups: list[ValidationGroup] = []
         values = [_group_values(event) for event in events]
@@ -999,6 +1048,11 @@ class ValidationService:
                     label=GROUP_LABELS.get(dimension) or dimension.replace("_", " ").title(),
                     value=value,
                     horizons=self._summarize_horizons(members[value]),
+                    recent=(
+                        None
+                        if recent_entry_sessions is None
+                        else _summarize_recent(members[value], recent_entry_sessions)
+                    ),
                 )
                 for value in sorted(members, key=partial(_group_order, dimension))
             )

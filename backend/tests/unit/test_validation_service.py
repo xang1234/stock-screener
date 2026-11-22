@@ -851,7 +851,7 @@ def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extensio
         for pct in (30.0, 10.0, 9.99, 0.0, -0.01, 29.99, None)
     ]
 
-    groups = _service()._build_groups(events, ValidationSourceKind.REPLAY_PICK)
+    groups = _service()._build_groups(events, ValidationSourceKind.REPLAY_PICK, recent_entry_sessions=None)
 
     assert [(g.dimension, g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
         ("extension_band", "Extension vs 50DMA", "below 50DMA", 1),
@@ -875,7 +875,7 @@ def test_groups_follow_the_dimension_order_then_each_dimensions_value_order():
         )
     ]
 
-    groups = _service()._build_groups(events, ValidationSourceKind.SCAN_PICK)
+    groups = _service()._build_groups(events, ValidationSourceKind.SCAN_PICK, recent_entry_sessions=None)
 
     assert [(g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
         ("Rating", "Strong Buy", 1),
@@ -1428,11 +1428,11 @@ def test_the_calendar_dates_each_window_and_a_missing_session_leaves_it_unscored
     )
 
 
-def _winter_overview(session, picks, histories):
+def _winter_overview(session, picks, histories, *, details=None):
     for symbol in histories:
         _add_universe(session, symbol)
     for symbol, as_of in picks:
-        _add_pick(session, _add_run(session, as_of), symbol, 90.0)
+        _add_pick(session, _add_run(session, as_of), symbol, 90.0, details=(details or {}).get(symbol))
     session.commit()
     service = _service(
         {"SPY": _winter_bars(), **histories},
@@ -2236,3 +2236,113 @@ def test_extension_of_a_pick_on_a_session_its_symbol_has_not_refreshed_yet_is_un
     )
 
     assert evaluated[0].pct_above_50dma is None
+
+
+@pytest.mark.parametrize(
+    ("sessions", "lookback_days", "window"),
+    [
+        # 2025-12-25 is a holiday; 2026-01-26 is the fifth session back from 2026-01-30.
+        pytest.param(WINTER_SESSIONS, 90, (20, "2025-12-26", "2026-01-26"), id="last-twenty-closed"),
+        pytest.param(WINTER_SESSIONS[-24:], 90, (20, "2025-12-26", "2026-01-26"), id="just-enough"),
+        pytest.param(WINTER_SESSIONS[-23:], 90, None, id="too-few-sessions"),
+        # The 2026-01-10 cutoff is a Saturday.
+        pytest.param(WINTER_SESSIONS, 20, (10, "2026-01-12", "2026-01-26"), id="clamped-to-cutoff"),
+        pytest.param(WINTER_SESSIONS, 2, (0, None, None), id="cutoff-after-last-closed-entry"),
+    ],
+)
+def test_the_recent_window_holds_the_last_twenty_entry_sessions_with_a_closed_window(
+    session, sessions, lookback_days, window
+):
+    service = _service(last_completed=date(2026, 1, 30), sessions=sessions)
+
+    recent = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=lookback_days,
+        as_of_date=date(2026, 1, 30),
+    ).recent
+
+    assert (
+        None if recent is None else (recent.sessions, recent.entries_from, recent.entries_through)
+    ) == window
+    if recent is not None:
+        assert (recent.horizon_sessions, recent.summary.horizon_sessions) == (5, 5)
+
+
+def test_the_recent_window_counts_picks_by_their_entry_session(session):
+    payload = _winter_overview(
+        session,
+        [
+            # Signalled before the window, it enters on the window's first session.
+            ("FIRST", date(2025, 12, 24)),
+            ("BEFORE", date(2025, 12, 23)),
+            ("LAST", date(2026, 1, 23)),
+            # Signalled on the window's last entry session, it enters after it.
+            ("AFTER", date(2026, 1, 26)),
+            # No cached history, so no entry session.
+            ("GONE", date(2026, 1, 5)),
+        ],
+        {"FIRST": _winter_bars(), "BEFORE": _winter_bars(), "LAST": _winter_bars(), "AFTER": _winter_bars(), "GONE": None},
+    )
+
+    recent = payload.recent.summary
+    assert (
+        recent.sample_size,
+        recent.effective_dates,
+        recent.pending_windows,
+        recent.skipped_missing_history,
+    ) == (2, 2.0, 0, 0)
+    base = payload.horizons[1]
+    assert (base.sample_size, base.pending_windows, base.skipped_missing_history) == (3, 1, 1)
+
+
+def test_the_recent_window_keeps_the_overlap_rule_of_the_full_lookback(session):
+    payload = _winter_overview(
+        session,
+        [
+            # Enters 2025-12-23, before the window; the repeat enters 12-26 inside its five sessions.
+            ("NVDA", date(2025, 12, 22)),
+            ("NVDA", date(2025, 12, 24)),
+            ("AMD", date(2026, 1, 5)),
+            ("AMD", date(2026, 1, 6)),
+        ],
+        {"NVDA": _winter_bars(), "AMD": _winter_bars()},
+    )
+
+    recent, base = payload.recent.summary, payload.horizons[1]
+    assert (recent.sample_size, recent.suppressed_overlapping) == (1, 2)
+    assert (base.sample_size, base.suppressed_overlapping) == (2, 2)
+
+
+def test_each_group_reports_the_recent_window_over_its_own_picks(session):
+    payload = _winter_overview(
+        session,
+        [("NVDA", date(2025, 12, 23)), ("AMD", date(2026, 1, 5)), ("TSLA", date(2026, 1, 5))],
+        {"NVDA": _winter_bars(), "AMD": _winter_bars(), "TSLA": _winter_bars()},
+        details={"TSLA": {"stage": 3}},
+    )
+
+    assert [
+        (g.value, g.horizons[1].sample_size, g.recent.sample_size)
+        for g in payload.groups
+        if g.dimension == "stage"
+    ] == [("2", 2, 1), ("3", 1, 1)]
+
+
+def test_groups_have_no_recent_window_when_the_overview_has_none(session):
+    _add_universe(session, "NVDA")
+    _add_pick(session, _add_run(session, date(2026, 1, 5)), "NVDA", 90.0)
+    session.commit()
+    service = _service(
+        {"NVDA": _winter_bars()}, last_completed=date(2026, 1, 30), sessions=WINTER_SESSIONS[-23:]
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.SCAN_PICK,
+        lookback_days=90,
+        as_of_date=date(2026, 1, 30),
+    )
+
+    assert payload.recent is None
+    assert payload.groups and all(group.recent is None for group in payload.groups)

@@ -232,6 +232,16 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
         payload["recent_events"][0]["excess_return_5s_pct"],
     ) == (2.0, 8.0)
     assert "missing_price_cache" in payload["degraded_reasons"]
+    # Every day is a session through today + 30, so the window's last entry is five back.
+    recent = payload["recent"]
+    assert {key: recent[key] for key in ("horizon_sessions", "sessions", "entries_from", "entries_through")} == {
+        "horizon_sessions": 5,
+        "sessions": 20,
+        "entries_from": (today + timedelta(days=7)).isoformat(),
+        "entries_through": (today + timedelta(days=26)).isoformat(),
+    }
+    assert (recent["summary"]["horizon_sessions"], recent["summary"]["sample_size"]) == (5, 0)
+    assert payload["groups"] and all(group["recent"]["horizon_sessions"] == 5 for group in payload["groups"])
 
 
 @pytest.mark.asyncio
