@@ -437,7 +437,6 @@ def refresh_all_fundamentals(
             'failed_symbols': []
         }
 
-        # Process each stock with rate limiting (2 seconds between calls)
         for i, stock in enumerate(universe_stocks):
             symbol = stock.symbol
             try:

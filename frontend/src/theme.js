@@ -4,7 +4,7 @@ import { alpha } from '@mui/material/styles';
 export const COLOR_MODE_STORAGE_KEY = 'stockscanner-color-mode';
 
 // Saved choice first, then the OS preference; the app has always opened dark.
-// index.html runs the same lookup inline so the first paint matches.
+// public/color-mode.js runs the same lookup before the bundle so the first paint matches.
 export function readColorMode() {
   try {
     const saved = window.localStorage.getItem(COLOR_MODE_STORAGE_KEY);

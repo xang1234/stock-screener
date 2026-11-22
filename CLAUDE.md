@@ -227,8 +227,8 @@ The Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans` remains the sched
 **CRITICAL: API paths must NOT include `/api` prefix**
 
 The axios client in `frontend/src/api/client.js` handles the `/api` prefix via `baseURL`:
-- **Local dev**: `baseURL = 'http://localhost:8000/api'`
-- **Docker**: `baseURL = '/api'` (set via `VITE_API_URL` build arg)
+- **Local dev**: `baseURL = '/api'`, which the Vite dev server proxies to `http://127.0.0.1:8000`
+- **Docker**: `baseURL = '/api'` (set via `VITE_API_URL` build arg), which nginx proxies to the backend
 
 When adding new API endpoints, use paths starting with `/v1/`:
 ```javascript
