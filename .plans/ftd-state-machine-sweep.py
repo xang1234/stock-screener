@@ -36,7 +36,7 @@ def fsm(df, corr, gain, min_day=4, expiry=None, ma_entry=False):
         day += 1
         longest = max(longest, day)
         g = gain[i] if hasattr(gain, "__len__") else gain
-        if day >= min_day and c[i] / c[i - 1] - 1 >= g and v[i] > v[i - 1]:
+        if day >= min_day and c[i] / c[i - 1] - 1 >= g and v[i] > v[i - 1] > 0:
             ev.append((df.index[i].date(), f"FTD d{day}"))
             state, peak, ftd_low = "up", c[i], low
         elif expiry and day >= expiry:
@@ -56,7 +56,7 @@ for mkt, sym in BENCH.items():
     df = df[df.index >= "2022-01-01"]
     atr = atr[-len(df):]
     for name, kw in {
-        "8%/1.5%": dict(corr=0.08, gain=0.015),
+        "8%/1.5%/recover, no expiry": dict(corr=0.08, gain=0.015),
         "8%/1.5%/exp25+recover": dict(corr=0.08, gain=0.015, expiry=25),
     }.items():
         ev, longest = fsm(df, **kw)

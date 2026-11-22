@@ -96,7 +96,13 @@ A benchmark whose volume is missing or zero can't confirm an FTD, as with v1. Ev
 - `build_exposure_payload` adds the state, the rally day and a failed-FTD marker to each history point. The timeline shows FTDs and failures. The detail row reads "Rally attempt, day 3" instead of "Follow-through day: No".
 - Run `backfill_exposure` once per market after deploy, because every stored FTD marker changes. Say so in the PR.
 
-**Mid-session.** `compute_exposure` already rejects a frame whose last bar isn't `as_of_date`, and the pipeline runs after the close, so the reducer sees completed sessions only. A partial bar can't start or confirm a rally day.
+**Mid-session.** `compute_exposure` checks only that the frame's last bar is dated `as_of_date`. It does not check that the session has closed. The guarantee comes from the callers, and this change does not alter it.
+
+- `calculate_market_exposure` defaults to `last_completed_trading_day(market)`, and the daily pipeline runs it after the close. That path never sees a partial bar.
+- An explicit `calculation_date`, or a `backfill_market_exposure` range that ends on the current session, can name a session still in progress. `resolve_benchmark_bundle` is not cache-only, so it can fetch that session's partial bar from Yahoo. The cycle then scores the partial bar, and a rally day or an FTD can appear and later vanish when the session completes.
+- A run that straddles the close can see the session as open when it fetches and closed when it stores.
+
+Run manual backfills when the market is closed, with `end_date` no later than `last_completed_trading_day(market)`. Rejecting an in-progress `as_of_date` inside `compute_exposure` is an open follow-up, not part of this change.
 
 ### FTD leadership
 
