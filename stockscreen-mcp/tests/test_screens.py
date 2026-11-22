@@ -41,6 +41,11 @@ def test_expression_matches_the_frontend(case):
     assert evaluate_expression(case["row"], expression) is case["matches"]
 
 
+@pytest.mark.parametrize("case", CASES.get("expression_cases", []))
+def test_expression_shape_matches_the_frontend(case):
+    assert evaluate_expression(case["row"], case["expression"]) is case["matches"]
+
+
 @pytest.mark.parametrize("case", TRUTH_TABLE.get("rows", []))
 def test_expression_matches_the_browser_and_backend_truth_table(case):
     assert evaluate_expression(case["row"], TRUTH_TABLE["expression"]) is case["matches"]

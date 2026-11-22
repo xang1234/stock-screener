@@ -342,4 +342,8 @@ describe('scan filter expressions', () => {
     const expression = { ...conditionCases.expression, group_join: item.group_join };
     expect(evaluateExpression(item.row, expression)).toBe(item.matches);
   });
+
+  it.each(conditionCases.expression_cases)('matches the shared expression shape case %j', (item) => {
+    expect(evaluateExpression(item.row, item.expression)).toBe(item.matches);
+  });
 });
