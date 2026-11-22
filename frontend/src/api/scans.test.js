@@ -15,14 +15,6 @@ vi.mock('./client', () => ({
   },
 }));
 
-const deferred = () => {
-  let resolve;
-  const promise = new Promise((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-};
-
 describe('scan api helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,61 +82,10 @@ describe('scan api helpers', () => {
     });
   });
 
-  it('fallback /results batching does not eagerly start all pages', async () => {
-    const page2 = deferred();
-    const page3 = deferred();
-    const page4 = deferred();
+  it('propagates a /symbols failure instead of crawling /results', async () => {
+    apiClient.get.mockRejectedValueOnce(new Error('symbols endpoint failed'));
 
-    apiClient.get.mockImplementation((url, config = {}) => {
-      if (url === '/v1/scans/scan-5/symbols') {
-        return Promise.reject(new Error('symbols endpoint unavailable'));
-      }
-      if (url !== '/v1/scans/scan-5/results') {
-        return Promise.reject(new Error(`unexpected url ${url}`));
-      }
-
-      const page = config.params?.page;
-      if (page === 1) {
-        return Promise.resolve({
-          data: { total: 500, results: [{ symbol: 'S1' }] },
-        });
-      }
-      if (page === 2) {
-        return page2.promise;
-      }
-      if (page === 3) {
-        return page3.promise;
-      }
-      if (page === 4) {
-        return page4.promise;
-      }
-      if (page === 5) {
-        return Promise.resolve({
-          data: { total: 500, results: [{ symbol: 'S5' }] },
-        });
-      }
-      return Promise.reject(new Error(`unexpected page ${page}`));
-    });
-
-    const pending = getAllFilteredSymbols('scan-5');
-    await vi.waitFor(() => {
-      const earlyPages = apiClient.get.mock.calls
-        .filter(([url]) => url === '/v1/scans/scan-5/results')
-        .map(([, cfg]) => cfg?.params?.page);
-      expect(earlyPages).toEqual([1, 2, 3, 4]);
-      expect(earlyPages).not.toContain(5);
-    });
-
-    page2.resolve({ data: { total: 500, results: [{ symbol: 'S2' }] } });
-    page3.resolve({ data: { total: 500, results: [{ symbol: 'S3' }] } });
-    page4.resolve({ data: { total: 500, results: [{ symbol: 'S4' }] } });
-
-    const symbols = await pending;
-    expect(symbols).toEqual(['S1', 'S2', 'S3', 'S4', 'S5']);
-
-    const allPages = apiClient.get.mock.calls
-      .filter(([url]) => url === '/v1/scans/scan-5/results')
-      .map(([, cfg]) => cfg?.params?.page);
-    expect(allPages).toEqual([1, 2, 3, 4, 5]);
+    await expect(getAllFilteredSymbols('scan-5')).rejects.toThrow('symbols endpoint failed');
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
   });
 });

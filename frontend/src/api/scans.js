@@ -208,55 +208,5 @@ export const getSetupDetails = async (scanId, symbol) => {
  * @param {Object} params - API filter parameters (from buildFilterParams utility)
  * @returns {Promise<Array<string>>} Complete list of symbols matching filters
  */
-export const getAllFilteredSymbols = async (scanId, params = {}) => {
-  try {
-    const response = await getScanSymbols(scanId, params);
-    if (Array.isArray(response?.symbols)) {
-      return response.symbols;
-    }
-  } catch {
-    // Fallback to paginated /results crawl for backward compatibility.
-  }
-
-  // Fetch first page to get total count
-  const firstPage = await getScanResults(scanId, {
-    ...params,
-    page: 1,
-    per_page: 100,
-    include_sparklines: false,
-  });
-
-  const total = firstPage.total;
-  const symbols = firstPage.results.map((r) => r.symbol);
-
-  // If more results exist, fetch remaining pages in batches (rate-limited)
-  if (total > 100) {
-    const pageCount = Math.ceil(total / 100);
-    const pageTasks = [];
-
-    for (let page = 2; page <= pageCount; page++) {
-      pageTasks.push(() => getScanResults(scanId, {
-          ...params,
-          page,
-          per_page: 100,
-          include_sparklines: false,
-        }));
-    }
-
-    // Fetch in batches of 3 to avoid overwhelming the server
-    const BATCH_SIZE = 3;
-    const allResults = [];
-
-    for (let i = 0; i < pageTasks.length; i += BATCH_SIZE) {
-      const batch = pageTasks.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(batch.map((task) => task()));
-      allResults.push(...batchResults);
-    }
-
-    allResults.forEach((pageData) => {
-      symbols.push(...pageData.results.map((r) => r.symbol));
-    });
-  }
-
-  return symbols;
-};
+export const getAllFilteredSymbols = async (scanId, params = {}) =>
+  (await getScanSymbols(scanId, params)).symbols;
