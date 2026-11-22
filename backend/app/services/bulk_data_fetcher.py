@@ -1223,16 +1223,14 @@ class BulkDataFetcher:
             probe_failed = breaker_state == "half_open_probe" and (
                 batch_rate_limit_failures or not batch_successes
             )
+            circuit_opened = False
             if batch_failure_rate > 0.5 or probe_failed:
-                breaker.record_429("yfinance", market)
+                circuit_opened = breaker.record_429("yfinance", market)
             if batch_failure_rate > 0.5:
                 consecutive_backoffs += 1
-                circuit_opened = probe_failed or consecutive_backoffs >= breaker.threshold
-                if market is not None and breaker.enabled and circuit_opened:
+                if market is not None and circuit_opened:
                     # Backing off for as long as the cooldown would turn the next
-                    # batch into a probe. Counted locally: check() would spend it.
-                    # ponytail: another process's success can reset the shared
-                    # count, so this may skip one backoff the circuit didn't need.
+                    # batch into a probe; the next pass skips the rest instead.
                     continue
                 backoff_time = min(
                     backoff_base_s * (backoff_factor ** (consecutive_backoffs - 1)),

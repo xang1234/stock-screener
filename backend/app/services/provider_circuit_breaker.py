@@ -207,14 +207,17 @@ class ProviderCircuitBreaker:
             raise CircuitOpenError(provider, market, float(self.cooldown_s(market)))
         return state
 
-    def record_429(self, provider: str, market: Optional[str]) -> None:
-        """Increment consecutive-429 counter; trip to ``open`` at threshold."""
+    def record_429(self, provider: str, market: Optional[str]) -> bool:
+        """Increment consecutive-429 counter; trip to ``open`` at threshold.
+
+        Returns whether the circuit is open after this call, so a caller can
+        react to a trip without a ``check`` that would claim the probe.
+        """
         if not self.enabled:
-            return
+            return False
         client = self._redis()
         if client is None:
-            self._fallback_record_429(provider, market)
-            return
+            return self._fallback_record_429(provider, market)
         state_key = self.state_key(provider, market)
         events_key = self.events_key(provider, market)
         threshold = self.threshold
@@ -247,7 +250,7 @@ class ProviderCircuitBreaker:
                     "reopening (consecutive_429=%d)",
                     provider, market_suffix(market), consecutive,
                 )
-                return
+                return True
 
             if current_state != "open" and consecutive >= threshold:
                 pipe2 = client.pipeline()
@@ -265,8 +268,10 @@ class ProviderCircuitBreaker:
                     provider, market_suffix(market),
                     consecutive, threshold, cooldown,
                 )
+            return current_state == "open" or consecutive >= threshold
         except Exception as exc:
             logger.debug("CircuitBreaker.record_429: Redis error: %s", exc)
+            return False
 
     def record_success(self, provider: str, market: Optional[str]) -> None:
         """Reset counter; promote half_open → closed when applicable."""
@@ -358,7 +363,7 @@ class ProviderCircuitBreaker:
                 return "half_open_probe"
             return "closed"
 
-    def _fallback_record_429(self, provider: str, market: Optional[str]) -> None:
+    def _fallback_record_429(self, provider: str, market: Optional[str]) -> bool:
         with self._fallback_lock:
             key = self._fallback_key(provider, market)
             entry = self._fallback_state.setdefault(
@@ -373,6 +378,7 @@ class ProviderCircuitBreaker:
             elif entry["consecutive_429"] >= self.threshold:
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
+            return entry["state"] == "open"
 
     def _fallback_record_success(self, provider: str, market: Optional[str]) -> None:
         with self._fallback_lock:

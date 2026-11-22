@@ -137,3 +137,21 @@ def test_skipping_the_backoff_does_not_spend_the_recovery_probe(monkeypatch):
     )
 
     assert fetched_batches[3] == symbols[30:]  # the fourth batch ran as the probe
+
+
+def test_a_trip_carried_from_earlier_calls_skips_the_backoff(monkeypatch):
+    monkeypatch.setattr(settings, "circuit_breaker_enabled", True)
+    monkeypatch.setattr(settings, "circuit_breaker_threshold", 3)
+    breaker = ProviderCircuitBreaker(redis_client_factory=lambda: None)
+    for _ in range(2):  # an earlier fetch's rate-limited batches
+        breaker.record_429("yfinance", "US")
+    sleeps = []
+    symbols = [f"S{i:02d}" for i in range(20)]
+    results, fetched_batches, _ = _fetch_fundamentals(
+        monkeypatch, symbols, rate_limited=set(symbols[:10]), batch_size=10,
+        breaker=breaker, sleeps=sleeps,
+    )
+
+    assert fetched_batches == [symbols[:10]]
+    assert sleeps == []
+    assert all(results[s]["error"] == "circuit_open" for s in symbols[10:])
