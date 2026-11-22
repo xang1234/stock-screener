@@ -36,7 +36,12 @@ What the numbers mean: v1 shows about three times too many FTD markers on the ti
 
 ### Data shape
 
-A reducer over the index frame, one state per bar. The pipeline already loads two years of benchmark bars each day (`compute_exposure`, `period="2y"`), so the state is recomputed from the frame instead of carried between rows. A backfill and a daily run then always agree, and nothing needs storing to resume.
+A reducer over the index bars, one state per bar. `compute_exposure` runs it each day over the last 252 sessions of the benchmark frame, so no state is carried between rows. A daily run and a backfill then agree on a date whenever the frame holds 252 sessions before it.
+
+Known limits, left for a follow-up that would persist a reducer checkpoint:
+
+- A correction whose starting peak is more than 252 sessions old is forgotten when that peak leaves the window. On SPY, 2022 to 2026, the windowed state differs from one full-history pass on 38 of 1,227 sessions, and all 8 FTD dates match.
+- The benchmark frame is two years back from the run date. A manual backfill of a session more than about a year old can have fewer than 252 earlier bars, so its cycle starts from an assumed uptrend. The automatic 220-day seed is not affected.
 
 ```python
 class CycleState(StrEnum):
@@ -53,7 +58,13 @@ class MarketCycle:
     ftd_date: date | None          # latest FTD whose rally low still holds
     failed_ftd_date: date | None   # set on the session an FTD's rally low broke
 
-def market_cycle(ohlcv: pd.DataFrame, params: CycleParams) -> list[MarketCycle]: ...
+class CycleBar(NamedTuple):    # domain code may not import pandas
+    date: date
+    close: float
+    low: float
+    volume: float
+
+def market_cycle(bars: Sequence[CycleBar], params: CycleParams) -> list[MarketCycle]: ...
 ```
 
 Transitions, as prototyped:
