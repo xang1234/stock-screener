@@ -109,7 +109,7 @@ A benchmark whose volume is missing or zero can't confirm an FTD, as with v1. Ev
 
 **Mid-session.** `compute_exposure` checks only that the frame's last bar is dated `as_of_date`. It does not check that the session has closed. The guarantee comes from the callers, and this change does not alter it.
 
-- `calculate_market_exposure` defaults to `last_completed_trading_day(market)`, and the daily pipeline runs it after the close. That path never sees a partial bar.
+- `calculate_market_exposure` defaults to `last_completed_trading_day(market)`, and the daily pipeline runs it after the close. That path asks only for a completed session. It can still score a partial bar if a benchmark bar fetched during that session is still cached, because the cache matches bars by date, not by fetch time.
 - An explicit `calculation_date`, or a `backfill_market_exposure` range that ends on the current session, can name a session still in progress. `resolve_benchmark_bundle` is not cache-only, so it can fetch that session's partial bar from Yahoo. The cycle then scores the partial bar, and a rally day or an FTD can appear and later vanish when the session completes.
 - A run that straddles the close can see the session as open when it fetches and closed when it stores.
 
