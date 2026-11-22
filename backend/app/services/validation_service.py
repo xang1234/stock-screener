@@ -907,7 +907,7 @@ class ValidationService:
             db,
             source_kind=source_kind,
             lookback_days=lookback_days,
-            as_of_date=effective_as_of_date,
+            as_of_date=as_of_date,
             market=market,
         )
         return ValidationOverviewResponse(
@@ -1061,9 +1061,10 @@ class ValidationService:
         return {
             "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
-            # A historical overview's window ends at its as-of date, not at the latest session.
+            # A historical overview's window ends at its as-of date. A live one ends at the
+            # market's last completed session, which can be dated ahead of New York's date.
             "recent_entry_sessions": _recent_entry_sessions(
-                [day for day in sessions if day <= effective_as_of_date]
+                sessions if as_of_date is None else [day for day in sessions if day <= as_of_date]
             ),
             "marked_events": marked_events,
             "events": events,

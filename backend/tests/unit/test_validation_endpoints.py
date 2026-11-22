@@ -21,7 +21,6 @@ from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.services import server_auth
 from app.services.validation_service import ValidationService
-from app.utils.market_hours import to_eastern_date
 
 pytestmark = pytest.mark.integration
 
@@ -251,15 +250,14 @@ async def test_validation_overview_endpoint_returns_scan_pick_metrics(client, se
         payload["recent_events"][0]["excess_return_5s_pct"],
     ) == (2.0, 8.0)
     assert "missing_price_cache" in payload["degraded_reasons"]
-    # Every day is a session, and the window ends at the overview's as-of date, the Eastern
-    # date the endpoint defaults to, so its last entry is five sessions back from it.
-    as_of = to_eastern_date(datetime.now(UTC))
+    # A live request ends the window at the calendar's last completed session, here
+    # today + 30 with every day a session, so its last entry is five sessions back.
     recent = payload["recent"]
     assert {key: recent[key] for key in ("horizon_sessions", "sessions", "entries_from", "entries_through")} == {
         "horizon_sessions": 5,
         "sessions": 20,
-        "entries_from": (as_of - timedelta(days=23)).isoformat(),
-        "entries_through": (as_of - timedelta(days=4)).isoformat(),
+        "entries_from": (today + timedelta(days=7)).isoformat(),
+        "entries_through": (today + timedelta(days=26)).isoformat(),
     }
     assert (recent["summary"]["horizon_sessions"], recent["summary"]["sample_size"]) == (5, 0)
     assert payload["groups"] and all(group["recent"]["horizon_sessions"] == 5 for group in payload["groups"])
