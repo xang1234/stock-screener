@@ -130,16 +130,15 @@ def _session_bars(ohlcv_df: pd.DataFrame) -> pd.DataFrame:
     """One bar per session in date order, keeping the later bar for a repeated
     date, and only bars whose Close and Low are positive and finite.
 
-    A bar right after a removed one loses its volume, so its prior session is
-    unknown and it can't confirm an FTD against an older bar.
+    ``PriorVolume`` is the previous session's volume, taken before any bar is
+    removed, so a bar after a removed one compares with the session that
+    actually preceded it.
     """
     bars = ohlcv_df.sort_index()
     bars = bars[~bars.index.duplicated(keep="last")]
+    bars = bars.assign(PriorVolume=bars["Volume"].astype(float).shift(1))
     prices = bars[["Close", "Low"]]
-    valid = ((prices > 0) & (prices < float("inf"))).all(axis=1)
-    after_gap = valid & ~valid.shift(1, fill_value=True)
-    bars = bars.assign(Volume=bars["Volume"].astype(float).mask(after_gap))
-    return bars[valid]
+    return bars[((prices > 0) & (prices < float("inf"))).all(axis=1)]
 
 
 def compute_trend(ohlcv_df: pd.DataFrame) -> dict:
@@ -316,7 +315,14 @@ def compute_exposure(
     window = df.tail(CYCLE_LOOKBACK_SESSIONS)
     cycle = market_cycle([
         CycleBar(*bar)
-        for bar in zip(window.index.date, window["Close"], window["Low"], window["Volume"].astype(float), strict=True)
+        for bar in zip(
+            window.index.date,
+            window["Close"],
+            window["Low"],
+            window["Volume"].astype(float),
+            window["PriorVolume"],
+            strict=True,
+        )
     ])[-1]
     recent_ftd = (
         cycle.state is CycleState.UPTREND

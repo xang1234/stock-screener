@@ -60,6 +60,7 @@ class CycleBar(NamedTuple):
     close: float
     low: float
     volume: float
+    prior_volume: float  # the previous session's, even if its bar was dropped
 
 
 def market_cycle(bars: Sequence[CycleBar], params: CycleParams = DEFAULT_CYCLE_PARAMS) -> list[MarketCycle]:
@@ -72,13 +73,12 @@ def market_cycle(bars: Sequence[CycleBar], params: CycleParams = DEFAULT_CYCLE_P
     start until the first correction.
     """
     closes = [bar.close for bar in bars]
-    volumes = [bar.volume for bar in bars]
 
     state = CycleState.UPTREND
     peak = float("-inf")
     low = low_date = day = ftd_date = None
     cycles: list[MarketCycle] = []
-    for i, (bar_date, close, bar_low, _) in enumerate(bars):
+    for i, (bar_date, close, bar_low, volume, prior_volume) in enumerate(bars):
         failed_ftd_date = None
         if state is CycleState.UPTREND:
             peak = max(peak, close)
@@ -98,7 +98,7 @@ def market_cycle(bars: Sequence[CycleBar], params: CycleParams = DEFAULT_CYCLE_P
             if (
                 day >= params.ftd_min_rally_day
                 and close / closes[i - 1] - 1 >= params.ftd_gain_pct - _GAIN_TOLERANCE
-                and volumes[i] > volumes[i - 1] > 0
+                and volume > prior_volume > 0
             ):
                 state, peak, ftd_date, day = CycleState.UPTREND, close, bar_date, None
             elif day >= params.attempt_expiry_sessions:

@@ -49,7 +49,8 @@ def _bars(closes, lows=None, volumes=None):
     """Daily bars from 2024-01-01; Low defaults to Close and Volume to 1000."""
     lows = closes if lows is None else lows
     volumes = [1000] * len(closes) if volumes is None else volumes
-    return [CycleBar(_day(i), c, lo, v) for i, (c, lo, v) in enumerate(zip(closes, lows, volumes))]
+    priors = [float("nan"), *volumes[:-1]]
+    return [CycleBar(_day(i), *bar) for i, bar in enumerate(zip(closes, lows, volumes, priors))]
 
 
 def _day(i):
@@ -730,6 +731,19 @@ def test_compute_exposure_never_confirms_an_ftd_across_a_skipped_bar(monkeypatch
     df = _df([100, 91, 91.5, 91.6, 91.7, 0.0, 93.2], [1000] * 5 + [2000, 1500])
     result = _compute(df, monkeypatch)
     assert (result["cycle_state"], result["follow_through_day"]) == ("rally_attempt", False)
+
+
+def test_compute_exposure_confirms_an_ftd_on_the_second_session_after_a_skipped_bar(monkeypatch):
+    # 93.2 follows 91.7 directly, so their volumes compare even though a bar
+    # before 91.7 was skipped.
+    df = _df([100, 91, 91.5, 91.6, 0.0, 91.7, 93.2], [1000] * 6 + [1500])
+    result = _compute(df, monkeypatch)
+    assert (result["cycle_state"], result["follow_through_date"]) == ("uptrend", df.index[-1].date())
+
+
+def test_compute_exposure_counts_a_distribution_day_on_the_second_session_after_a_skipped_bar(monkeypatch):
+    df = _df([100, 99, 0.0, 98.0, 97.5], [1000, 1000, 1000, 1000, 1500])
+    assert _compute(df, monkeypatch)["distribution_day_count"] == 1
 
 
 @pytest.mark.parametrize("bad_close", [0.0, -5.0, float("nan"), float("inf")])
