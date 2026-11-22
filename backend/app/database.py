@@ -1,5 +1,6 @@
 """Database setup and session management using SQLAlchemy."""
 
+import logging
 import os
 
 from sqlalchemy import create_engine
@@ -8,6 +9,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 _parsed_url = make_url(settings.database_url)
 _backend_name = _parsed_url.get_backend_name()
@@ -80,5 +83,7 @@ def safe_rollback(db):
     """Rollback that won't raise on a corrupted DB."""
     try:
         db.rollback()
-    except Exception:
-        pass
+    except Exception as exc:
+        # No exc_info: the chained cause is the statement that failed, and its
+        # bound parameters would land in the log.
+        logger.warning("Session rollback failed: %s: %s", type(exc).__name__, exc)
