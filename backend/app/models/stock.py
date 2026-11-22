@@ -104,7 +104,6 @@ class StockFundamental(Base):
     insider_transactions = Column(Float)
     institutional_ownership = Column(Float)
     institutional_transactions = Column(Float)
-    institutional_change = Column(Float)  # Legacy field
     short_float = Column(Float)
     short_ratio = Column(Float)
     short_interest = Column(BigInteger)
