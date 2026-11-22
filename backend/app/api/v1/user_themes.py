@@ -11,7 +11,6 @@ import logging
 
 from ...database import get_db
 from ...models.user_theme import UserTheme, UserThemeSubgroup, UserThemeStock
-from ...models.stock import StockPrice
 from ...models.stock_universe import StockUniverse
 from ...models.industry import IBDIndustryGroup
 from ...wiring.bootstrap import get_price_cache
@@ -194,10 +193,18 @@ def get_theme_data(theme_id: int, db: Session = Depends(get_db)):
     )
 
 
+def _by_session_day(closes: pd.Series) -> pd.Series:
+    """Index closes by naive session date: Redis frames can be tz-aware, DB frames naive."""
+    index = pd.DatetimeIndex(closes.index)
+    if index.tz is not None:
+        index = index.tz_localize(None)
+    return pd.Series(closes.to_numpy(), index=index.normalize())
+
+
 def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     """
     Fetch sparkline and price change data for a list of symbols.
-    Uses PriceCacheService for fresh data with automatic updates.
+    Prices come from the price cache; only uncached symbols are fetched.
     Also fetches company name and IBD industry.
     """
     if not symbols:
@@ -228,19 +235,25 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
         "12m": 252,
     }
 
-    # Use PriceCacheService for fresh data with automatic updates
+    # Cache first: Redis, else whatever the database holds, stale or not.
+    # Only symbols with no cached rows go to the provider, in one batch,
+    # and get_many writes what it fetches back to the cache.
     price_cache = get_price_cache()
+    wanted = list(dict.fromkeys([*symbols, "SPY"]))  # SPY for RS
+    cached_prices = price_cache.get_many(wanted, period="2y", cache_only=True)
+    misses = [s for s in wanted if cached_prices.get(s) is None]
+    if misses:
+        try:
+            cached_prices.update(price_cache.get_many(misses, period="2y"))
+        except Exception:
+            # Serve the cached symbols; the misses show empty until a later fetch.
+            logger.warning("Price fetch for %d uncached theme symbols failed", len(misses), exc_info=True)
 
-    # Fetch SPY prices for RS calculation (with freshness check)
-    spy_df = price_cache.get_historical_data("SPY", period="2y")
-    spy_close = spy_df['Close'].tolist() if spy_df is not None and not spy_df.empty else []
+    spy_df = cached_prices.get("SPY")
+    spy_close = spy_df['Close'] if spy_df is not None and not spy_df.empty else None
 
-    if not spy_close:
+    if spy_close is None:
         logger.warning("No SPY price data found for RS calculation")
-
-    # Bulk fetch all stock prices (with freshness check and auto-update)
-    all_symbols = list(symbols)
-    cached_prices = price_cache.get_many(all_symbols, period="2y")
 
     rs_calc = RSSparklineCalculator()
     price_calc = PriceSparklineCalculator()
@@ -256,9 +269,20 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
 
         # Calculate sparklines
         stock_series = pd.Series(closes)
-        spy_series = pd.Series(spy_close[:len(closes)]) if spy_close else pd.Series([1.0] * len(closes))
-
-        rs_result = rs_calc.calculate_rs_sparkline(stock_series, spy_series)
+        if spy_close is not None:
+            # Pair by date: a freshly fetched stock and a cached SPY can end on
+            # different sessions, and their histories can start on different days.
+            stock_by_day = _by_session_day(price_df['Close'])
+            paired = pd.concat(
+                [stock_by_day, _by_session_day(spy_close).reindex(stock_by_day.index)],
+                axis=1,
+                keys=["stock", "spy"],
+            ).dropna()
+            rs_result = rs_calc.calculate_rs_sparkline(
+                paired["stock"].reset_index(drop=True), paired["spy"].reset_index(drop=True)
+            )
+        else:
+            rs_result = rs_calc.calculate_rs_sparkline(stock_series, pd.Series([1.0] * len(closes)))
         price_result = price_calc.calculate_price_sparkline(stock_series)
 
         # Calculate price changes for each period
