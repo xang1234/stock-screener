@@ -235,7 +235,11 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     cached_prices = price_cache.get_many(wanted, period="2y", cache_only=True)
     misses = [s for s in wanted if cached_prices.get(s) is None]
     if misses:
-        cached_prices.update(price_cache.get_many(misses, period="2y"))
+        try:
+            cached_prices.update(price_cache.get_many(misses, period="2y"))
+        except Exception:
+            # Serve the cached symbols; the misses show empty until a later fetch.
+            logger.warning("Price fetch for %d uncached theme symbols failed", len(misses), exc_info=True)
 
     spy_df = cached_prices.get("SPY")
     spy_close = spy_df['Close'].tolist() if spy_df is not None and not spy_df.empty else []

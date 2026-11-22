@@ -108,3 +108,19 @@ async def test_theme_data_fetches_only_symbols_missing_from_cache(client, theme_
     provider_calls.clear()
     assert (await client.get(f"/api/v1/user-themes/{theme_id}/data")).status_code == 200
     assert provider_calls == []
+
+
+@pytest.mark.asyncio
+async def test_theme_data_serves_cached_symbols_when_the_miss_fetch_fails(
+    client, theme_id, monkeypatch
+):
+    def provider_down(self, symbols, **_kwargs):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(BulkDataFetcher, "fetch_prices_in_batches", provider_down)
+    response = await client.get(f"/api/v1/user-themes/{theme_id}/data")
+
+    assert response.status_code == 200
+    stocks = {s["symbol"]: s for s in response.json()["subgroups"][0]["stocks"]}
+    assert stocks["AAPL"]["price_data"]
+    assert not stocks["NEWCO"]["price_data"]
