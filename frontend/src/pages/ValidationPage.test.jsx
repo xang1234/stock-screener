@@ -226,14 +226,14 @@ describe('ValidationPage', () => {
       stop_loss_pct: 7,
       horizons: [
         { horizon_sessions: 1, sample_size: 80, positive_rate: 0.9, median_return_pct: 9.9, median_excess_return_pct: 9.9, stopped_out_rate: 0.9, thin: false },
-        { horizon_sessions: 5, sample_size: 60, positive_rate: 0.55, median_return_pct: 1.8, median_excess_return_pct: 0.6, stopped_out_rate: 0.18, thin: false },
+        { horizon_sessions: 5, sample_size: 60, positive_rate: 0.55, median_return_pct: 1.8, median_excess_return_pct: 0.6, excess_sample_size: 60, stopped_out_rate: 0.18, thin: false },
       ],
       recent: {
         horizon_sessions: 5,
         sessions: 20,
         entries_from: '2026-03-02',
         entries_through: '2026-03-27',
-        summary: { horizon_sessions: 5, sample_size: 14, positive_rate: 0.43, median_return_pct: -0.8, median_excess_return_pct: -1.2, stopped_out_rate: 0.21, effective_dates: 9, thin: true },
+        summary: { horizon_sessions: 5, sample_size: 14, positive_rate: 0.43, median_return_pct: -0.8, median_excess_return_pct: -1.2, excess_sample_size: 1, stopped_out_rate: 0.21, effective_dates: 9, thin: true },
       },
     });
 
@@ -250,18 +250,12 @@ describe('ValidationPage', () => {
     expect(pair('Sample')).toEqual(['Sample', '14', '90D: 60']);
     expect(pair('Positive')).toEqual(['Positive', '43%', '90D: 55%']);
     expect(pair('Median')).toEqual(['Median', '-0.8%', '90D: 1.8%']);
-    expect(pair('Median vs SPY')).toEqual(['Median vs SPY', '-1.2%', '90D: 0.6%']);
+    expect(pair('Median vs SPY')).toEqual(['Median vs SPY', '-1.2% (n=1)', '90D: 0.6%']);
     expect(pair('Stopped out')).toEqual(['Stopped out', '21%', '90D: 18%']);
   });
 
-  it.each([
-    ['no recent window', null],
-    [
-      'no closed recent result',
-      { horizon_sessions: 5, sessions: 20, entries_from: '2026-03-02', entries_through: '2026-03-27', summary: { horizon_sessions: 5, sample_size: 0, thin: true } },
-    ],
-  ])('says so in one line when there is %s', async (_, recent) => {
-    getValidationOverview.mockResolvedValue({ ...emptyOverview('US'), recent });
+  it('says in one line when the calendar is too short for a recent window', async () => {
+    getValidationOverview.mockResolvedValue({ ...emptyOverview('US'), recent: null });
 
     renderWithProviders(
       <MemoryRouter>
@@ -269,8 +263,35 @@ describe('ValidationPage', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('No recent pick has a closed 5-session result yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No recent window: the market calendar holds too few sessions.')).toBeInTheDocument();
     expect(screen.queryByText(/entry sessions$/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the comparison when the recent window holds no closed result', async () => {
+    getValidationOverview.mockResolvedValue({
+      ...emptyOverview('US'),
+      horizons: [{ horizon_sessions: 5, sample_size: 60, positive_rate: 0.55, excess_sample_size: 60, thin: false }],
+      recent: {
+        horizon_sessions: 5,
+        sessions: 20,
+        entries_from: '2026-03-02',
+        entries_through: '2026-03-27',
+        summary: { horizon_sessions: 5, sample_size: 0, excess_sample_size: 0, thin: true },
+      },
+    });
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    const section = within((await screen.findByText('Last 20 entry sessions')).closest('.MuiCardContent-root'));
+    expect(section.getByText('No pick in this window has a closed 5-session result yet.')).toBeInTheDocument();
+    const pair = (label) => Array.from(section.getByText(label).parentElement.children).map((cell) => cell.textContent);
+    expect(pair('Sample')).toEqual(['Sample', '0', '90D: 60']);
+    expect(pair('Positive')).toEqual(['Positive', '-', '90D: 55%']);
+    expect(section.queryByText('Small sample')).not.toBeInTheDocument();
   });
 
   it('updates the query when source and lookback controls change', async () => {
@@ -340,10 +361,11 @@ describe('ValidationPage', () => {
     const rowText = () => within(table).getAllByRole('row').slice(1).map((row) => (
       Array.from(row.cells).map((cell) => cell.textContent)
     ));
+    const cells = (label) => within(table).getByText(label).closest('tr').cells;
     expect(rowText()).toEqual([
       ['Market Cycle at Signal'],
       ['Uptrend', '25', '60%', '3.0%', '1.2%', '-0.5%', '25%', '71% (n=24)'],
-      ['Rally attempt', '21', '60%', '2.0%', '1.2%', '-0.5%', '25%', '33% (n=6)'],
+      ['Rally attempt', '21', '60%', '2.0%', '1.2%', '-0.5%', '25%', '33% (n=6)Small sample'],
       ['Stage'],
       ['2', '32', '60%', '4.6%', '1.2%', '-0.5%', '25%', '-'],
       ['3', '6', '60%', '-3.8%', '1.2% (n=4)', '-0.5%', '25%', '-'],
@@ -354,16 +376,15 @@ describe('ValidationPage', () => {
       ['Extension vs 50DMA'],
       ['30%+', '21', '60%', '5.1%', '1.2%', '-0.5%', '25%', '-'],
     ]);
-    expect(within(table).getByText('3').closest('tr')).toHaveAttribute('title', 'Small sample');
-    expect(within(table).getByText('2').closest('tr')).not.toHaveAttribute('title');
+    expect(cells('3')[1]).toHaveAttribute('title', 'Small sample');
+    expect(cells('2')[1]).not.toHaveAttribute('title');
     expect(getComputedStyle(within(table).getByText('3')).color).not.toBe(
       getComputedStyle(within(table).getByText('2')).color,
     );
-    const thinRecent = within(table).getByText('33% (n=6)');
-    const solidRecent = within(table).getByText('71% (n=24)');
-    expect(thinRecent).toHaveAttribute('title', 'Small sample');
-    expect(solidRecent).not.toHaveAttribute('title');
-    expect(thinRecent.closest('tr')).not.toHaveAttribute('title');
+    const thinRecent = cells('Rally attempt')[7];
+    const solidRecent = cells('Uptrend')[7];
+    expect(within(thinRecent).getByText('Small sample')).toBeInTheDocument();
+    expect(solidRecent).toHaveTextContent(/^71% \(n=24\)$/);
     expect(getComputedStyle(thinRecent).color).not.toBe(getComputedStyle(solidRecent).color);
 
     fireEvent.click(screen.getByRole('button', { name: '5S' }));
@@ -371,7 +392,7 @@ describe('ValidationPage', () => {
     expect(rowText()).toEqual([
       ['Market Cycle at Signal'],
       ['Uptrend', '30', '60%', '1.0%', '1.2%', '-0.5%', '25%', '71% (n=24)'],
-      ['Rally attempt', '12', '60%', '-0.4%', '1.2%', '-0.5%', '25%', '33% (n=6)'],
+      ['Rally attempt', '12', '60%', '-0.4%', '1.2%', '-0.5%', '25%', '33% (n=6)Small sample'],
       ['Stage'],
       ['2', '18', '60%', '1.4%', '1.2%', '-0.5%', '25%', '-'],
       ['3', '8', '60%', '-1.1%', '1.2%', '-0.5%', '25%', '-'],
@@ -382,16 +403,19 @@ describe('ValidationPage', () => {
       ['Extension vs 50DMA'],
       ['30%+', '24', '60%', '2.2%', '1.2%', '-0.5%', '25%', '-'],
     ]);
-    expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample');
-    expect(within(table).getByText('30%+').closest('tr')).not.toHaveAttribute('title');
-    expect(within(table).getByText('Setup Ready').closest('tr')).toHaveAttribute('title', 'Few dates');
+    expect(cells('2')[1]).toHaveAttribute('title', 'Small sample');
+    expect(cells('30%+')[1]).not.toHaveAttribute('title');
+    expect(cells('Setup Ready')[1]).toHaveAttribute('title', 'Few dates');
 
     fireEvent.click(screen.getByRole('button', { name: '60S' }));
 
-    const setupReady = within(table).getByText('Setup Ready').closest('tr');
-    expect(within(table).getByText('2').closest('tr').cells[1]).toHaveTextContent('0');
-    expect(setupReady.cells[1]).toHaveTextContent('0');
-    expect(setupReady).toHaveAttribute('title', 'Small sample');
+    expect(cells('2')[1]).toHaveTextContent('0');
+    expect(cells('Setup Ready')[1]).toHaveTextContent('0');
+    expect(cells('Setup Ready')[1]).toHaveAttribute('title', 'Small sample');
+    // The 60-session base is thin, but the recent 5-session cell keeps its own styling.
+    const uptrend = cells('Uptrend');
+    expect(getComputedStyle(uptrend[7]).color).not.toBe(getComputedStyle(uptrend[1]).color);
+    expect(uptrend[7]).not.toHaveAttribute('title');
   });
 
   it('requests replay picks and explains what the replay is when Replay is chosen', async () => {
