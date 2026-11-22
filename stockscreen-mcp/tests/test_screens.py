@@ -219,6 +219,7 @@ def test_an_integer_past_the_double_range_reads_as_infinity():
 def test_a_long_invalid_digit_run_is_rejected_in_linear_time():
     import time
 
-    start = time.perf_counter()
+    # CPU time, so a paused runner cannot fail it. The backtracking regex took ~240 s here.
+    start = time.process_time()
     assert evaluate_condition({"x": "1" * 50_000 + "x"}, condition("x", "range", min=70, max=None)) is True
-    assert time.perf_counter() - start < 0.5
+    assert time.process_time() - start < 5
