@@ -308,7 +308,8 @@ class ProviderCircuitBreaker:
         """Force-reset state (admin/test helper)."""
         client = self._redis()
         if client is None:
-            self._fallback_state.pop(self._fallback_key(provider, market), None)
+            with self._fallback_lock:
+                self._fallback_state.pop(self._fallback_key(provider, market), None)
             return
         try:
             client.delete(self.state_key(provider, market))
@@ -360,8 +361,9 @@ class ProviderCircuitBreaker:
                 return "open"
             if state == "half_open":
                 # Like the Redis probe key's EX, a probe whose caller never
-                # reports back expires after one cooldown.
-                if "probe_at" in entry and now - entry["probe_at"] < cooldown:
+                # reports back expires after one cooldown. The lease is at
+                # least 1 s, so a zero cooldown still admits one probe at a time.
+                if "probe_at" in entry and now - entry["probe_at"] < max(cooldown, 1):
                     return "open"
                 entry["probe_at"] = now
                 return "half_open_probe"
@@ -379,7 +381,8 @@ class ProviderCircuitBreaker:
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
                 entry.pop("probe_at", None)
-            elif entry["consecutive_429"] >= self.threshold:
+            elif entry["state"] != "open" and entry["consecutive_429"] >= self.threshold:
+                # As in Redis, a 429 while already open keeps the cooldown.
                 entry["state"] = "open"
                 entry["opened_at"] = time.time()
             return entry["state"] == "open"
@@ -388,8 +391,8 @@ class ProviderCircuitBreaker:
         with self._fallback_lock:
             key = self._fallback_key(provider, market)
             entry = self._fallback_state.get(key)
-            if not entry:
-                return
+            if not entry or entry["state"] == "open":
+                return  # as in Redis: a late success does not touch an open circuit
             if entry["state"] == "half_open":
                 entry["state"] = "closed"
             entry["consecutive_429"] = 0
