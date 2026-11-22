@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import functools
 import math
+import re
+from decimal import Decimal
 from typing import Any
 
 # frontend/src/features/scan/scanFilterFields.js: OPPORTUNITY_STATE_FIELDS
@@ -40,32 +42,78 @@ def row_value(row: dict[str, Any], field: str) -> Any:
     return row.get(field)
 
 
-def _js_number(value: Any) -> float:
-    """JS Number(): booleans are 0/1, numeric strings convert, anything else is NaN."""
+def _js_string(value: Any) -> str:
+    """JS String() of a JSON value: 1.0 is "1", a list joins its items with commas (null items empty)."""
+    if value is None:
+        return "null"
     if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ",".join("" if item is None else _js_string(item) for item in value)
+    if isinstance(value, dict):
+        return "[object Object]"
+    if not isinstance(value, (int, float)):
+        return str(value)
+    number = float(value)
+    if math.isnan(number):
+        return "NaN"
+    if math.isinf(number):
+        return "Infinity" if number > 0 else "-Infinity"
+    if number == 0:
+        return "0"
+    # Number::toString: repr has the shortest round-trip digits, JS lays them out by exponent.
+    sign, digit_tuple, exponent = Decimal(repr(number)).normalize().as_tuple()
+    digits = "".join(map(str, digit_tuple))
+    k, n = len(digits), exponent + len(digits)
+    if k <= n <= 21:
+        text = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        text = f"{digits[:n]}.{digits[n:]}"
+    elif -6 < n <= 0:
+        text = "0." + "0" * -n + digits
+    else:
+        text = digits[0] + (f".{digits[1:]}" if k > 1 else "") + f"e{n - 1:+d}"
+    return "-" * sign + text
+
+
+def _js_primitive(value: Any) -> Any:
+    """ToPrimitive: lists and objects become their String() text, other JSON values already are primitive."""
+    return _js_string(value) if isinstance(value, (list, dict)) else value
+
+
+# StringToNumber: signed decimals and Infinity, or unsigned 0x/0o/0b integers. No "inf", no "1_000".
+_JS_NUMERIC = re.compile(
+    r"[+-]?(?:Infinity|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)|0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+"
+)
+
+
+def _js_number(value: Any) -> float:
+    """JS Number(): booleans are 0/1, "" is 0, lists go through their text. None is NaN, like undefined."""
+    value = _js_primitive(value)
+    if isinstance(value, (bool, int, float)):
         return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return 0.0
-        try:
-            return float(text)
-        except ValueError:
-            return math.nan
-    return math.nan
+    if not isinstance(value, str):
+        return math.nan
+    text = value.strip()
+    if not text:
+        return 0.0
+    if not _JS_NUMERIC.fullmatch(text):
+        return math.nan
+    return float(int(text, 0)) if text[1:2] in ("x", "X", "o", "O", "b", "B") else float(text)
 
 
 def _less(a: Any, b: Any) -> bool:
-    """JS `a < b`: string vs string compares text, otherwise numbers (NaN is never less)."""
+    """JS `a < b`: lists become text first, two strings compare as text, else numbers (NaN is never less)."""
+    a, b = _js_primitive(a), _js_primitive(b)
     if isinstance(a, str) and isinstance(b, str):
         return a < b
     return _js_number(a) < _js_number(b)
 
 
 def _js_equal(a: Any, b: Any) -> bool:
-    """JS `===` / includes(): true is not 1, 1 is 1.0."""
+    """JS `===` / includes(): true is not 1, 1 is 1.0, and two parsed lists or objects are never the same."""
+    if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
+        return False
     if isinstance(a, bool) or isinstance(b, bool):
         return isinstance(a, bool) and isinstance(b, bool) and a == b
     return a == b
@@ -97,7 +145,7 @@ def _boolean(row: dict[str, Any], condition: dict[str, Any]) -> bool:
 
 def _text(row: dict[str, Any], condition: dict[str, Any]) -> bool:
     value = row_value(row, condition["field"])
-    return value is not None and str(condition.get("pattern", "")).lower() in str(value).lower()
+    return value is not None and str(condition.get("pattern", "")).lower() in _js_string(value).lower()
 
 
 _EVALUATORS = {"range": _range, "categorical": _categorical, "boolean": _boolean, "text": _text}
