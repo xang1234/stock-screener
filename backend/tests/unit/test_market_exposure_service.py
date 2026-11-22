@@ -782,32 +782,43 @@ def test_refresh_market_exposure_for_date_does_not_seed_after_compute_error(monk
     assert result == {"market": "US", "date": "2026-06-25", "error": "no_benchmark_data"}
 
 
-def test_build_exposure_payload_marks_follow_through_event_day():
+def test_build_exposure_payload_carries_the_cycle_and_marks_event_days():
     from app.database import SessionLocal
     from app.models.market_exposure import MarketExposure
     from app.schemas.market_scan import MarketHealthExposure
 
-    d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
+    d1, d2, d3, d4 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3), date(2026, 6, 4)
     db = SessionLocal()
     try:
         db.add_all([
-            # event day: the detected FTD date is this row's own date
             MarketExposure(market="US", date=d1, exposure_score=70.0, stance="Confirmed Uptrend",
-                           follow_through_day=True, follow_through_date=d1),
-            # post-FTD day: still sees d1's FTD in its window, but is not the event
+                           cycle_state="uptrend", follow_through_day=True, follow_through_date=d1),
             MarketExposure(market="US", date=d2, exposure_score=72.0, stance="Confirmed Uptrend",
-                           follow_through_day=True, follow_through_date=d1),
-            MarketExposure(market="US", date=d3, exposure_score=68.0, stance="Confirmed Uptrend",
-                           follow_through_day=False, follow_through_date=None),
+                           cycle_state="uptrend", follow_through_day=True, follow_through_date=d1),
+            MarketExposure(market="US", date=d3, exposure_score=48.0, stance="Downtrend/Caution",
+                           cycle_state="correction", rally_low_date=d3, failed_ftd_date=d3),
+            MarketExposure(market="US", date=d4, exposure_score=49.0, stance="Downtrend/Caution",
+                           cycle_state="rally_attempt", rally_day=1, rally_low_date=d3),
         ])
         db.commit()
 
         payload = build_exposure_payload(db, "US")
-        MarketHealthExposure.model_validate(payload)  # schema now carries follow_through
-        flags = {p["date"]: p["follow_through"] for p in payload["history"]}
-        assert flags[d1.isoformat()] is True
-        assert flags[d2.isoformat()] is False
-        assert flags[d3.isoformat()] is False
+        MarketHealthExposure.model_validate(payload)
+        assert [
+            (p["date"], p["cycle_state"], p["rally_day"], p["follow_through"], p["failed_ftd"])
+            for p in payload["history"]
+        ] == [
+            ("2026-06-01", "uptrend", None, True, False),
+            ("2026-06-02", "uptrend", None, False, False),
+            ("2026-06-03", "correction", None, False, True),
+            ("2026-06-04", "rally_attempt", 1, False, False),
+        ]
+        headline = (payload["cycle_state"], payload["rally_day"], payload["follow_through_date"])
+        assert headline == ("rally_attempt", 1, None)
+
+        pinned = build_exposure_payload(db, "US", as_of_date=d2)
+        headline = (pinned["cycle_state"], pinned["follow_through_day"], pinned["follow_through_date"])
+        assert headline == ("uptrend", True, "2026-06-01")
     finally:
         db.close()
 
@@ -815,15 +826,20 @@ def test_build_exposure_payload_marks_follow_through_event_day():
 def test_build_exposure_payload_pins_to_as_of_date():
     from app.database import SessionLocal
     from app.models.market_exposure import MarketExposure
+    from app.schemas.market_scan import MarketHealthExposure
 
     d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
     db = SessionLocal()
     try:
+        # Rows stored before the market cycle have no cycle columns.
         for d, score in [(d1, 60.0), (d2, 70.0), (d3, 80.0)]:
             db.add(MarketExposure(market="US", date=d, exposure_score=score, stance="Confirmed Uptrend"))
         db.commit()
 
-        assert build_exposure_payload(db, "US")["date"] == d3.isoformat()  # absolute latest
+        latest = build_exposure_payload(db, "US")
+        MarketHealthExposure.model_validate(latest)
+        assert latest["date"] == d3.isoformat()  # absolute latest
+        assert latest["cycle_state"] is None and latest["history"][-1]["failed_ftd"] is False
 
         pinned = build_exposure_payload(db, "US", as_of_date=d2)
         assert pinned["date"] == d2.isoformat()

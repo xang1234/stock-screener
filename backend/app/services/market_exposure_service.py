@@ -410,8 +410,9 @@ def build_exposure_payload(
     """Shared reader for the Daily Snapshot payloads (live + static).
 
     Returns the latest stored row's headline + a ``history`` list of
-    {date, exposure_score, stance} over the trailing ``history_days``. None when
-    no rows exist yet (the UI renders a muted placeholder).
+    {date, exposure_score, stance, cycle_state, rally_day, follow_through,
+    failed_ftd} over the trailing ``history_days``. None when no rows exist yet
+    (the UI renders a muted placeholder).
 
     ``as_of_date`` pins the payload to a date: the live snapshot omits it (uses
     the absolute latest row), while the static export passes the published run's
@@ -439,15 +440,17 @@ def build_exposure_payload(
         .order_by(MarketExposure.date.asc())
         .all()
     )
-    # follow_through marks the actual FTD *event* day: the row whose detected
-    # follow_through_date is its own date (later rows still see that FTD in their
-    # trailing window, but only the event day has date == follow_through_date).
+    # follow_through and failed_ftd mark event days only: later rows keep the
+    # FTD's date while it holds, but only the FTD session has it as its own date.
     history = [
         {
             "date": r.date.isoformat(),
             "exposure_score": r.exposure_score,
             "stance": r.stance,
+            "cycle_state": r.cycle_state,
+            "rally_day": r.rally_day,
             "follow_through": bool(r.follow_through_day and r.follow_through_date == r.date),
+            "failed_ftd": r.failed_ftd_date == r.date,
         }
         for r in rows
     ]
@@ -458,6 +461,9 @@ def build_exposure_payload(
         "stance": latest.stance,
         "distribution_day_count": latest.distribution_day_count,
         "follow_through_day": latest.follow_through_day,
+        "follow_through_date": latest.follow_through_date.isoformat() if latest.follow_through_date else None,
+        "cycle_state": latest.cycle_state,
+        "rally_day": latest.rally_day,
         "trend": latest.trend,
         "vix": latest.vix,
         "benchmark_symbol": latest.benchmark_symbol,

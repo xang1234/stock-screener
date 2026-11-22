@@ -25,10 +25,20 @@ const STANCE_COLORS = {
 };
 
 // Follow-through days use the theme accent: a marker, not a gain/loss state.
+// A failed FTD is a hollow ring, so it reads apart from an FTD without color.
 const FTD_COLOR = 'primary.main';
+const FAILED_FTD_COLOR = 'error.main';
 
 function stanceColor(stance) {
   return STANCE_COLORS[stance] || '#9e9e9e';
+}
+
+// Rows stored before the market cycle existed have no cycle_state.
+function cycleLabel({ cycle_state: state, rally_day: rallyDay, follow_through_date: ftdDate }) {
+  if (state === 'rally_attempt') return `Rally attempt, day ${rallyDay}`;
+  if (state === 'correction') return 'Correction';
+  if (state === 'uptrend') return ftdDate ? `Uptrend (FTD ${ftdDate})` : 'Uptrend';
+  return null;
 }
 
 function humanize(key) {
@@ -46,6 +56,7 @@ function fmt(value, digits = 2) {
 function TimelineTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
+  const cycle = cycleLabel(point);
   return (
     <Paper elevation={3} sx={{ p: 1 }}>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 600 }}>
@@ -54,9 +65,19 @@ function TimelineTooltip({ active, payload }) {
       <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace' }}>
         {fmt(point.exposure_score, 0)} · {point.stance}
       </Typography>
+      {cycle && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          {cycle}
+        </Typography>
+      )}
       {point.follow_through && (
         <Typography variant="caption" sx={{ display: 'block', color: FTD_COLOR, fontWeight: 600 }}>
           ● follow-through day
+        </Typography>
+      )}
+      {point.failed_ftd && (
+        <Typography variant="caption" sx={{ display: 'block', color: FAILED_FTD_COLOR, fontWeight: 600 }}>
+          ○ failed follow-through day
         </Typography>
       )}
     </Paper>
@@ -89,6 +110,7 @@ function MarketHealthExposure({ exposure }) {
   );
 
   const ftdPoints = useMemo(() => history.filter((p) => p.follow_through), [history]);
+  const failedFtdPoints = useMemo(() => history.filter((p) => p.failed_ftd), [history]);
 
   if (!exposure) {
     return (
@@ -148,7 +170,7 @@ function MarketHealthExposure({ exposure }) {
             {[
               ['Distribution days', exposure.distribution_day_count],
               ['Trend', exposure.trend || '-'],
-              ['Follow-through day', exposure.follow_through_day ? 'Yes' : 'No'],
+              ['Market cycle', cycleLabel(exposure) || '-'],
               ['VIX', exposure.vix != null ? fmt(exposure.vix, 1) : '-'],
             ].map(([label, value]) => (
               <Fragment key={label}>
@@ -165,11 +187,18 @@ function MarketHealthExposure({ exposure }) {
         <Grid item xs={12} md={5}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
             <Typography variant="caption" color="text.secondary">Exposure over time</Typography>
-            {ftdPoints.length > 0 && (
-              <Typography variant="caption" sx={{ color: FTD_COLOR, fontSize: 10, fontWeight: 600 }}>
-                ● follow-through day
-              </Typography>
-            )}
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {ftdPoints.length > 0 && (
+                <Typography variant="caption" sx={{ color: FTD_COLOR, fontSize: 10, fontWeight: 600 }}>
+                  ● follow-through day
+                </Typography>
+              )}
+              {failedFtdPoints.length > 0 && (
+                <Typography variant="caption" sx={{ color: FAILED_FTD_COLOR, fontSize: 10, fontWeight: 600 }}>
+                  ○ failed FTD
+                </Typography>
+              )}
+            </Box>
           </Box>
           <Box sx={{ height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -194,6 +223,18 @@ function MarketHealthExposure({ exposure }) {
                     fill={palette.primary.main}
                     stroke={palette.background.paper}
                     strokeWidth={1.5}
+                    ifOverflow="extendDomain"
+                  />
+                ))}
+                {failedFtdPoints.map((p) => (
+                  <ReferenceDot
+                    key={`failed-${p.date}`}
+                    x={p.label}
+                    y={p.exposure_score}
+                    r={4}
+                    fill={palette.background.paper}
+                    stroke={palette.error.main}
+                    strokeWidth={2}
                     ifOverflow="extendDomain"
                   />
                 ))}
