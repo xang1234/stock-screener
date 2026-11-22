@@ -825,13 +825,15 @@ class BulkDataFetcher:
                 growth_cooldown_remaining = self.PRICE_BATCH_GROWTH_COOLDOWN_BATCHES
                 # Sustained transient failure → pulse the breaker. Threshold
                 # tripping is done after consecutive batches.
-                breaker.record_429("yfinance", market)
+                if market is not None:
+                    breaker.record_429("yfinance", market)
             elif failure_metric.provider_signal_count > 0:
                 if growth_cooldown_remaining > 0:
                     growth_cooldown_remaining -= 1
                 if failure_rate < 0.02:
                     success_streak += 1
-                    breaker.record_success("yfinance", market)
+                    if market is not None:
+                        breaker.record_success("yfinance", market)
                     if growth_cooldown_remaining == 0 and success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
                         batch_size = min(
                             self.MAX_PRICE_BATCH_SIZE,
@@ -1224,11 +1226,11 @@ class BulkDataFetcher:
                 batch_rate_limit_failures or not batch_successes
             )
             circuit_opened = False
-            if batch_failure_rate > 0.5 or probe_failed:
+            if market is not None and (batch_failure_rate > 0.5 or probe_failed):
                 circuit_opened = breaker.record_429("yfinance", market)
             if batch_failure_rate > 0.5:
                 consecutive_backoffs += 1
-                if market is not None and circuit_opened:
+                if circuit_opened:
                     # Backing off for as long as the cooldown would turn the next
                     # batch into a probe; the next pass skips the rest instead.
                     continue
@@ -1245,7 +1247,7 @@ class BulkDataFetcher:
                 consecutive_backoffs = 0  # Reset on successful batch
                 # Reset the circuit breaker counter so a healthy batch
                 # promptly closes a half-open circuit.
-                if batch_rate_limit_failures == 0 and batch_successes:
+                if market is not None and batch_rate_limit_failures == 0 and batch_successes:
                     breaker.record_success("yfinance", market)
                 # Normal rate limit between batches
                 if batch_num < total_batches - 1:
