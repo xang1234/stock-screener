@@ -53,7 +53,28 @@ const groupHorizon = (horizonSessions, sampleSize, avgReturnPct, excessSampleSiz
   thin,
 });
 
+const recentSummary = (sampleSize, positiveRate, thin) => ({
+  horizon_sessions: 5,
+  sample_size: sampleSize,
+  positive_rate: positiveRate,
+  thin,
+});
+
 const overviewGroups = [
+  {
+    dimension: 'market_state',
+    label: 'Market Cycle at Signal',
+    value: 'uptrend',
+    horizons: [groupHorizon(5, 30, 1.0), groupHorizon(20, 25, 3.0)],
+    recent: recentSummary(24, 0.71, false),
+  },
+  {
+    dimension: 'market_state',
+    label: 'Market Cycle at Signal',
+    value: 'rally_attempt',
+    horizons: [groupHorizon(5, 12, -0.4), groupHorizon(20, 21, 2.0)],
+    recent: recentSummary(6, 0.33, true),
+  },
   {
     dimension: 'stage',
     label: 'Stage',
@@ -198,6 +219,60 @@ describe('ValidationPage', () => {
     }
   });
 
+  it('compares the last entry sessions with the full lookback at five sessions', async () => {
+    getValidationOverview.mockResolvedValue({
+      ...emptyOverview('US'),
+      benchmark_symbol: 'SPY',
+      stop_loss_pct: 7,
+      horizons: [
+        { horizon_sessions: 1, sample_size: 80, positive_rate: 0.9, median_return_pct: 9.9, median_excess_return_pct: 9.9, stopped_out_rate: 0.9, thin: false },
+        { horizon_sessions: 5, sample_size: 60, positive_rate: 0.55, median_return_pct: 1.8, median_excess_return_pct: 0.6, stopped_out_rate: 0.18, thin: false },
+      ],
+      recent: {
+        horizon_sessions: 5,
+        sessions: 20,
+        entries_from: '2026-03-02',
+        entries_through: '2026-03-27',
+        summary: { horizon_sessions: 5, sample_size: 14, positive_rate: 0.43, median_return_pct: -0.8, median_excess_return_pct: -1.2, stopped_out_rate: 0.21, effective_dates: 9, thin: true },
+      },
+    });
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    const section = within((await screen.findByText('Last 20 entry sessions')).closest('.MuiCardContent-root'));
+    expect(section.getByText(`Entered ${formatDate('2026-03-02')} to ${formatDate('2026-03-27')}, 5-session results`)).toBeInTheDocument();
+    expect(section.getByText('Small sample')).toBeInTheDocument();
+    const pair = (label) => Array.from(section.getByText(label).parentElement.children).map((cell) => cell.textContent);
+    expect(pair('Sample')).toEqual(['Sample', '14', '90D: 60']);
+    expect(pair('Positive')).toEqual(['Positive', '43%', '90D: 55%']);
+    expect(pair('Median')).toEqual(['Median', '-0.8%', '90D: 1.8%']);
+    expect(pair('Median vs SPY')).toEqual(['Median vs SPY', '-1.2%', '90D: 0.6%']);
+    expect(pair('Stopped out')).toEqual(['Stopped out', '21%', '90D: 18%']);
+  });
+
+  it.each([
+    ['no recent window', null],
+    [
+      'no closed recent result',
+      { horizon_sessions: 5, sessions: 20, entries_from: '2026-03-02', entries_through: '2026-03-27', summary: { horizon_sessions: 5, sample_size: 0, thin: true } },
+    ],
+  ])('says so in one line when there is %s', async (_, recent) => {
+    getValidationOverview.mockResolvedValue({ ...emptyOverview('US'), recent });
+
+    renderWithProviders(
+      <MemoryRouter>
+        <ValidationPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('No recent pick has a closed 5-session result yet.')).toBeInTheDocument();
+    expect(screen.queryByText(/entry sessions$/)).not.toBeInTheDocument();
+  });
+
   it('updates the query when source and lookback controls change', async () => {
     getValidationOverview
       .mockResolvedValueOnce({
@@ -261,39 +336,51 @@ describe('ValidationPage', () => {
 
     const table = await screen.findByRole('table', { name: 'By group' });
     const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
-    expect(headers).toEqual(['Group', 'Sample', 'Positive', 'Avg Return', 'Avg vs SPY (no stop)', 'Avg with 7% stop', 'Stopped out']);
+    expect(headers).toEqual(['Group', 'Sample', 'Positive', 'Avg Return', 'Avg vs SPY (no stop)', 'Avg with 7% stop', 'Stopped out', 'Recent 5S positive']);
     const rowText = () => within(table).getAllByRole('row').slice(1).map((row) => (
       Array.from(row.cells).map((cell) => cell.textContent)
     ));
     expect(rowText()).toEqual([
+      ['Market Cycle at Signal'],
+      ['Uptrend', '25', '60%', '3.0%', '1.2%', '-0.5%', '25%', '71% (n=24)'],
+      ['Rally attempt', '21', '60%', '2.0%', '1.2%', '-0.5%', '25%', '33% (n=6)'],
       ['Stage'],
-      ['2', '32', '60%', '4.6%', '1.2%', '-0.5%', '25%'],
-      ['3', '6', '60%', '-3.8%', '1.2% (n=4)', '-0.5%', '25%'],
+      ['2', '32', '60%', '4.6%', '1.2%', '-0.5%', '25%', '-'],
+      ['3', '6', '60%', '-3.8%', '1.2% (n=4)', '-0.5%', '25%', '-'],
       ['Action State'],
-      ['Setup Ready', '22', '60%', '3.3%', '1.2%', '-0.5%', '25%'],
+      ['Setup Ready', '22', '60%', '3.3%', '1.2%', '-0.5%', '25%', '-'],
       ['Setup Pattern'],
-      ['Cup With Handle', '20', '60%', '2.9%', '1.2%', '-0.5%', '25%'],
+      ['Cup With Handle', '20', '60%', '2.9%', '1.2%', '-0.5%', '25%', '-'],
       ['Extension vs 50DMA'],
-      ['30%+', '21', '60%', '5.1%', '1.2%', '-0.5%', '25%'],
+      ['30%+', '21', '60%', '5.1%', '1.2%', '-0.5%', '25%', '-'],
     ]);
     expect(within(table).getByText('3').closest('tr')).toHaveAttribute('title', 'Small sample');
     expect(within(table).getByText('2').closest('tr')).not.toHaveAttribute('title');
     expect(getComputedStyle(within(table).getByText('3')).color).not.toBe(
       getComputedStyle(within(table).getByText('2')).color,
     );
+    const thinRecent = within(table).getByText('33% (n=6)');
+    const solidRecent = within(table).getByText('71% (n=24)');
+    expect(thinRecent).toHaveAttribute('title', 'Small sample');
+    expect(solidRecent).not.toHaveAttribute('title');
+    expect(thinRecent.closest('tr')).not.toHaveAttribute('title');
+    expect(getComputedStyle(thinRecent).color).not.toBe(getComputedStyle(solidRecent).color);
 
     fireEvent.click(screen.getByRole('button', { name: '5S' }));
 
     expect(rowText()).toEqual([
+      ['Market Cycle at Signal'],
+      ['Uptrend', '30', '60%', '1.0%', '1.2%', '-0.5%', '25%', '71% (n=24)'],
+      ['Rally attempt', '12', '60%', '-0.4%', '1.2%', '-0.5%', '25%', '33% (n=6)'],
       ['Stage'],
-      ['2', '18', '60%', '1.4%', '1.2%', '-0.5%', '25%'],
-      ['3', '8', '60%', '-1.1%', '1.2%', '-0.5%', '25%'],
+      ['2', '18', '60%', '1.4%', '1.2%', '-0.5%', '25%', '-'],
+      ['3', '8', '60%', '-1.1%', '1.2%', '-0.5%', '25%', '-'],
       ['Action State'],
-      ['Setup Ready', '30', '60%', '1.0%', '1.2%', '-0.5%', '25%'],
+      ['Setup Ready', '30', '60%', '1.0%', '1.2%', '-0.5%', '25%', '-'],
       ['Setup Pattern'],
-      ['Cup With Handle', '26', '60%', '0.8%', '1.2%', '-0.5%', '25%'],
+      ['Cup With Handle', '26', '60%', '0.8%', '1.2%', '-0.5%', '25%', '-'],
       ['Extension vs 50DMA'],
-      ['30%+', '24', '60%', '2.2%', '1.2%', '-0.5%', '25%'],
+      ['30%+', '24', '60%', '2.2%', '1.2%', '-0.5%', '25%', '-'],
     ]);
     expect(within(table).getByText('2').closest('tr')).toHaveAttribute('title', 'Small sample');
     expect(within(table).getByText('30%+').closest('tr')).not.toHaveAttribute('title');
