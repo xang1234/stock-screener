@@ -44,6 +44,16 @@ class DbCancellationToken(CancellationToken):
                 self._scan_id,
                 exc_info=True,
             )
+            # The session is reused for the whole scan, and an aborted
+            # transaction rejects every later query until it is rolled back.
+            try:
+                self._session.rollback()
+            except Exception:
+                logger.warning(
+                    "Failed to roll back cancellation session for scan %s",
+                    self._scan_id,
+                    exc_info=True,
+                )
             return False  # fail-open: don't cancel on error
 
     def close(self) -> None:

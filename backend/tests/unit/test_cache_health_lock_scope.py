@@ -207,3 +207,36 @@ def test_a_lock_held_long_after_its_warmup_finished_is_stuck(service, lock, redi
 
     assert status["status"] == "stuck"
     assert status["can_force_cancel"] is True
+
+
+def test_force_cancel_releases_only_the_stuck_markets_lock(service, lock):
+    """POST /v1/cache/force-cancel on a silent US lock must leave HK's lock held."""
+    from app.api.v1 import cache as cache_api
+
+    lock.acquire("refresh_us", "us-1", market="US")
+    lock.acquire("refresh_hk", "hk-1", market="HK")
+    service.update_warmup_heartbeat(5, 10, market="HK")
+
+    with patch.object(cache_api, "get_data_fetch_lock", return_value=lock), patch.object(
+        cache_api, "get_price_cache", return_value=service
+    ):
+        result = cache_api.force_cancel_refresh()
+
+    assert result["status"] == "cancelled"
+    assert result["task_id"] == "us-1"
+    assert _holder_id(lock, "US") is None
+    assert _holder_id(lock, "HK") == "hk-1"
+
+
+def test_force_cancel_releases_a_stuck_legacy_unsuffixed_lock(service, lock, redis):
+    from app.api.v1 import cache as cache_api
+
+    redis.values[LOCK_KEY] = f"refresh:legacy-1:{_ten_minutes_ago()}"
+
+    with patch.object(cache_api, "get_data_fetch_lock", return_value=lock), patch.object(
+        cache_api, "get_price_cache", return_value=service
+    ):
+        result = cache_api.force_cancel_refresh()
+
+    assert result["status"] == "cancelled"
+    assert LOCK_KEY not in redis.values

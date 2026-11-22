@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.services.llm.groq_key_manager import GroqKeyManager
@@ -317,7 +319,7 @@ def test_saved_selection_is_read_from_the_app_settings_row(monkeypatch) -> None:
 
 
 def test_missing_saved_selection_yields_none(monkeypatch) -> None:
-    """An empty table, or no readable session, means "nothing saved"."""
+    """An empty table means "nothing saved"."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -330,11 +332,59 @@ def test_missing_saved_selection_yields_none(monkeypatch) -> None:
     monkeypatch.setattr(db_module, "SessionLocal", sessionmaker(bind=engine))
     assert mod._load_ollama_api_base() is None
 
+
+def _break_session_local(monkeypatch) -> None:
+    import app.database as db_module
+
     def _boom(*_args, **_kwargs):
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(db_module, "SessionLocal", _boom)
-    assert mod._load_ollama_api_base() is None
+
+
+def test_unreadable_saved_selection_never_falls_back_to_the_cloud(
+    monkeypatch, caplog
+) -> None:
+    """A failed read of the saved row must not send Ollama prompts to ollama.com.
+
+    The admin may have saved a local daemon. A transient DB error in a worker
+    used to read as "nothing saved", so the resolver fell through to the cloud
+    default and extraction prompts left the deployment.
+    """
+    import logging
+
+    import app.services.llm.llm_service as mod
+
+    _break_session_local(monkeypatch)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger=mod.__name__):
+        service = mod.LLMService(use_case="extraction")
+    assert any(
+        r.levelno == logging.WARNING and "Ollama" in r.getMessage()
+        for r in caplog.records
+    )
+
+    with pytest.raises(mod.LLMPreDispatchError):
+        service._apply_provider_overrides({"model": "ollama/deepseek-v4.1-flash"})
+
+    # Other providers do not depend on the Ollama row.
+    params: dict = {"model": "minimax/MiniMax-M2.7"}
+    service._apply_provider_overrides(params)
+    assert params["api_base"] == service._minimax_api_base
+
+
+def test_unreadable_saved_selection_still_honours_the_environment(monkeypatch) -> None:
+    """An explicit ``OLLAMA_API_BASE`` is a destination the operator chose."""
+    import app.services.llm.llm_service as mod
+
+    _break_session_local(monkeypatch)
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama:11434")
+
+    params: dict = {"model": "ollama/deepseek-v4.1-flash"}
+    mod.LLMService(use_case="extraction")._apply_provider_overrides(params)
+
+    assert params["api_base"] == "http://ollama:11434"
 
 
 @pytest.mark.parametrize(
@@ -433,10 +483,9 @@ async def test_saved_endpoint_through_the_api_reaches_a_new_service(monkeypatch)
     assert saved is not None
     assert saved.value == "http://127.0.0.1:9"
 
-    # The route also exports the value in the API process' environment. A worker
-    # is a separate container with its own environment, so drop it: what remains
-    # is exactly what a worker sees -- the database and the shared defaults.
-    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    # The row is the only runtime source. Exporting it into this one process'
+    # environment would make the API diverge from the workers.
+    assert "OLLAMA_API_BASE" not in os.environ
 
     # A service constructed afterwards must still resolve the saved destination.
     assert mod.LLMService(use_case="extraction")._ollama_api_base == "http://127.0.0.1:9"
@@ -511,3 +560,29 @@ def test_a_local_daemon_needs_no_key_to_route() -> None:
     assert provider == "ollama"
     assert key is None
     assert params["api_base"] == "http://ollama:11434"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_saved_selection_sends_no_completion_to_ollama(monkeypatch) -> None:
+    """End to end through ``completion()``: nothing is dispatched to an Ollama host."""
+    import app.services.llm.llm_service as mod
+
+    _break_session_local(monkeypatch)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    dispatched = []
+
+    async def _record(**params):
+        dispatched.append(params)
+        raise AssertionError("dispatched")
+
+    monkeypatch.setattr(mod, "acompletion", _record)
+    service = mod.LLMService(use_case="extraction")
+
+    with pytest.raises(mod.LLMError):
+        await service.completion(
+            [{"role": "user", "content": "hi"}],
+            model="ollama/deepseek-v4.1-flash",
+            allow_fallbacks=False,
+            num_retries=0,
+        )
+    assert dispatched == []
