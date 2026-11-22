@@ -724,6 +724,14 @@ def test_compute_exposure_keeps_one_bar_per_session(monkeypatch):
     )
 
 
+def test_compute_exposure_never_confirms_an_ftd_across_a_skipped_bar(monkeypatch):
+    # The skipped session traded 2000. Against it, 1500 is lower volume; against
+    # the earlier retained bar's 1000 it would look higher and confirm.
+    df = _df([100, 91, 91.5, 91.6, 91.7, 0.0, 93.2], [1000] * 5 + [2000, 1500])
+    result = _compute(df, monkeypatch)
+    assert (result["cycle_state"], result["follow_through_day"]) == ("rally_attempt", False)
+
+
 @pytest.mark.parametrize("bad_close", [0.0, -5.0, float("nan"), float("inf")])
 def test_compute_exposure_skips_bars_without_a_positive_finite_price(monkeypatch, bad_close):
     df = _df([100, 91, 91.5, bad_close, 91.6, 91.7, 93.2], [1000] * 6 + [1500])

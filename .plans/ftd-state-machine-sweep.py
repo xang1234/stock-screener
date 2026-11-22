@@ -36,7 +36,7 @@ def fsm(df, corr, gain, min_day=4, expiry=None, ma_entry=False):
         day += 1
         longest = max(longest, day)
         g = gain[i] if hasattr(gain, "__len__") else gain
-        if day >= min_day and c[i] / c[i - 1] - 1 >= g and v[i] > v[i - 1] > 0:
+        if day >= min_day and c[i] / c[i - 1] - 1 >= g - 1e-9 and v[i] > v[i - 1] > 0:
             ev.append((df.index[i].date(), f"FTD d{day}"))
             state, peak, ftd_low = "up", c[i], low
         elif expiry and day >= expiry:

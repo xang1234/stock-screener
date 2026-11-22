@@ -40,7 +40,7 @@ def fsm(df, corr=0.08, gain=0.015, min_day=4):
             if c > pc: state, day = "rally_attempt", 1
             continue
         day += 1                           # rally_attempt
-        if day >= min_day and c / pc - 1 >= gain and v > pv > 0:
+        if day >= min_day and c / pc - 1 >= gain - 1e-9 and v > pv > 0:
             events.append((d, f"FTD day{day}")); state, peak, ftd_low = "uptrend", c, low
     return events, state, day
 
