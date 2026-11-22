@@ -426,6 +426,25 @@ class LLMService:
             return "zai", manager
         return None, None
 
+    def has_configured_provider(self) -> bool:
+        """Whether some model in the preset chain has the key it dispatches with.
+
+        Ollama counts as configured: a local daemon needs no key.
+        """
+        for model in get_fallback_chain(self.preset):
+            _, key_manager = self._get_provider_key_manager(model)
+            if key_manager is not None:
+                has_key = len(key_manager) > 0
+            elif self._is_minimax_model(model):
+                has_key = bool(self._minimax_api_key)
+            elif model.startswith("opencode-go/"):
+                has_key = bool(self._opencode_go_api_key)
+            else:
+                has_key = True
+            if has_key:
+                return True
+        return False
+
     def _apply_provider_overrides(
         self,
         params: Dict[str, Any],

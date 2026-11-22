@@ -694,6 +694,9 @@ class ThemeTaxonomyService:
         except Exception as e:
             logger.warning("Could not initialize LLMService, all clusters will use fallback: %s", e)
             llm = None
+        if llm is not None and not llm.has_configured_provider():
+            logger.warning("No LLM provider key configured, all clusters will use fallback")
+            llm = None
 
         assignments: list[dict] = []
         failed_clusters: list[tuple[int, list[ThemeCluster]]] = []
