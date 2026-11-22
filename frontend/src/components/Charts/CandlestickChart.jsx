@@ -61,6 +61,7 @@ function CandlestickChart({
   const prevSymbolRef = useRef(null); // Track previous symbol
   const shouldRestoreRangeRef = useRef(false); // Flag to restore range on next data update
   const isFirstDataLoadRef = useRef(true); // Track first data load
+  const keptRangeRef = useRef(null); // Visible bars carried from a torn-down chart to its rebuild
   const prevCloseMapRef = useRef(new Map()); // Map of date -> previous close for % change calculation
   const latestCandleRef = useRef(null); // Store latest candle for default display
 
@@ -70,6 +71,9 @@ function CandlestickChart({
   const [rsBandTop, setRsBandTop] = useState(0.66); // top margin of the live RS band
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
+  // Every input that rebuilds the chart. The effects that draw on or subscribe
+  // to the chart key on it too, so a rebuilt chart gets its data back.
+  const chartBuild = `${height}|${isDarkMode}|${compact}`;
 
   const queryClient = useQueryClient();
 
@@ -186,7 +190,7 @@ function CandlestickChart({
     } = createPriceChartSeries(chartContainerRef.current, {
       width: chartWidth,
       height: chartHeight,
-      // Derived from the mode alone, so the isDarkMode dep below covers it.
+      // Derived from the mode alone, so isDarkMode in chartBuild covers it.
       chrome: {
         background: theme.palette.background.paper,
         text: theme.palette.text.secondary,
@@ -247,6 +251,7 @@ function CandlestickChart({
     return () => {
       resizeObserver.disconnect();
       if (chartRef.current) {
+        keptRangeRef.current = chartRef.current.timeScale().getVisibleLogicalRange();
         chartRef.current.remove();
         chartRef.current = null;
       }
@@ -266,7 +271,7 @@ function CandlestickChart({
     // data effect below swaps the series data, instead of tearing down and
     // rebuilding the whole canvas per symbol.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height, isDarkMode, compact]); // Re-initialize only when required visual inputs change
+  }, [chartBuild]); // Re-initialize only when required visual inputs change
 
   // Track symbol changes - set flag to restore range when symbol changes
   useEffect(() => {
@@ -287,8 +292,7 @@ function CandlestickChart({
     });
   }, [interactive]);
 
-  // Subscribe to visible time range changes. The visual-input deps re-subscribe
-  // the chart the init effect rebuilds when they change.
+  // Subscribe to visible time range changes.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !onVisibleRangeChange) return;
@@ -316,13 +320,17 @@ function CandlestickChart({
         timeScale.unsubscribeVisibleTimeRangeChange(handleRangeChange);
       }
     };
-  }, [onVisibleRangeChange, symbol, height, isDarkMode, compact]);
+  }, [onVisibleRangeChange, symbol, chartBuild]);
 
   // Update chart data when data changes
   useEffect(() => {
     if (!chartRef.current) {
       return;
     }
+    // Taken before the empty-data return, so a range kept from a rebuild
+    // never lands on a later, different series.
+    const keptRange = keptRangeRef.current;
+    keptRangeRef.current = null;
     if (!chartData) {
       // The chart instance outlives symbol changes, so clear the previous
       // symbol's series while the next one loads (or fails to).
@@ -403,13 +411,16 @@ function CandlestickChart({
         // No saved range - fit content
         chartRef.current.timeScale().fitContent();
       }
+    } else if (keptRange && chartData.candlesticks.length > 0) {
+      // Rebuilt for a theme, height or compact change - show the same bars
+      chartRef.current.timeScale().setVisibleLogicalRange(keptRange);
     } else if (isFirstDataLoadRef.current) {
       // First load - fit content
       isFirstDataLoadRef.current = false;
       chartRef.current.timeScale().fitContent();
     }
     // Otherwise, don't touch the zoom - let user adjust freely
-  }, [chartData, visibleRange]);
+  }, [chartData, visibleRange, chartBuild]);
 
   // Update the RS line overlay + blue-dot markers.
   // Only rendered on the daily timeframe (the RS series is daily); cleared
@@ -433,7 +444,7 @@ function CandlestickChart({
       .filter((t) => timesInSeries.has(t))
       .map((t) => ({ time: t, position: 'inBar', color: '#2196f3', shape: 'circle' }));
     if (markers) markers.setMarkers(markerList);
-  }, [rsData, rsStripShown]);
+  }, [rsData, rsStripShown, chartBuild]);
 
   // RS strip layout: when the RS line is shown, compress price to a 0.66 floor
   // so the [0.66, 0.78] band below it is always empty (the RS scale floats in
@@ -452,7 +463,7 @@ function CandlestickChart({
     const candleBottom = rsStripShown ? 0.34 : 0.22;
     candle.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: candleBottom } });
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-  }, [rsStripShown, symbol, height, isDarkMode, compact]);
+  }, [rsStripShown, symbol, chartBuild]);
 
   // Dynamic RS band: size the RS overlay scale so the line fills the empty space
   // below the candles without overlapping them. Recomputes on data change and on
@@ -490,7 +501,7 @@ function CandlestickChart({
         timeScale.unsubscribeVisibleTimeRangeChange(debouncedApply);
       }
     };
-  }, [chartData, rsData, rsStripShown]);
+  }, [chartData, rsData, rsStripShown, chartBuild]);
 
   // Determine overlay state
   // Only show full loading state if we have no data at all (not even placeholder)
