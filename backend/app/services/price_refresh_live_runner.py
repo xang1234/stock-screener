@@ -59,6 +59,9 @@ class LivePriceRefreshRunner:
             return symbol_markets.get(str(symbol).upper(), effective_market)
 
         processed = 0
+        # Mid-batch progress cannot tell successes from failures yet, so it
+        # reports the totals of the batches that have finished.
+        completed = PriceRefreshExecutionSummary.empty(total=total)
 
         def progress_callback(batch_processed: int) -> None:
             nonlocal processed
@@ -78,14 +81,17 @@ class LivePriceRefreshRunner:
                 total=total,
                 percent=percent,
                 message="Refreshing market prices",
-                refreshed=processed,  # adjust if you want true refreshed count
-                failed=0,
+                refreshed=completed.refreshed,
+                failed=completed.failed,
             )
 
         def after_batch(
             batch: PriceRefreshBatchOutcome,
             summary: PriceRefreshExecutionSummary,
         ) -> None:
+            nonlocal completed
+
+            completed = summary
             percent = (summary.processed / total) * 100 if total else 100.0
             activity_reporter.publish_progress(
                 db,

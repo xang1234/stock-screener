@@ -9,7 +9,7 @@ import logging
 import math
 import inspect
 from typing import Any, Optional, Dict, Callable
-from datetime import datetime, date
+from datetime import UTC, datetime, date
 from sqlalchemy.orm import Session
 
 from app.domain.providers.data_plan import (
@@ -807,7 +807,7 @@ class FundamentalsCacheService:
                 record = StockFundamental(symbol=symbol)
                 db.add(record)
             else:
-                record.updated_at = datetime.now()
+                record.updated_at = datetime.now(UTC)
 
             for column in _PAYLOAD_COLUMNS:
                 if column in _UNCOPIED_COLUMNS:
@@ -887,11 +887,11 @@ class FundamentalsCacheService:
         if last_update is None:
             return False
 
-        # Ensure timezone-naive comparison
+        # Compare as naive UTC, the zone updated_at is stored in.
         if last_update.tzinfo is not None:
-            last_update = last_update.replace(tzinfo=None)
+            last_update = last_update.astimezone(UTC).replace(tzinfo=None)
 
-        now = datetime.now()
+        now = datetime.now(UTC).replace(tzinfo=None)
         age_days = (now - last_update).days
 
         if max_age_days == self.MAX_AGE_DAYS:
@@ -1309,8 +1309,8 @@ class FundamentalsCacheService:
                 if record.updated_at:
                     last_update = record.updated_at
                     if last_update.tzinfo is not None:
-                        last_update = last_update.replace(tzinfo=None)
-                    age_days = (datetime.now() - last_update).days
+                        last_update = last_update.astimezone(UTC).replace(tzinfo=None)
+                    age_days = (datetime.now(UTC).replace(tzinfo=None) - last_update).days
                     stats['age_days'] = age_days
 
         except Exception as e:

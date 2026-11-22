@@ -86,6 +86,69 @@ def test_live_price_refresh_runner_raises_interruption_with_partial_summary():
     assert raised.value.summary.failed == 0
 
 
+def test_live_price_refresh_runner_progress_counts_only_refreshed_symbols():
+    from app.services.price_refresh_live_runner import (
+        LivePriceRefreshRunner,
+        LivePriceRefreshRunnerDependencies,
+    )
+    from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
+
+    def fetch_with_backoff(_bulk_fetcher, symbols, *, period, market, progress_callback=None):
+        del period, market
+        progress_callback(len(symbols))
+        return {
+            symbol: (
+                {"has_error": True, "error": "rate limited"}
+                if symbol == "A"
+                else {"has_error": False, "price_data": SimpleNamespace(empty=False)}
+            )
+            for symbol in symbols
+        }
+
+    class _FakePriceCache:
+        def store_refreshed_batch(self, *_args, **_kwargs):
+            pass
+
+    published = []
+
+    class _FakeReporter:
+        def publish_progress(self, *_args, current, refreshed, failed, **_kwargs):
+            published.append((current, refreshed, failed))
+
+    class _FakeLock:
+        def extend_lock(self, *_args, **_kwargs):
+            pass
+
+    runner = LivePriceRefreshRunner(
+        LivePriceRefreshRunnerDependencies(
+            fetch_with_backoff=fetch_with_backoff,
+            track_symbol_failures=lambda *_args, **_kwargs: None,
+            data_fetch_lock_factory=lambda: _FakeLock(),
+            raise_if_transient_database_error=lambda _exc: None,
+        )
+    )
+
+    runner.run(
+        task=SimpleNamespace(request=SimpleNamespace(id="task-1")),
+        bulk_fetcher=object(),
+        price_cache=_FakePriceCache(),
+        db=object(),
+        jobs=(
+            PriceRefreshJob(kind=PriceRefreshJobKind.STALE, symbols=("A", "B"), period="7d"),
+        ),
+        total=2,
+        batch_size=1,
+        market="US",
+        effective_market="US",
+        activity_lifecycle="daily_refresh",
+        symbol_markets={"A": "US", "B": "US"},
+        activity_reporter=_FakeReporter(),
+    )
+
+    # (current, refreshed, failed): mid-batch, then after each batch. A failed.
+    assert published == [(1, 0, 0), (1, 0, 1), (2, 0, 1), (2, 1, 1)]
+
+
 def test_retry_scheduler_skips_permanent_no_price_data_failures():
     from app.services.price_refresh_live_runner import PriceRefreshRetryScheduler
 
