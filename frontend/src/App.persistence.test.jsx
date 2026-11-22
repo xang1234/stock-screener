@@ -24,11 +24,21 @@ vi.mock('./contexts/PipelineContext', () => ({
 vi.mock('./contexts/StrategyProfileContext', () => ({
   StrategyProfileProvider: ({ children }) => <>{children}</>,
 }));
-vi.mock('./pageLoaders', async (importOriginal) => ({
-  ...(await importOriginal()),
-  loadMarketScanPage: async () => ({ default: () => <div>Market Scan Page</div> }),
-  loadThemesPage: async () => ({ default: () => <div>Themes Page</div> }),
-}));
+vi.mock('./pageLoaders', async (importOriginal) => {
+  const loaders = {
+    '/': async () => ({ default: () => <div>Market Scan Page</div> }),
+    '/themes': async () => ({ default: () => <div>Themes Page</div> }),
+  };
+  return {
+    ...(await importOriginal()),
+    loadMarketScanPage: loaders['/'],
+    loadThemesPage: loaders['/themes'],
+    // App's import-time preload goes through loaderForPath. The real one
+    // returns the real loaders, and a cold ThemesPage import (~1 s) ran beside
+    // the test and outlasted findByText on busy CI runners.
+    loaderForPath: (path) => loaders[path] ?? null,
+  };
+});
 
 const successfulQuery = (queryKey) => ({
   queryKey,
