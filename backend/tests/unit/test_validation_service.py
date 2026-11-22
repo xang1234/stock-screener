@@ -855,7 +855,7 @@ def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extensio
     ]
 
     groups = _service()._build_groups(
-        events, ValidationSourceKind.REPLAY_PICK, recent_entry_sessions=None, cycle_states={}
+        events, ValidationSourceKind.REPLAY_PICK, recent_events=None, cycle_states={}
     )
 
     assert [(g.dimension, g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
@@ -881,7 +881,7 @@ def test_groups_follow_the_dimension_order_then_each_dimensions_value_order():
     ]
 
     groups = _service()._build_groups(
-        events, ValidationSourceKind.SCAN_PICK, recent_entry_sessions=None, cycle_states={}
+        events, ValidationSourceKind.SCAN_PICK, recent_events=None, cycle_states={}
     )
 
     assert [(g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
@@ -1435,7 +1435,7 @@ def test_the_calendar_dates_each_window_and_a_missing_session_leaves_it_unscored
     )
 
 
-def _winter_overview(session, picks, histories, *, details=None):
+def _winter_overview(session, picks, histories, *, details=None, lookback_days=90):
     for symbol in histories:
         _add_universe(session, symbol)
     for symbol, as_of in picks:
@@ -1449,7 +1449,7 @@ def _winter_overview(session, picks, histories, *, details=None):
     return service.get_overview(
         session,
         source_kind=ValidationSourceKind.SCAN_PICK,
-        lookback_days=90,
+        lookback_days=lookback_days,
         as_of_date=date(2026, 1, 30),
     )
 
@@ -2252,9 +2252,8 @@ def test_extension_of_a_pick_on_a_session_its_symbol_has_not_refreshed_yet_is_un
         pytest.param(WINTER_SESSIONS, 90, (20, "2025-12-26", "2026-01-26"), id="last-twenty-closed"),
         pytest.param(WINTER_SESSIONS[-24:], 90, (20, "2025-12-26", "2026-01-26"), id="just-enough"),
         pytest.param(WINTER_SESSIONS[-23:], 90, None, id="too-few-sessions"),
-        # The 2026-01-10 cutoff is a Saturday.
-        pytest.param(WINTER_SESSIONS, 20, (10, "2026-01-12", "2026-01-26"), id="clamped-to-cutoff"),
-        pytest.param(WINTER_SESSIONS, 2, (0, None, None), id="cutoff-after-last-closed-entry"),
+        # The window doesn't depend on the lookback: picks signalled before it still load.
+        pytest.param(WINTER_SESSIONS, 30, (20, "2025-12-26", "2026-01-26"), id="short-lookback"),
     ],
 )
 def test_the_recent_window_holds_the_last_twenty_entry_sessions_with_a_closed_window(
@@ -2301,6 +2300,16 @@ def test_the_recent_window_counts_picks_by_their_entry_session(session):
     ) == (2, 2.0, 0, 0)
     base = payload.horizons[1]
     assert (base.sample_size, base.pending_windows, base.skipped_missing_history) == (3, 1, 1)
+
+
+def test_the_recent_window_counts_a_pick_signalled_before_the_lookback_starts(session):
+    # The 30-day lookback starts 2025-12-31. Signalled the day before, the pick
+    # enters on 12-31, inside the recent window, so only the base leaves it out.
+    payload = _winter_overview(
+        session, [("EDGE", date(2025, 12, 30))], {"EDGE": _winter_bars()}, lookback_days=30
+    )
+
+    assert (payload.recent.summary.sample_size, payload.horizons[1].sample_size) == (1, 0)
 
 
 def test_the_recent_window_keeps_the_overlap_rule_of_the_full_lookback(session):
@@ -2395,6 +2404,28 @@ def test_picks_group_by_the_market_cycle_state_stored_on_their_signal_date(sessi
     assert payload.horizons[1].sample_size == 6
 
 
+def test_replay_picks_group_by_the_stored_market_cycle_state_through_the_overview(session):
+    _add_exposure(session, date(2026, 1, 5), "rally_attempt")
+    _add_replay_pick(session, date(2026, 1, 5), 1, "NVDA", score=91.5, rs=95)
+    session.commit()
+    service = _service(
+        {"SPY": _winter_bars(), "NVDA": _winter_bars()},
+        last_completed=date(2026, 1, 30),
+        sessions=WINTER_SESSIONS,
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.REPLAY_PICK,
+        lookback_days=90,
+        as_of_date=date(2026, 1, 30),
+    )
+
+    assert [(g.value, g.recent.sample_size) for g in payload.groups if g.dimension == "market_state"] == [
+        ("rally_attempt", 1)
+    ]
+
+
 @pytest.mark.parametrize(
     ("source_kind", "grouped"),
     [
@@ -2407,7 +2438,7 @@ def test_only_pick_sources_group_by_the_market_cycle_state(source_kind, grouped)
     groups = _service()._build_groups(
         [_grouped(source_kind, {})],
         source_kind,
-        recent_entry_sessions=None,
+        recent_events=None,
         cycle_states={FIXED_TODAY: "uptrend"},
     )
 

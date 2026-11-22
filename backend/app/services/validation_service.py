@@ -833,39 +833,39 @@ def summarize_horizon(
     )
 
 
-def _recent_entry_sessions(sessions: Sequence[date], cutoff_date: date) -> list[date] | None:
+def _recent_entry_sessions(sessions: Sequence[date]) -> list[date] | None:
     """The last ``RECENT_ENTRY_SESSIONS`` of ``sessions`` whose ``RECENT_HORIZON``-session
-    window ends by the last of them, leaving out any before ``cutoff_date``. None when
-    ``sessions`` is too short to hold them all."""
+    window ends by the last of them. None when ``sessions`` is too short to hold them all.
+
+    The lookback doesn't shorten it: events load from well before the lookback cutoff for
+    the overlap rule, so a pick signalled before the cutoff still counts by its entry."""
     span = RECENT_ENTRY_SESSIONS + RECENT_HORIZON - 1
     if len(sessions) < span:
         return None
-    last_entry = len(sessions) - RECENT_HORIZON
-    return [day for day in sessions[-span : last_entry + 1] if day >= cutoff_date]
+    return list(sessions[-span : len(sessions) - RECENT_HORIZON + 1])
 
 
-def _summarize_recent(
+def _entered_in(
     events: list[EvaluatedValidationEvent], entry_sessions: list[date]
-) -> ValidationHorizonSummary:
-    """``summarize_horizon`` at ``RECENT_HORIZON`` over the events entered on
-    ``entry_sessions``. An event with no cached history has no entry session, so it is left out."""
-    return summarize_horizon(
-        [event for event in events if event.entry_at in entry_sessions],
-        horizon_sessions=RECENT_HORIZON,
-    )
+) -> list[EvaluatedValidationEvent]:
+    """The events entered on ``entry_sessions``. An event with no cached history has no entry
+    session, so it is left out."""
+    window = set(entry_sessions)
+    return [event for event in events if event.entry_at in window]
 
 
 def _recent_window(
     events: list[EvaluatedValidationEvent], entry_sessions: list[date] | None
 ) -> ValidationRecentWindow | None:
+    """``events`` must be overlap-marked and not cut to the lookback."""
     if entry_sessions is None:
         return None
     return ValidationRecentWindow(
         horizon_sessions=RECENT_HORIZON,
         sessions=len(entry_sessions),
-        entries_from=entry_sessions[0].isoformat() if entry_sessions else None,
-        entries_through=entry_sessions[-1].isoformat() if entry_sessions else None,
-        summary=_summarize_recent(events, entry_sessions),
+        entries_from=entry_sessions[0].isoformat(),
+        entries_through=entry_sessions[-1].isoformat(),
+        summary=summarize_horizon(_entered_in(events, entry_sessions), horizon_sessions=RECENT_HORIZON),
     )
 
 
@@ -917,14 +917,18 @@ class ValidationService:
             benchmark_symbol=payload["benchmark_symbol"],
             stop_loss_pct=STOP_LOSS_PCT,
             horizons=payload["horizons"],
-            recent=_recent_window(payload["events"], payload["recent_entry_sessions"]),
+            recent=_recent_window(payload["marked_events"], payload["recent_entry_sessions"]),
             recent_events=payload["recent_events"],
             groups=self._build_groups(
                 payload["events"],
                 source_kind,
-                recent_entry_sessions=payload["recent_entry_sessions"],
+                recent_events=(
+                    None
+                    if payload["recent_entry_sessions"] is None
+                    else _entered_in(payload["marked_events"], payload["recent_entry_sessions"])
+                ),
                 cycle_states=(
-                    _cycle_states(db, market, payload["events"])
+                    _cycle_states(db, market, payload["marked_events"])
                     if "market_state" in GROUP_DIMENSIONS[source_kind]
                     else {}
                 ),
@@ -1036,11 +1040,8 @@ class ValidationService:
         evaluated_events, benchmark_symbol = self._outcome_calculator.evaluate_many(
             raw_events, benchmark_candidates=benchmark_candidates, sessions=sessions
         )
-        events = [
-            event
-            for event in mark_overlapping_windows(evaluated_events)
-            if _event_date(event.raw.event_at) >= cutoff_date
-        ]
+        marked_events = mark_overlapping_windows(evaluated_events)
+        events = [event for event in marked_events if _event_date(event.raw.event_at) >= cutoff_date]
         if not events and not degraded_reasons:
             degraded_reasons.append(NO_EVENTS_REASONS[source_kind])
         degraded_reasons.extend(calendar_reasons)
@@ -1060,7 +1061,8 @@ class ValidationService:
         return {
             "horizons": self._summarize_horizons(events),
             "recent_events": recent_events,
-            "recent_entry_sessions": _recent_entry_sessions(sessions, cutoff_date),
+            "recent_entry_sessions": _recent_entry_sessions(sessions),
+            "marked_events": marked_events,
             "events": events,
             "degraded_reasons": _dedupe(degraded_reasons),
             "benchmark_symbol": benchmark_symbol,
@@ -1071,17 +1073,25 @@ class ValidationService:
         events: list[EvaluatedValidationEvent],
         source_kind: ValidationSourceKind,
         *,
-        recent_entry_sessions: list[date] | None,
+        recent_events: list[EvaluatedValidationEvent] | None,
         cycle_states: Mapping[date, str],
     ) -> list[ValidationGroup]:
-        groups: list[ValidationGroup] = []
-        values = [_group_values(event, cycle_states) for event in events]
-        for dimension in GROUP_DIMENSIONS[source_kind]:
-            members: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
-            for event, event_values in zip(events, values):
-                value = event_values.get(dimension)
+        """One group per value the lookback's ``events`` hold. ``recent_events`` are the recent
+        window's events, which can include picks signalled before the lookback; None when the
+        overview has no recent window."""
+
+        def by_value(members: list[EvaluatedValidationEvent], dimension: str):
+            grouped: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
+            for event in members:
+                value = _group_values(event, cycle_states).get(dimension)
                 if value is not None and value != "":
-                    members[str(value)].append(event)
+                    grouped[str(value)].append(event)
+            return grouped
+
+        groups: list[ValidationGroup] = []
+        for dimension in GROUP_DIMENSIONS[source_kind]:
+            members = by_value(events, dimension)
+            recent_members = None if recent_events is None else by_value(recent_events, dimension)
             groups.extend(
                 ValidationGroup(
                     dimension=dimension,
@@ -1090,8 +1100,8 @@ class ValidationService:
                     horizons=self._summarize_horizons(members[value]),
                     recent=(
                         None
-                        if recent_entry_sessions is None
-                        else _summarize_recent(members[value], recent_entry_sessions)
+                        if recent_members is None
+                        else summarize_horizon(recent_members[value], horizon_sessions=RECENT_HORIZON)
                     ),
                 )
                 for value in sorted(members, key=partial(_group_order, dimension))

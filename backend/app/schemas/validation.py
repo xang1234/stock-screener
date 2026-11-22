@@ -89,8 +89,9 @@ class ValidationGroup(BaseModel):
 
 
 class ValidationRecentWindow(BaseModel):
-    """The ``horizon_sessions`` outcomes of events entered in the latest sessions whose window
-    has closed: the last ``sessions`` of them, fewer where the lookback starts later."""
+    """The ``horizon_sessions`` outcomes of events entered on the last ``sessions`` sessions
+    whose window has closed by the market calendar. Each outcome's status follows
+    ``summarize_horizon``, so a pick whose prices haven't caught up still counts as pending."""
 
     horizon_sessions: int
     sessions: int
