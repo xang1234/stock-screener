@@ -66,7 +66,6 @@ FULL_PAYLOAD = {
     "insider_transactions": 6.02,
     "institutional_ownership": 6.03,
     "institutional_transactions": 6.04,
-    "institutional_change": 6.05,
     "short_float": 6.06,
     "short_ratio": 6.07,
     "short_interest": 6_000_008,
@@ -131,7 +130,6 @@ PARTIAL_UPDATE = {
     "first_trade_date_ms": 981_201_600_000,
     "finviz_snapshot_at": "not-a-timestamp",
     "technicals_refreshed_at": datetime(2026, 10, 20, 1, 2, 3),
-    "institutional_change": 1.0,
     "market_cap_usd": None,
     "fx_metadata": {"rate": 0.5},
     "recommendation": 2.5,
@@ -198,7 +196,6 @@ COLUMNS_AFTER_INSERT = {
     "insider_transactions": 6.02,
     "institutional_ownership": 6.03,
     "institutional_transactions": 6.04,
-    "institutional_change": None,
     "short_float": 6.06,
     "short_ratio": 6.07,
     "short_interest": 6_000_008,
@@ -302,7 +299,6 @@ READ_AFTER_INSERT = {
     "insider_transactions": 6.02,
     "institutional_ownership": 6.03,
     "institutional_transactions": 6.04,
-    "institutional_change": 6.5,
     "short_float": 6.06,
     "short_ratio": 6.07,
     "short_interest": 6_000_008,
@@ -420,10 +416,6 @@ def test_insert_ignores_the_guards_an_update_applies():
 def test_single_and_bulk_reads_map_every_column():
     service, factory = _service()
     _insert(service)
-    db = factory()
-    db.query(StockFundamental).filter_by(symbol="AAPL").update({"institutional_change": 6.5})
-    db.commit()
-    db.close()
     updated_at = _row(factory).updated_at
 
     single = service._get_from_database("AAPL")

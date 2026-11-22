@@ -77,7 +77,7 @@ _PAYLOAD_COLUMNS = (
     "profit_margin", "operating_margin", "gross_margin", "roe", "roa", "roic",
     "current_ratio", "quick_ratio", "debt_to_equity", "lt_debt_to_equity",
     "insider_ownership", "insider_transactions", "institutional_ownership",
-    "institutional_transactions", "institutional_change",
+    "institutional_transactions",
     "short_float", "short_ratio", "short_interest",
     "beta", "rsi_14", "atr_14", "sma_20", "sma_50", "sma_200",
     "volatility_week", "volatility_month",
@@ -106,10 +106,10 @@ _TIMESTAMP_COLUMNS = frozenset({
     "finviz_snapshot_at", "yahoo_profile_refreshed_at", "yahoo_statements_refreshed_at",
     "technicals_refreshed_at",
 })
-# _store_in_database writes these itself; nothing writes institutional_change.
+# _store_in_database writes these itself.
 _UNCOPIED_COLUMNS = frozenset({
     "next_earnings_date", "event_calendar_as_of_date", "recent_earnings", "ipo_date", "data_source",
-    "field_completeness_score", "field_provenance", "institutional_change",
+    "field_completeness_score", "field_provenance",
 })
 
 
