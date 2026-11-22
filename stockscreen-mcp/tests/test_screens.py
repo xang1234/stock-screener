@@ -214,3 +214,11 @@ def test_an_integer_past_the_double_range_reads_as_infinity():
     assert evaluate_condition(row, condition("x", "text", pattern="infinity")) is True
     assert evaluate_condition(row, condition("x", "range", min=0, max=100)) is False
     explain_condition(row, condition("x", "range", min=0, max=100))  # raised OverflowError
+
+
+def test_a_long_invalid_digit_run_is_rejected_in_linear_time():
+    import time
+
+    start = time.perf_counter()
+    assert evaluate_condition({"x": "1" * 50_000 + "x"}, condition("x", "range", min=70, max=None)) is True
+    assert time.perf_counter() - start < 0.5

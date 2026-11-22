@@ -91,7 +91,7 @@ def _js_primitive(value: Any) -> Any:
 
 # StringToNumber: signed decimals and Infinity, or unsigned 0x/0o/0b integers. No "inf", no "1_000".
 _JS_NUMERIC = re.compile(
-    r"[+-]?(?:Infinity|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)|0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+"
+    r"[+-]?(?:Infinity|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)|0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+"
 )
 
 
