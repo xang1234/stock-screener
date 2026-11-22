@@ -193,6 +193,14 @@ def get_theme_data(theme_id: int, db: Session = Depends(get_db)):
     )
 
 
+def _by_session_day(closes: pd.Series) -> pd.Series:
+    """Index closes by naive session date: Redis frames can be tz-aware, DB frames naive."""
+    index = pd.DatetimeIndex(closes.index)
+    if index.tz is not None:
+        index = index.tz_localize(None)
+    return pd.Series(closes.to_numpy(), index=index.normalize())
+
+
 def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     """
     Fetch sparkline and price change data for a list of symbols.
@@ -264,8 +272,11 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
         if spy_close is not None:
             # Pair by date: a freshly fetched stock and a cached SPY can end on
             # different sessions, and their histories can start on different days.
+            stock_by_day = _by_session_day(price_df['Close'])
             paired = pd.concat(
-                [price_df['Close'], spy_close.reindex(price_df.index)], axis=1, keys=["stock", "spy"]
+                [stock_by_day, _by_session_day(spy_close).reindex(stock_by_day.index)],
+                axis=1,
+                keys=["stock", "spy"],
             ).dropna()
             rs_result = rs_calc.calculate_rs_sparkline(
                 paired["stock"].reset_index(drop=True), paired["spy"].reset_index(drop=True)

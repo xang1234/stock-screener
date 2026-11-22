@@ -145,3 +145,23 @@ def test_rs_pairs_stock_and_spy_by_date(monkeypatch):
 
     # A constant ratio normalizes to a flat line; pairing by position would not.
     assert data["AAPL"]["rs_data"] == [1.0] * 30
+
+
+def test_rs_pairs_a_tz_aware_redis_frame_with_a_naive_db_frame(monkeypatch):
+    spy = _frame(date.today(), days=260)  # naive, as PostgreSQL returns it
+    stock = spy.iloc[-80:].copy()
+    stock["Close"] = stock["Close"] * 2
+    stock.index = stock.index.tz_localize("America/New_York")  # as a Redis frame can be
+
+    class _Cache:
+        def get_many(self, symbols, period, cache_only=False):
+            return {"SPY": spy, "AAPL": stock}
+
+    monkeypatch.setattr(user_themes, "get_price_cache", lambda: _Cache())
+    db = SessionLocal()
+    try:
+        data = user_themes._fetch_stock_market_data(["AAPL"], db)
+    finally:
+        db.close()
+
+    assert data["AAPL"]["rs_data"] == [1.0] * 30
