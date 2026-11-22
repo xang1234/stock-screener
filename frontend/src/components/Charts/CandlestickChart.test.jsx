@@ -63,6 +63,13 @@ describe('CandlestickChart visible-range subscription', () => {
     expect(charts[0].handlers.size).toBe(1);
   });
 
+  it('unsubscribes when the range callback is cleared', () => {
+    const { rerender } = renderWithProviders(chart({ symbol: 'AAA' }));
+    rerender(chart({ symbol: 'AAA', onVisibleRangeChange: null }));
+
+    expect(charts[0].handlers.size).toBe(0);
+  });
+
   it('subscribes the rebuilt chart when a visual input recreates it', () => {
     const { rerender, unmount } = renderWithProviders(chart({ symbol: 'AAA' }));
     rerender(chart({ symbol: 'AAA', height: 500 }));
