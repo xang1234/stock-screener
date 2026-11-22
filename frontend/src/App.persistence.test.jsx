@@ -133,7 +133,7 @@ describe('App refresh with a persisted cache', () => {
     render(<App />);
 
     expect(await screen.findByText('Market Scan Page')).toBeInTheDocument();
-    expect(getAppCapabilities).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getAppCapabilities).toHaveBeenCalledTimes(1));
 
     resolveLive({
       ...DEFAULT_CAPABILITIES,
@@ -152,7 +152,7 @@ describe('App refresh with a persisted cache', () => {
     render(<App />);
 
     expect(await screen.findByText('Loading page')).toBeInTheDocument();
-    expect(getAppCapabilities).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getAppCapabilities).toHaveBeenCalledTimes(1));
     expect(window.location.pathname).toBe('/themes');
     expect(screen.queryByText('Market Scan Page')).not.toBeInTheDocument();
 
