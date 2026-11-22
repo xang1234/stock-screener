@@ -193,7 +193,11 @@ def test_a_lock_held_long_after_its_warmup_finished_is_stuck(service, lock, redi
         return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
     redis.values[_lock_key_for_market("US")] = f"refresh_us:us-1:{hours_ago(2)}"
-    service.complete_warmup_heartbeat("completed", market="US")  # written before post-warmup work
+    # Weekly refresh writes this heartbeat before its post-warmup work, so it is
+    # as old as the warmup; force-cancel accepts a terminal heartbeat that old.
+    monkeypatch.setattr(
+        service, "_get_heartbeat_info", lambda market=None: {"status": "completed", "minutes": 60}
+    )
     monkeypatch.setattr(
         service, "get_warmup_metadata",
         lambda market=None: {"status": "completed", "completed_at": hours_ago(1)},
