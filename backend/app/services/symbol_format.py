@@ -5,14 +5,10 @@ search, stock detail endpoints, and CSV imports. Matches the DB schema
 width of ``stock_universe.symbol`` (``VARCHAR(20)``), so a format-valid
 symbol is always persistable.
 
-Accepts US-shape tokens (``NVDA``, ``GOOGL``) alongside the suffixed
-non-US forms supported today: ``.HK`` (Hong Kong), ``.NS``/``.BO``
-(India), ``.T`` (Tokyo), ``.KS``/``.KQ`` (Korea), ``.TW`` /
-``.TWO`` (Taiwan), ``.SS``/``.SZ``/``.BJ`` (mainland China),
-``.SI`` (Singapore), and ``.DE`` / ``.F`` (Germany — Xetra and Frankfurt).
-The regex itself doesn't enforce the
-suffix list — ``SUPPORTED_SUFFIXES`` is the policy lookup, and
-universe-membership is the authoritative existence check (see
+Accepts US-shape tokens (``NVDA``, ``GOOGL``) alongside suffixed non-US
+forms (``0700.HK``, ``7203.T``). The regex itself doesn't enforce the
+suffix list — ``market_symbol_suffix_registry`` maps suffixes to markets,
+and universe-membership is the authoritative existence check (see
 ``StockUniverse``).
 
 Theme extraction (``multi_market_ticker_validator``) intentionally uses
@@ -28,26 +24,6 @@ from typing import Final
 # Primary subtag must be alphanumeric; remainder allows alphanumeric + '.' + '-'
 # up to 19 characters (total max 20, matches stock_universe.symbol VARCHAR(20)).
 SYMBOL_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
-
-# Known exchange suffixes. Extending to a new market (e.g. '.KS' for KRX)
-# requires adding entries here, in the market-ingestion adapters, and in
-# the Market/Exchange enums in schemas/universe.py.
-SUPPORTED_SUFFIXES: Final[tuple[str, ...]] = (
-    ".HK",
-    ".NS",
-    ".BO",
-    ".T",
-    ".KS",
-    ".KQ",
-    ".TW",
-    ".TWO",
-    ".SS",
-    ".SZ",
-    ".BJ",
-    ".SI",
-    ".DE",
-    ".F",
-)
 
 _MAX_SYMBOL_LEN: Final[int] = 20
 
