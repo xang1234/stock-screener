@@ -24,8 +24,8 @@ import { formatPatternName } from '../../utils/formatUtils';
 
 const GROUP_HORIZONS = [1, 5, 20, 60];
 const MINIMUM_SAMPLE = 20;
-// Dimensions whose values have a display name; the others show their value as it is.
 const MARKET_STATE_LABELS = { uptrend: 'Uptrend', rally_attempt: 'Rally attempt', correction: 'Correction' };
+// Dimensions whose values have a display name; the others show their value as it is.
 const GROUP_VALUE_LABELS = {
   action_state: (value) => ACTION_STATE_META[value]?.label ?? value,
   market_state: (value) => MARKET_STATE_LABELS[value] ?? value,

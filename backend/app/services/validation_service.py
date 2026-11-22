@@ -105,7 +105,7 @@ EXTENSION_BAND_EDGES = (0.0, 10.0, 20.0, 30.0)
 # The value order of each dimension that has one, such as ratings best first.
 GROUP_VALUE_ORDER = {
     "market_state": (CycleState.UPTREND, CycleState.RALLY_ATTEMPT, CycleState.CORRECTION),
-    "rating":tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
+    "rating": tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
     "rs_band": tuple(f"{low}-{low + 9}" for low in range(90, -1, -10)),
     "action_state": tuple(state.value for state in ACTION_STATES),
     "extension_band": EXTENSION_BANDS,
