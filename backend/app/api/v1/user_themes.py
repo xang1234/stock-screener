@@ -11,7 +11,6 @@ import logging
 
 from ...database import get_db
 from ...models.user_theme import UserTheme, UserThemeSubgroup, UserThemeStock
-from ...models.stock import StockPrice
 from ...models.stock_universe import StockUniverse
 from ...models.industry import IBDIndustryGroup
 from ...wiring.bootstrap import get_price_cache
@@ -197,7 +196,7 @@ def get_theme_data(theme_id: int, db: Session = Depends(get_db)):
 def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     """
     Fetch sparkline and price change data for a list of symbols.
-    Uses PriceCacheService for fresh data with automatic updates.
+    Prices come from the price cache; only uncached symbols are fetched.
     Also fetches company name and IBD industry.
     """
     if not symbols:
@@ -228,19 +227,21 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
         "12m": 252,
     }
 
-    # Use PriceCacheService for fresh data with automatic updates
+    # Cache first: Redis, else whatever the database holds, stale or not.
+    # Only symbols with no cached rows go to the provider, in one batch,
+    # and get_many writes what it fetches back to the cache.
     price_cache = get_price_cache()
+    wanted = list(dict.fromkeys([*symbols, "SPY"]))  # SPY for RS
+    cached_prices = price_cache.get_many(wanted, period="2y", cache_only=True)
+    misses = [s for s in wanted if cached_prices.get(s) is None]
+    if misses:
+        cached_prices.update(price_cache.get_many(misses, period="2y"))
 
-    # Fetch SPY prices for RS calculation (with freshness check)
-    spy_df = price_cache.get_historical_data("SPY", period="2y")
+    spy_df = cached_prices.get("SPY")
     spy_close = spy_df['Close'].tolist() if spy_df is not None and not spy_df.empty else []
 
     if not spy_close:
         logger.warning("No SPY price data found for RS calculation")
-
-    # Bulk fetch all stock prices (with freshness check and auto-update)
-    all_symbols = list(symbols)
-    cached_prices = price_cache.get_many(all_symbols, period="2y")
 
     rs_calc = RSSparklineCalculator()
     price_calc = PriceSparklineCalculator()
