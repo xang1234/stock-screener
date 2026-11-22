@@ -411,7 +411,7 @@ function CandlestickChart({
         // No saved range - fit content
         chartRef.current.timeScale().fitContent();
       }
-    } else if (keptRange) {
+    } else if (keptRange && chartData.candlesticks.length > 0) {
       // Rebuilt for a theme, height or compact change - show the same bars
       chartRef.current.timeScale().setVisibleLogicalRange(keptRange);
     } else if (isFirstDataLoadRef.current) {

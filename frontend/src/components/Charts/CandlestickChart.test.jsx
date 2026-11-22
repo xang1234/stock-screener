@@ -103,9 +103,12 @@ describe('CandlestickChart rebuild on a theme toggle', () => {
     date, open: 10 + i, high: 11 + i, low: 9 + i, close: 10.5 + i, volume: 1000,
   }));
   const rsLine = bars.map((b, i) => ({ time: b.date, value: 1 + i / 10 }));
-  const inTheme = (mode) => (
+  // Held stable so only the theme changes between renders; a fresh array would
+  // re-run the RS effects through rsData and hide a missing chartBuild dep.
+  const blueDots = ['2026-01-07'];
+  const inTheme = (mode, priceData = bars) => (
     <ThemeProvider theme={createTheme(getDesignTokens(mode))}>
-      {chart({ symbol: 'AAA', priceData: bars, rsLineData: rsLine, blueDots: ['2026-01-07'] })}
+      {chart({ symbol: 'AAA', priceData, rsLineData: rsLine, blueDots })}
     </ThemeProvider>
   );
 
@@ -132,5 +135,14 @@ describe('CandlestickChart rebuild on a theme toggle', () => {
     rerender(inTheme('light'));
 
     expect(charts[1].range).toEqual({ from: 1, to: 2 });
+  });
+
+  it('drops the kept range when the rebuilt chart has no candles', () => {
+    const { rerender } = renderWithProviders(inTheme('dark'));
+    charts[0].range = { from: 1, to: 2 };
+    rerender(inTheme('light', []));
+    rerender(inTheme('light'));
+
+    expect(charts[1].range).not.toEqual({ from: 1, to: 2 });
   });
 });
