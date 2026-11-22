@@ -10,6 +10,7 @@ from app.services.benchmark_cache_service import BenchmarkFallbackPolicy, Benchm
 from app.services.market_exposure_service import (
     CAP_BELOW_200DMA,
     CAP_HEAVY_DISTRIBUTION,
+    FTD_FLOOR,
     backfill_exposure,
     build_exposure_payload,
     compute_and_store,
@@ -605,6 +606,74 @@ def test_compute_and_store_round_trip_validates_against_schema(monkeypatch):
         assert payload["history"][-1]["date"] == as_of.isoformat()
     finally:
         db.close()
+
+
+_FTD_BAR = 78
+
+
+def _ftd_then_hold(sessions_after_ftd, tail=()):
+    """Flat at 100, a slide to 85, an FTD on rally day 4, then a hold at 87.
+
+    The hold sits far enough under the 50-DMA that the core score is 38,
+    below FTD_FLOOR, so only the floor can lift it.
+    """
+    closes = (
+        [100.0] * 60
+        + [float(c) for c in range(99, 84, -1)]
+        + [85.3, 85.5, 85.6, 87.0]
+        + [87.0] * sessions_after_ftd
+        + list(tail)
+    )
+    volumes = [1000] * len(closes)
+    volumes[_FTD_BAR] = 1500
+    return _df(closes, volumes)
+
+
+def _compute(df, monkeypatch, fn=svc.compute_exposure):
+    from app.database import SessionLocal
+
+    monkeypatch.setattr(
+        "app.services.benchmark_cache_service.BenchmarkCacheService",
+        _fake_benchmark_factory(df),
+    )
+    db = SessionLocal()
+    try:
+        return fn("US", df.index[-1].date(), db)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("sessions_after_ftd, floored", [(14, True), (15, False)])
+def test_ftd_floor_applies_for_15_sessions_after_the_ftd(monkeypatch, sessions_after_ftd, floored):
+    df = _ftd_then_hold(sessions_after_ftd)
+    result = _compute(df, monkeypatch)
+
+    ftd_date = df.index[_FTD_BAR].date()
+    assert (result["cycle_state"], result["follow_through_day"], result["follow_through_date"]) == (
+        "uptrend", True, ftd_date,
+    )
+    assert result["benchmark_price"] < result["benchmark_ma50"]
+    assert ("ftd_floor" in result["components"]) is floored
+    assert result["exposure_score"] == (FTD_FLOOR if floored else 38.0)
+
+
+def test_failed_ftd_drops_the_floor_and_is_stored(monkeypatch):
+    from app.database import SessionLocal
+    from app.models.market_exposure import MarketExposure
+
+    df = _ftd_then_hold(3, tail=[84.5])
+    as_of = df.index[-1].date()
+    result = _compute(df, monkeypatch, fn=compute_and_store)
+
+    assert "ftd_floor" not in result["components"]
+    db = SessionLocal()
+    try:
+        row = db.query(MarketExposure).filter(MarketExposure.date == as_of).one()
+        stored = (row.cycle_state, row.rally_day, row.rally_low_date, row.failed_ftd_date,
+                  row.follow_through_day, row.follow_through_date)
+    finally:
+        db.close()
+    assert stored == ("correction", None, as_of, as_of, False, None)
 
 
 def test_ensure_exposure_history_seeds_then_skips(monkeypatch):
