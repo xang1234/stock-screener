@@ -1,9 +1,11 @@
-"""Unit tests for the market exposure rubric and DB round-trip."""
+"""Unit tests for the market exposure rubric, the market cycle and DB round-trip."""
 from datetime import date
 
 import pandas as pd
+import pytest
 
 import app.services.market_exposure_service as svc
+from app.domain.markets.market_cycle import CycleState, MarketCycle, market_cycle
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy, BenchmarkResolution
 from app.services.market_exposure_service import (
     CAP_BELOW_200DMA,
@@ -37,6 +39,99 @@ def _df(closes, volumes, end=None):
         {"Open": closes, "High": closes, "Low": closes, "Close": closes, "Volume": volumes},
         index=idx,
     )
+
+
+UP, CORR, ATT = CycleState.UPTREND, CycleState.CORRECTION, CycleState.RALLY_ATTEMPT
+
+
+def _bars(closes, lows=None, volumes=None):
+    """Daily bars from 2024-01-01; Low defaults to Close and Volume to 1000."""
+    return pd.DataFrame(
+        {
+            "Close": closes,
+            "Low": closes if lows is None else lows,
+            "Volume": [1000] * len(closes) if volumes is None else volumes,
+        },
+        index=pd.date_range("2024-01-01", periods=len(closes), freq="D"),
+    )
+
+
+def _day(i):
+    return date(2024, 1, 1 + i)
+
+
+# Peak 100, correction on bar 1 (rally low 91), then three rally days.
+_ATTEMPT_TO_DAY_3 = [100, 91, 91.5, 91.6, 91.7]
+
+
+def test_cycle_enters_correction_on_a_close_8pct_below_the_highest_close():
+    # 110 * 0.92 = 101.2: 101.3 holds, 101.1 enters at that bar's intraday low.
+    cycles = market_cycle(_bars([100, 110, 101.3, 101.1], lows=[99, 109, 101, 100.5]))
+    assert [c.state for c in cycles] == [UP, UP, UP, CORR]
+    assert cycles[3] == MarketCycle(CORR, rally_low=100.5, rally_low_date=_day(3))
+
+
+def test_cycle_undercut_in_correction_moves_the_rally_low():
+    cycles = market_cycle(_bars([100, 91, 90, 89.5, 89.4], lows=[100, 91, 90, 89, 89.2]))
+    assert [c.state for c in cycles] == [UP, CORR, CORR, CORR, CORR]
+    assert [(c.rally_low, c.rally_low_date) for c in cycles[1:]] == [
+        (91, _day(1)), (90, _day(2)), (89, _day(3)), (89, _day(3)),
+    ]
+
+
+def test_cycle_rally_day_1_is_the_first_up_close_and_every_later_session_counts():
+    cycles = market_cycle(_bars([100, 91, 91.5, 91.2, 91.3]))
+    assert [c.state for c in cycles] == [UP, CORR, ATT, ATT, ATT]
+    assert [c.rally_day for c in cycles] == [None, None, 1, 2, 3]
+
+
+def test_cycle_undercut_resets_the_rally_attempt():
+    cycles = market_cycle(_bars(_ATTEMPT_TO_DAY_3 + [91.8], lows=_ATTEMPT_TO_DAY_3 + [90.5]))
+    assert cycles[-1] == MarketCycle(CORR, rally_low=90.5, rally_low_date=_day(5))
+
+
+def test_cycle_follow_through_on_day_4_with_gain_and_rising_volume():
+    cycles = market_cycle(_bars(_ATTEMPT_TO_DAY_3 + [93.2], volumes=[1000] * 5 + [1500]))
+    assert cycles[4].rally_day == 3
+    assert cycles[5] == MarketCycle(UP, rally_low=91, rally_low_date=_day(1), ftd_date=_day(5))
+
+
+def test_cycle_no_follow_through_on_day_3():
+    cycles = market_cycle(_bars([100, 91, 91.5, 91.6, 93.1], volumes=[1000] * 4 + [1500]))
+    assert (cycles[-1].state, cycles[-1].rally_day, cycles[-1].ftd_date) == (ATT, 3, None)
+
+
+@pytest.mark.parametrize(
+    "prior_volume, volume",
+    [(1000, 1000), (1000, float("nan")), (float("nan"), 1500), (0, 1500)],
+)
+def test_cycle_flat_missing_or_zero_volume_never_confirms(prior_volume, volume):
+    cycles = market_cycle(_bars(_ATTEMPT_TO_DAY_3 + [93.2], volumes=[1000] * 4 + [prior_volume, volume]))
+    assert (cycles[-1].state, cycles[-1].rally_day, cycles[-1].ftd_date) == (ATT, 4, None)
+
+
+def test_cycle_follow_through_fails_when_a_close_breaks_the_rally_low():
+    closes = _ATTEMPT_TO_DAY_3 + [93.2, 92.0, 90.9, 90.6]
+    lows = _ATTEMPT_TO_DAY_3 + [93.2, 90.8, 90.5, 90.6]
+    cycles = market_cycle(_bars(closes, lows=lows, volumes=[1000] * 5 + [1500, 1000, 1000, 1000]))
+    # An intraday undercut that closes above the rally low still holds.
+    assert cycles[6] == MarketCycle(UP, rally_low=91, rally_low_date=_day(1), ftd_date=_day(5))
+    assert cycles[7] == MarketCycle(CORR, rally_low=90.5, rally_low_date=_day(7), failed_ftd_date=_day(7))
+    assert cycles[8] == MarketCycle(CORR, rally_low=90.5, rally_low_date=_day(7))
+
+
+def test_cycle_rally_attempt_expires_on_day_25_and_the_next_up_close_is_day_1():
+    # Up closes of +0.05 never make a 1.5% day, so the attempt runs out.
+    closes = [100, 91] + [round(91 + 0.05 * k, 2) for k in range(1, 28)]
+    cycles = market_cycle(_bars(closes))
+    assert (cycles[25].state, cycles[25].rally_day) == (ATT, 24)
+    assert cycles[26] == MarketCycle(CORR, rally_low=91, rally_low_date=_day(1))
+    assert (cycles[27].state, cycles[27].rally_day) == (ATT, 1)
+
+
+def test_cycle_recovers_on_a_close_above_the_pre_correction_peak():
+    cycles = market_cycle(_bars([100, 91, 92, 100.5]))
+    assert cycles[3] == MarketCycle(UP)
 
 
 def test_count_distribution_days_counts_down_days_on_higher_volume():
