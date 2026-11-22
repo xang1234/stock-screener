@@ -12,6 +12,7 @@ import app.services.validation_service as validation_service_module
 from app.database import Base
 from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.models.market_exposure import MarketExposure
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import ValidationSourceKind
@@ -52,6 +53,7 @@ def session():
             ThemeCluster.__table__,
             ThemeAlert.__table__,
             BacktestReplayPick.__table__,
+            MarketExposure.__table__,
         ],
     )
     db = TestingSessionLocal()
@@ -62,6 +64,7 @@ def session():
         Base.metadata.drop_all(
             engine,
             tables=[
+                MarketExposure.__table__,
                 BacktestReplayPick.__table__,
                 ThemeAlert.__table__,
                 ThemeCluster.__table__,
@@ -851,7 +854,9 @@ def test_extension_bands_split_at_their_lower_edges_and_skip_an_unknown_extensio
         for pct in (30.0, 10.0, 9.99, 0.0, -0.01, 29.99, None)
     ]
 
-    groups = _service()._build_groups(events, ValidationSourceKind.REPLAY_PICK, recent_entry_sessions=None)
+    groups = _service()._build_groups(
+        events, ValidationSourceKind.REPLAY_PICK, recent_entry_sessions=None, cycle_states={}
+    )
 
     assert [(g.dimension, g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
         ("extension_band", "Extension vs 50DMA", "below 50DMA", 1),
@@ -875,7 +880,9 @@ def test_groups_follow_the_dimension_order_then_each_dimensions_value_order():
         )
     ]
 
-    groups = _service()._build_groups(events, ValidationSourceKind.SCAN_PICK, recent_entry_sessions=None)
+    groups = _service()._build_groups(
+        events, ValidationSourceKind.SCAN_PICK, recent_entry_sessions=None, cycle_states={}
+    )
 
     assert [(g.label, g.value, g.horizons[0].sample_size) for g in groups] == [
         ("Rating", "Strong Buy", 1),
@@ -2346,3 +2353,64 @@ def test_groups_have_no_recent_window_when_the_overview_has_none(session):
 
     assert payload.recent is None
     assert payload.groups and all(group.recent is None for group in payload.groups)
+
+
+def _add_exposure(session, day, cycle_state, *, market="US"):
+    session.add(
+        MarketExposure(
+            market=market, date=day, exposure_score=50.0, stance="neutral", cycle_state=cycle_state
+        )
+    )
+
+
+def test_picks_group_by_the_market_cycle_state_stored_on_their_signal_date(session):
+    _add_exposure(session, date(2026, 1, 5), "correction")
+    _add_exposure(session, date(2026, 1, 6), "uptrend")
+    _add_exposure(session, date(2026, 1, 7), "rally_attempt")
+    _add_exposure(session, date(2026, 1, 8), "uptrend")
+    # Stored before the cycle state was backfilled.
+    _add_exposure(session, date(2026, 1, 9), None)
+    # 2026-01-12 has no US row; another market's row on it must not leak in.
+    _add_exposure(session, date(2026, 1, 12), "correction", market="HK")
+    picks = [
+        ("CORR", date(2026, 1, 5)),
+        ("UP1", date(2026, 1, 6)),
+        ("RALLY", date(2026, 1, 7)),
+        ("UP2", date(2026, 1, 8)),
+        ("NULL", date(2026, 1, 9)),
+        ("NOROW", date(2026, 1, 12)),
+    ]
+
+    payload = _winter_overview(session, picks, {symbol: _winter_bars() for symbol, _ in picks})
+
+    assert [
+        (g.label, g.value, g.horizons[1].sample_size, g.recent.sample_size)
+        for g in payload.groups
+        if g.dimension == "market_state"
+    ] == [
+        ("Market Cycle at Signal", "uptrend", 2, 2),
+        ("Market Cycle at Signal", "rally_attempt", 1, 1),
+        ("Market Cycle at Signal", "correction", 1, 1),
+    ]
+    assert payload.horizons[1].sample_size == 6
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "grouped"),
+    [
+        (ValidationSourceKind.SCAN_PICK, True),
+        (ValidationSourceKind.REPLAY_PICK, True),
+        (ValidationSourceKind.THEME_ALERT, False),
+    ],
+)
+def test_only_pick_sources_group_by_the_market_cycle_state(source_kind, grouped):
+    groups = _service()._build_groups(
+        [_grouped(source_kind, {})],
+        source_kind,
+        recent_entry_sessions=None,
+        cycle_states={FIXED_TODAY: "uptrend"},
+    )
+
+    assert [(g.dimension, g.value) for g in groups] == (
+        [("market_state", "uptrend")] if grouped else []
+    )

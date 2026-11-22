@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from functools import partial
@@ -18,11 +18,13 @@ from sqlalchemy import and_, case, exists, func
 from sqlalchemy.orm import Session
 
 from app.domain.feature_store.models import INT_TO_RATING, RATING_TO_INT
+from app.domain.markets.market_cycle import CycleState
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.scanning.opportunity_state.model import ACTION_STATES
 from app.infra.db.models.backtest_replay import DEFINITION_VERSION, BacktestReplayPick
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.portability import json_text
+from app.models.market_exposure import MarketExposure
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster
 from app.schemas.validation import (
@@ -81,23 +83,29 @@ NO_EVENTS_REASONS = {
 # theme are left out: they split the picks into too many groups to mean anything.
 GROUP_DIMENSIONS = {
     ValidationSourceKind.SCAN_PICK: (
+        "market_state",
         "rating",
         "stage",
         "action_state",
         "setup_pattern",
         "extension_band",
     ),
-    ValidationSourceKind.REPLAY_PICK: ("stage", "rs_band", "extension_band"),
+    ValidationSourceKind.REPLAY_PICK: ("market_state", "stage", "rs_band", "extension_band"),
     ValidationSourceKind.THEME_ALERT: ("alert_type", "severity", "extension_band"),
 }
 # Labels that title-casing the dimension name gets wrong.
-GROUP_LABELS = {"rs_band": "RS Band", "extension_band": "Extension vs 50DMA"}
+GROUP_LABELS = {
+    "market_state": "Market Cycle at Signal",
+    "rs_band": "RS Band",
+    "extension_band": "Extension vs 50DMA",
+}
 EXTENSION_BANDS = ("below 50DMA", "0-10%", "10-20%", "20-30%", "30%+")
 # Where each band after the first starts, in percent above the 50-day average.
 EXTENSION_BAND_EDGES = (0.0, 10.0, 20.0, 30.0)
 # The value order of each dimension that has one, such as ratings best first.
 GROUP_VALUE_ORDER = {
-    "rating": tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
+    "market_state": (CycleState.UPTREND, CycleState.RALLY_ATTEMPT, CycleState.CORRECTION),
+    "rating":tuple(sorted(RATING_TO_INT, key=RATING_TO_INT.__getitem__, reverse=True)),
     "rs_band": tuple(f"{low}-{low + 9}" for low in range(90, -1, -10)),
     "action_state": tuple(state.value for state in ACTION_STATES),
     "extension_band": EXTENSION_BANDS,
@@ -733,11 +741,37 @@ def _horizon_outcomes(
     return outcomes
 
 
-def _group_values(event: EvaluatedValidationEvent) -> dict[str, Any]:
-    """The event's value for every dimension: its attributes, and the band of its extension."""
+def _cycle_states(
+    db: Session, market: str, events: list[EvaluatedValidationEvent]
+) -> dict[date, str]:
+    """The market's stored cycle state on each date from the first event's signal date to the
+    last. Dates with no row, or a row stored before the state was backfilled, are absent."""
+    if not events:
+        return {}
+    dates = [_event_date(event.raw.event_at) for event in events]
+    return dict(
+        db.query(MarketExposure.date, MarketExposure.cycle_state)
+        .filter(
+            MarketExposure.market == market,
+            MarketExposure.date.between(min(dates), max(dates)),
+            MarketExposure.cycle_state.is_not(None),
+        )
+        .all()
+    )
+
+
+def _group_values(
+    event: EvaluatedValidationEvent, cycle_states: Mapping[date, str]
+) -> dict[str, Any]:
+    """The event's value for every dimension: its attributes, the band of its extension, and
+    the market's cycle state on its signal date."""
     pct = event.pct_above_50dma
     band = None if pct is None else EXTENSION_BANDS[bisect_right(EXTENSION_BAND_EDGES, pct)]
-    return {**event.raw.attributes, "extension_band": band}
+    return {
+        **event.raw.attributes,
+        "extension_band": band,
+        "market_state": cycle_states.get(_event_date(event.raw.event_at)),
+    }
 
 
 def _group_order(dimension: str, value: str) -> tuple[int, float, str]:
@@ -889,6 +923,11 @@ class ValidationService:
                 payload["events"],
                 source_kind,
                 recent_entry_sessions=payload["recent_entry_sessions"],
+                cycle_states=(
+                    _cycle_states(db, market, payload["events"])
+                    if "market_state" in GROUP_DIMENSIONS[source_kind]
+                    else {}
+                ),
             ),
             freshness=self._build_freshness(
                 db,
@@ -1033,9 +1072,10 @@ class ValidationService:
         source_kind: ValidationSourceKind,
         *,
         recent_entry_sessions: list[date] | None,
+        cycle_states: Mapping[date, str],
     ) -> list[ValidationGroup]:
         groups: list[ValidationGroup] = []
-        values = [_group_values(event) for event in events]
+        values = [_group_values(event, cycle_states) for event in events]
         for dimension in GROUP_DIMENSIONS[source_kind]:
             members: dict[str, list[EvaluatedValidationEvent]] = defaultdict(list)
             for event, event_values in zip(events, values):
