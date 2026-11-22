@@ -72,7 +72,26 @@ describe('the Inter font', () => {
   });
 
   it('needs no Google origins in the content security policy', () => {
-    const policy = read('../nginx.conf').match(/Content-Security-Policy "([^"]+)"/)[1];
+    const policy = read('../nginx-security-headers.conf').match(/Content-Security-Policy "([^"]+)"/)[1];
     expect(policy).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/);
+  });
+});
+
+describe('nginx security headers', () => {
+  // Any add_header in a location drops every server-level add_header, so a
+  // block that sets its own must include the security headers again.
+  const conf = read('../nginx.conf');
+  const include = 'include /etc/nginx/snippets/security-headers.conf;';
+  const locations = [...conf.matchAll(/\n\s*location ([^{]+)\{([^}]*)\}/g)];
+
+  it('are set at server level from the snippet the image installs', () => {
+    expect(conf.split(/\n\s*location /)[0]).toContain(include);
+    expect(read('../Dockerfile')).toContain('nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf');
+    expect(read('../nginx-security-headers.conf')).toMatch(/add_header Content-Security-Policy .* always;/);
+    expect(locations.length).toBeGreaterThan(3);
+  });
+
+  it.each(locations.map((m) => [m[1].trim(), m[2]]))('%s keeps them', (_, body) => {
+    if (/add_header/.test(body)) expect(body).toContain(include);
   });
 });
