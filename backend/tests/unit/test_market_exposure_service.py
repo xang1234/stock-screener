@@ -1036,6 +1036,13 @@ def test_breadth_divergence_is_unknown_not_false_when_an_input_is_missing(exposu
     assert _payload(*rows)["breadth_divergence"]["flagged"] is None
 
 
+def test_breadth_divergence_counts_an_index_exactly_3pct_off_its_high_as_near():
+    from app.services.market_exposure_service import divergence_flagged
+
+    exactly_3pct_off = (97.0 / 100.0 - 1) * 100  # -3.0000000000000027 in floating point
+    assert divergence_flagged(exactly_3pct_off, 34.0, 10, 5) is True
+
+
 @pytest.mark.parametrize("above_sma200_pct, flagged", [(60.0, None), (34.0, True)])
 def test_breadth_divergence_treats_highs_and_lows_without_eligible_stocks_as_unknown(above_sma200_pct, flagged):
     day = date(2026, 10, 30)

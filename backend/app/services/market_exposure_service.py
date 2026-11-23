@@ -84,6 +84,7 @@ CYCLE_LOOKBACK_SESSIONS = 252
 # their 200-day, or new lows outnumber new highs.
 DIVERGENCE_NEAR_HIGH_PCT = -3.0
 DIVERGENCE_ABOVE_200_PCT = 50.0
+_OFF_HIGH_TOLERANCE = 1e-9  # an exact 3% computes as -3.0000000000000027
 
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
@@ -454,7 +455,7 @@ def divergence_flagged(
     """None when the inputs can't decide it: unknown is never reported as healthy."""
     if index_off_high_pct is None:
         return None
-    if index_off_high_pct < DIVERGENCE_NEAR_HIGH_PCT:
+    if index_off_high_pct < DIVERGENCE_NEAR_HIGH_PCT - _OFF_HIGH_TOLERANCE:
         return False
     weak_200 = None if above_sma200_pct is None else above_sma200_pct < DIVERGENCE_ABOVE_200_PCT
     lows_lead = None if None in (new_highs, new_lows) else new_lows > new_highs
