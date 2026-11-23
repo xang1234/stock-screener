@@ -35,7 +35,9 @@ from app.services.static_breadth_history_coordinator import (
     STATIC_BREADTH_RATIO_RECOMPUTE_TRADING_DAYS,
 )
 
-SCHEMA = "static-breadth-history-v1"
+# Bump to discard cached rows after a formula fix that keeps the live revision
+# (v2: a missing High makes the 52-week high unknown).
+SCHEMA = "static-breadth-history-v2"
 RECOMPUTED_TAIL_SESSIONS = max(
     CONTRIBUTOR_RETENTION_SESSIONS, STATIC_BREADTH_RATIO_RECOMPUTE_TRADING_DAYS
 )

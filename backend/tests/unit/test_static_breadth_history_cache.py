@@ -73,6 +73,8 @@ def test_round_trip_restores_all_but_the_recomputed_tail(make_session):
     ("patch", "reason"),
     [
         ({"market": "JP"}, "incompatible_bundle"),
+        # v1 bundles hold 52-week-high counts from before the missing-High fix.
+        ({"schema": "static-breadth-history-v1"}, "incompatible_bundle"),
         ({"calculation_revision": CURRENT_BREADTH_CALCULATION_REVISION + 1}, "calculation_revision_changed"),
     ],
 )
