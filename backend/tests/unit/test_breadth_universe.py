@@ -75,6 +75,8 @@ def test_metric_eligibility_is_independent_and_stockbee_requires_common_stock():
                 "adjusted_low": 98.0,
                 "previous_251_high": float("nan"),
                 "previous_251_low": float("nan"),
+                "sma200": float("nan"),
+                "high_252": float("nan"),
             }
         ],
         index=[calculation_date],
@@ -146,6 +148,8 @@ def test_stockbee_signature_contains_only_liquid_broad_members():
                 "adjusted_low": 98.0,
                 "previous_251_high": float("nan"),
                 "previous_251_low": float("nan"),
+                "sma200": float("nan"),
+                "high_252": float("nan"),
             }
         ],
         index=[pd.Timestamp(calculation_date)],

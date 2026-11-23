@@ -70,6 +70,11 @@ class BreadthResponse(BaseModel):
     t2108_count: Optional[int] = Field(None, description="Stocks above their adjusted 40-day moving average")
     t2108_pct: Optional[float] = Field(None, description="T2108 percentage of its eligible universe")
     atr_10x_extension_count: Optional[int] = Field(None, description="Stocks extended at least 10 ATR from SMA50 (screenshot-derived)")
+    above_sma200_count: Optional[int] = Field(None, description="Stocks above their adjusted 200-day moving average")
+    above_sma200_pct: Optional[float] = Field(None, description="Percent of the 200-day eligible universe above its 200-day average")
+    down_20pct_from_high_count: Optional[int] = Field(None, description="Stocks at least 20% below their adjusted 252-session high")
+    down_20pct_from_high_pct: Optional[float] = Field(None, description="Percent of the off-high eligible universe at least 20% below its high")
+    up_4pct_near_high_count: Optional[int] = Field(None, description="Stocks up 4%+ that close within 15% of their 252-session high")
 
     # Metric-specific eligible denominators
     broad_universe_count: Optional[int] = Field(None, description="Active point-in-time common-stock universe")
@@ -81,6 +86,8 @@ class BreadthResponse(BaseModel):
     t2108_eligible_count: Optional[int] = None
     high_low_52week_eligible_count: Optional[int] = None
     atr_extension_eligible_count: Optional[int] = None
+    sma200_eligible_count: Optional[int] = None
+    off_high_eligible_count: Optional[int] = None
 
     # Metadata
     total_stocks_scanned: int = Field(

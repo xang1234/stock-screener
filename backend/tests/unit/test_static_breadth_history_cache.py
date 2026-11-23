@@ -85,3 +85,19 @@ def test_incompatible_bundles_restore_nothing(make_session, patch, reason):
     target = make_session()
     assert import_bundle(target, bundle, market="US") == {"status": "skipped", "reason": reason}
     assert target.query(MarketBreadth).count() == 0
+
+
+def test_bundle_from_before_a_column_was_added_restores_nothing(make_session):
+    source = make_session()
+    source.add_all([_row(day) for day in range(30)])
+    source.commit()
+    bundle = export_bundle(source, market="US")
+    for row in bundle["rows"]:
+        del row["above_sma200_pct"]
+
+    target = make_session()
+    assert import_bundle(target, bundle, market="US") == {
+        "status": "skipped",
+        "reason": "columns_changed",
+    }
+    assert target.query(MarketBreadth).count() == 0

@@ -74,6 +74,10 @@ def import_bundle(db: Session, bundle: dict[str, Any], *, market: str) -> dict[s
     if bundle.get("calculation_revision") != CURRENT_BREADTH_CALCULATION_REVISION:
         return {"status": "skipped", "reason": "calculation_revision_changed"}
     rows = bundle.get("rows") or []
+    # A row without a current column would restore it as NULL and never be
+    # recomputed, so a bundle from before a column was added is discarded.
+    if any(not set(_COLUMNS) <= row.keys() for row in rows):
+        return {"status": "skipped", "reason": "columns_changed"}
     dates = sorted({row["date"] for row in rows})
     reusable = set(dates[:-RECOMPUTED_TAIL_SESSIONS])
     existing = {

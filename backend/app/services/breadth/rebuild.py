@@ -42,9 +42,11 @@ from .contributors import (
     reconcile_contributor_counts,
 )
 from .types import (
+    BREADTH_SHARE_FIELDS,
     CURRENT_BREADTH_CALCULATION_REVISION,
     BreadthContributorSnapshotResult,
     BreadthDailyResult,
+    share_pct,
 )
 
 TARGET_TABLE = "market_breadth"
@@ -527,6 +529,8 @@ class BreadthRebuildService:
                 "t2108_eligible_count",
                 "high_low_52week_eligible_count",
                 "atr_extension_eligible_count",
+                "sma200_eligible_count",
+                "off_high_eligible_count",
             )
             if broad is not None:
                 for eligible_name in eligible_names:
@@ -551,7 +555,10 @@ class BreadthRebuildService:
                 ("stocks_down_13pct_34days", "stockbee_34day_eligible_count"),
                 ("stocks_up_25pct_quarter", "stockbee_quarter_eligible_count"),
                 ("stocks_down_25pct_quarter", "stockbee_quarter_eligible_count"),
-                ("t2108_count", "t2108_eligible_count"),
+                *(
+                    (count_name, eligible_name)
+                    for _, count_name, eligible_name in BREADTH_SHARE_FIELDS
+                ),
             )
             for count_name, eligible_name in pairs:
                 count = row[count_name]
@@ -560,21 +567,13 @@ class BreadthRebuildService:
                     errors.append(
                         f"count_exceeds_eligibility:{count_name}:{key[0]}:{key[1]}"
                     )
-            for ratio_name in ("ratio_5day", "ratio_10day", "t2108_pct"):
+            for ratio_name in ("ratio_5day", "ratio_10day"):
                 value = row[ratio_name]
                 if value is not None and not math.isfinite(float(value)):
                     errors.append(f"non_finite:{ratio_name}:{key[0]}:{key[1]}")
-            t2108_pct = row["t2108_pct"]
-            if t2108_pct is not None and not 0 <= float(t2108_pct) <= 100:
-                errors.append(f"invalid_t2108_pct:{key[0]}:{key[1]}")
-            t2108_eligible = row["t2108_eligible_count"]
-            expected_t2108_pct = (
-                round(float(row["t2108_count"]) / t2108_eligible * 100.0, 2)
-                if t2108_eligible
-                else None
-            )
-            if t2108_pct != expected_t2108_pct:
-                errors.append(f"t2108_reconciliation:{key[0]}:{key[1]}")
+            for pct_name, count_name, eligible_name in BREADTH_SHARE_FIELDS:
+                if row[pct_name] != share_pct(row[count_name], row[eligible_name]):
+                    errors.append(f"pct_reconciliation:{pct_name}:{key[0]}:{key[1]}")
             mutually_exclusive_pairs = (
                 (
                     "stocks_up_4pct",
@@ -598,6 +597,7 @@ class BreadthRebuildService:
                 ("new_high_52week_count", "high_low_52week_eligible_count"),
                 ("new_low_52week_count", "high_low_52week_eligible_count"),
                 ("atr_10x_extension_count", "atr_extension_eligible_count"),
+                ("up_4pct_near_high_count", "stocks_up_4pct"),
             ):
                 if int(row[count_name] or 0) > int(row[eligible_name] or 0):
                     errors.append(

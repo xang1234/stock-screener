@@ -180,8 +180,8 @@ class TestSnapshotCacheHelpers:
 
     def test_cache_key_is_scoped_to_market_and_scan_run(self):
         key = daily_snapshot_cache_key("us", "scan-abc")
-        assert DAILY_SNAPSHOT_SCHEMA_VERSION == 5
-        assert key == "daily_snapshot:v5:US:scan-abc"
+        assert DAILY_SNAPSHOT_SCHEMA_VERSION == 6
+        assert key == "daily_snapshot:v6:US:scan-abc"
         # A newly published run switches the key, invalidating the old entry.
         assert daily_snapshot_cache_key("us", "scan-def") != key
 
@@ -191,7 +191,7 @@ class TestSnapshotCacheHelpers:
         before = daily_snapshot_cache_key("us", "scan-abc", derived_outputs="b=none;e=none")
         after = daily_snapshot_cache_key("us", "scan-abc", derived_outputs="b=2026-09-25;e=none")
         assert before != after
-        assert before.startswith("daily_snapshot:v5:US:scan-abc:")
+        assert before.startswith("daily_snapshot:v6:US:scan-abc:")
 
     def test_derived_outputs_version_tracks_latest_breadth_and_exposure(self):
         from sqlalchemy import create_engine
@@ -230,7 +230,7 @@ class TestSnapshotCacheHelpers:
 
     def test_cache_key_without_scan(self):
         key = daily_snapshot_cache_key("hk", None)
-        assert key == "daily_snapshot:v5:HK:no-scan"
+        assert key == "daily_snapshot:v6:HK:no-scan"
 
     def test_etag_is_stable_and_weak(self):
         first = daily_snapshot_etag('{"a":1}')

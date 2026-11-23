@@ -190,6 +190,29 @@ class MarketHealthExposureHistoryPoint(BaseModel):
     failed_ftd: bool = False
 
 
+class MarketHealthBreadthDivergence(BaseModel):
+    """Index near its high with weak participation; ``flagged`` None = unknown."""
+    model_config = ConfigDict(extra="forbid")
+
+    index_off_high_pct: Optional[float] = None
+    above_sma200_pct: Optional[float] = None
+    new_high_52week_count: Optional[int] = None
+    new_low_52week_count: Optional[int] = None
+    flagged: Optional[bool] = None
+
+
+class MarketHealthFtdQuality(BaseModel):
+    """How many of the FTD session's 4% gainers closed near their highs."""
+    model_config = ConfigDict(extra="forbid")
+
+    ftd_date: str
+    stocks_up_4pct: Optional[int] = None
+    up_4pct_near_high_count: Optional[int] = None
+    near_high_share: Optional[float] = None
+    new_high_52week_count: Optional[int] = None
+    new_low_52week_count: Optional[int] = None
+
+
 class MarketHealthExposure(BaseModel):
     """0-100 recommended-exposure score + the inputs that justify it."""
     model_config = ConfigDict(extra="forbid")
@@ -207,6 +230,8 @@ class MarketHealthExposure(BaseModel):
     vix: Optional[float] = None
     benchmark_symbol: Optional[str] = None
     components: Optional[Dict[str, float]] = None
+    breadth_divergence: Optional[MarketHealthBreadthDivergence] = None
+    ftd_quality: Optional[MarketHealthFtdQuality] = None
     history: List[MarketHealthExposureHistoryPoint]
 
 

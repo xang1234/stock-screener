@@ -79,6 +79,13 @@ FTD_FLOOR_SESSIONS = 15
 # later backfill then agree whenever the frame holds this many sessions.
 CYCLE_LOOKBACK_SESSIONS = 252
 
+# --- Breadth context (shown beside the score, never a score input) ----------
+# Index within 3% of its cycle high while under half the stocks sit above
+# their 200-day, or new lows outnumber new highs.
+DIVERGENCE_NEAR_HIGH_PCT = -3.0
+DIVERGENCE_ABOVE_200_PCT = 50.0
+_OFF_HIGH_TOLERANCE = 1e-9  # an exact 3% computes as -3.0000000000000027
+
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
 EXPOSURE_BACKFILL_DAYS = 220     # trailing calendar days to seed (~150 sessions)
@@ -245,6 +252,15 @@ def _vix_on_date(db: Session, as_of_date: date) -> Optional[float]:
     return _f(row.close) if row is not None else None
 
 
+def _breadth_on_date(db: Session, market: str, day: date) -> Optional[MarketBreadth]:
+    """The breadth row for exactly ``day``; never an earlier session's."""
+    return (
+        breadth_query(db, market=market)
+        .filter(MarketBreadth.market == market, MarketBreadth.date == day)
+        .first()
+    )
+
+
 def _net_4pct_on_date(db: Session, market: str, as_of_date: date) -> Optional[int]:
     """Net 4% movers for exactly ``as_of_date`` (None if no breadth row that day).
 
@@ -252,11 +268,7 @@ def _net_4pct_on_date(db: Session, market: str, as_of_date: date) -> Optional[in
     earlier breadth regime — otherwise an exposure backfill run without a
     matching breadth backfill stamps every historical row with today's breadth.
     """
-    row = (
-        breadth_query(db, market=market)
-        .filter(MarketBreadth.market == market, MarketBreadth.date == as_of_date)
-        .first()
-    )
+    row = _breadth_on_date(db, market, as_of_date)
     if row is None:
         return None
     return int((row.stocks_up_4pct or 0) - (row.stocks_down_4pct or 0))
@@ -313,6 +325,8 @@ def compute_exposure(
     trend = compute_trend(df)
     dist = count_distribution_days(df)
     window = df.tail(CYCLE_LOOKBACK_SESSIONS)
+    cycle_high = float(window["Close"].max())
+    index_off_high_pct = (float(window["Close"].iloc[-1]) / cycle_high - 1) * 100
     cycle = market_cycle([
         CycleBar(*bar)
         for bar in zip(
@@ -342,6 +356,7 @@ def compute_exposure(
         "benchmark_ma50": trend["ma50"],
         "benchmark_ma200": trend["ma200"],
         "trend": trend["trend"],
+        "index_off_high_pct": index_off_high_pct,
         "distribution_day_count": dist,
         "follow_through_day": cycle.ftd_date is not None,
         "follow_through_date": cycle.ftd_date,
@@ -431,6 +446,69 @@ def refresh_market_exposure_for_date(
     return {**result, "history_seed": history_seed}
 
 
+def divergence_flagged(
+    index_off_high_pct: Optional[float],
+    above_sma200_pct: Optional[float],
+    new_highs: Optional[int],
+    new_lows: Optional[int],
+) -> Optional[bool]:
+    """None when the inputs can't decide it: unknown is never reported as healthy."""
+    if index_off_high_pct is None:
+        return None
+    if index_off_high_pct < DIVERGENCE_NEAR_HIGH_PCT - _OFF_HIGH_TOLERANCE:
+        return False
+    weak_200 = None if above_sma200_pct is None else above_sma200_pct < DIVERGENCE_ABOVE_200_PCT
+    lows_lead = None if None in (new_highs, new_lows) else new_lows > new_highs
+    if weak_200 or lows_lead:
+        return True
+    return None if None in (weak_200, lows_lead) else False
+
+
+def near_high_share(near_high: Optional[int], gainers: Optional[int]) -> Optional[float]:
+    """Share of 4% gainers near their highs; None without gainers."""
+    if near_high is None or not gainers:
+        return None
+    return near_high / gainers
+
+
+def _new_highs_lows(row: Optional[MarketBreadth]) -> tuple[Optional[int], Optional[int]]:
+    """New 52-week highs and lows; unknown when no stock had a year of history."""
+    if row is None or row.high_low_52week_eligible_count == 0:
+        return None, None
+    return row.new_high_52week_count, row.new_low_52week_count
+
+
+def _breadth_divergence(db: Session, market: str, latest: MarketExposure) -> dict:
+    row = _breadth_on_date(db, market, latest.date)
+    above = getattr(row, "above_sma200_pct", None)
+    highs, lows = _new_highs_lows(row)
+    return {
+        "index_off_high_pct": latest.index_off_high_pct,
+        "above_sma200_pct": above,
+        "new_high_52week_count": highs,
+        "new_low_52week_count": lows,
+        "flagged": divergence_flagged(latest.index_off_high_pct, above, highs, lows),
+    }
+
+
+def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[dict]:
+    # Rows stored before the market cycle carry a looser follow_through_date.
+    if not (latest.cycle_state and latest.follow_through_date):
+        return None
+    row = _breadth_on_date(db, market, latest.follow_through_date)
+    gainers = getattr(row, "stocks_up_4pct", None)
+    near_high = getattr(row, "up_4pct_near_high_count", None)
+    highs, lows = _new_highs_lows(row)
+    return {
+        "ftd_date": latest.follow_through_date.isoformat(),
+        "stocks_up_4pct": gainers,
+        "up_4pct_near_high_count": near_high,
+        "near_high_share": near_high_share(near_high, gainers),
+        "new_high_52week_count": highs,
+        "new_low_52week_count": lows,
+    }
+
+
 def build_exposure_payload(
     db: Session,
     market: str,
@@ -500,6 +578,8 @@ def build_exposure_payload(
         "vix": latest.vix,
         "benchmark_symbol": latest.benchmark_symbol,
         "components": latest.components,
+        "breadth_divergence": _breadth_divergence(db, market, latest),
+        "ftd_quality": _ftd_quality(db, market, latest),
         "history": history,
     }
 

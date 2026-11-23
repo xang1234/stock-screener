@@ -72,3 +72,37 @@ def test_shared_breadth_migration_follows_current_head():
 
     assert module.revision == "20260825_0031"
     assert module.down_revision == "20260823_0030"
+
+
+PARTICIPATION_COLUMNS = {
+    "above_sma200_count": Integer,
+    "above_sma200_pct": Float,
+    "down_20pct_from_high_count": Integer,
+    "down_20pct_from_high_pct": Float,
+    "up_4pct_near_high_count": Integer,
+    "sma200_eligible_count": Integer,
+    "off_high_eligible_count": Integer,
+}
+
+
+def test_market_breadth_has_nullable_participation_columns():
+    columns = MarketBreadth.__table__.c
+
+    for name, column_type in PARTICIPATION_COLUMNS.items():
+        assert isinstance(columns[name].type, column_type)
+        assert columns[name].nullable is True
+
+
+def test_participation_migration_adds_the_model_columns_after_current_head():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "alembic/versions/20261123_0077_breadth_participation_columns.py"
+    )
+    spec = spec_from_file_location("breadth_participation_migration", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert module.revision == "20261123_0077"
+    assert module.down_revision == "20261122_0076"
+    assert {name for name, _ in module._COLUMNS} == set(PARTICIPATION_COLUMNS)

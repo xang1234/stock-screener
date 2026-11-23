@@ -86,6 +86,38 @@ describe('BreadthContextStrip', () => {
     expect(screen.getAllByText('0 (0.0%)')).toHaveLength(2);
   });
 
+  it('shows participation as a percent of its own eligible universe', () => {
+    renderWithProviders(
+      <BreadthContextStrip
+        row={{
+          ...row,
+          above_sma200_count: 34,
+          above_sma200_pct: 34,
+          sma200_eligible_count: 100,
+          down_20pct_from_high_count: 45,
+          down_20pct_from_high_pct: 45,
+          off_high_eligible_count: 100,
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('breadth-context-above_sma200_pct')).toHaveTextContent(
+      '34.00% (34 / 100)',
+    );
+    expect(
+      screen.getByTestId('breadth-context-down_20pct_from_high_pct'),
+    ).toHaveTextContent('45.00% (45 / 100)');
+  });
+
+  it('shows an em dash for participation on rows stored before it existed', () => {
+    renderWithProviders(<BreadthContextStrip row={row} />);
+
+    expect(screen.getByTestId('breadth-context-above_sma200_pct')).toHaveTextContent('—');
+    expect(
+      screen.getByTestId('breadth-context-down_20pct_from_high_pct'),
+    ).toHaveTextContent('—');
+  });
+
   it('labels StockBee and screenshot-derived formulas explicitly', () => {
     expect(breadthMetricDefinitions.t2108_pct.formulaOrigin).toBe('StockBee');
     expect(breadthMetricDefinitions.atr_10x_extension_count.formulaOrigin).toBe(

@@ -59,6 +59,44 @@ describe('MarketHealthExposure', () => {
     expect(screen.queryByText('○ failed FTD')).not.toBeInTheDocument();
   });
 
+  const DIVERGENCE = {
+    index_off_high_pct: -1.2,
+    above_sma200_pct: 34,
+    new_high_52week_count: 40,
+    new_low_52week_count: 12,
+    flagged: true,
+  };
+
+  it('states a flagged breadth divergence in one line', () => {
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, breadth_divergence: DIVERGENCE }} />);
+    expect(screen.getByText('Divergence: index 1.2% off high, 34% of stocks above 200-day')).toBeInTheDocument();
+  });
+
+  it('names new lows outnumbering new highs when that drives the divergence', () => {
+    const divergence = { ...DIVERGENCE, above_sma200_pct: 62, new_high_52week_count: 12, new_low_52week_count: 40 };
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, breadth_divergence: divergence }} />);
+    expect(screen.getByText(
+      'Divergence: index 1.2% off high, 62% of stocks above 200-day, 40 new lows vs 12 new highs',
+    )).toBeInTheDocument();
+  });
+
+  it.each([false, null])('says nothing about divergence when the flag is %s', (flagged) => {
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, breadth_divergence: { ...DIVERGENCE, flagged } }} />);
+    expect(screen.queryByText(/Divergence/)).not.toBeInTheDocument();
+  });
+
+  it('reads FTD quality as the share of 4% gainers near their highs', () => {
+    const ftdQuality = { ftd_date: '2026-11-11', stocks_up_4pct: 137, up_4pct_near_high_count: 52, near_high_share: 52 / 137 };
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, ftd_quality: ftdQuality }} />);
+    expect(screen.getByText('FTD 11/11: 38% of 4% gainers near highs (52 of 137)')).toBeInTheDocument();
+  });
+
+  it('omits the FTD line when the share is unknown', () => {
+    const ftdQuality = { ftd_date: '2026-11-11', stocks_up_4pct: null, up_4pct_near_high_count: null, near_high_share: null };
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, ftd_quality: ftdQuality }} />);
+    expect(screen.queryByText(/^FTD /)).not.toBeInTheDocument();
+  });
+
   it('renders a placeholder when there is no exposure data', () => {
     renderWithProviders(<MarketHealthExposure exposure={null} />);
     expect(screen.getByText(/No exposure data yet/i)).toBeInTheDocument();

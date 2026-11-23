@@ -34,7 +34,7 @@ const formatValue = (row, metric) => {
   const eligibleField = breadthMetricDefinitions[metric]?.eligibleField;
   const eligibleValue = eligibleField ? row?.[eligibleField] : null;
   if (eligibleValue != null && Number(eligibleValue) <= 0) return '—';
-  if (metric === 't2108_pct') return `${Number(value).toFixed(2)}%`;
+  if (breadthMetricDefinitions[metric]?.countField) return `${Number(value).toFixed(2)}%`;
   return value;
 };
 
@@ -67,6 +67,8 @@ const metricHeaderLines = {
   stocks_down_13pct_34days: ['Down 13%+', '34 Days'],
   atr_10x_extension_count: ['10x ATR', 'Extension'],
   t2108_pct: ['T2108', '> 40D SMA'],
+  above_sma200_pct: ['% Above', '200D SMA'],
+  down_20pct_from_high_pct: ['20%+ Off', '52W High'],
   broad_universe_count: ['Broad Universe'],
 };
 

@@ -251,3 +251,29 @@ def test_contributor_only_replacement_rejects_equal_count_identity_drift():
         row.symbol for row in db.query(MarketBreadthContributor).all()
     }
     assert stored_symbols == {"AAA", "BBB", "CCC", "DDD"}
+
+
+def test_persistence_stores_participation_fields():
+    _engine, db = _database()
+    result = _result()
+    result = replace(
+        result,
+        values=replace(
+            result.values,
+            above_sma200_count=4,
+            above_sma200_pct=40.0,
+            down_20pct_from_high_count=3,
+            down_20pct_from_high_pct=30.0,
+            up_4pct_near_high_count=2,
+        ),
+        eligibility=replace(
+            result.eligibility, sma200_eligible_count=10, off_high_eligible_count=10
+        ),
+    )
+
+    BreadthPersistence(db).upsert_daily(result, duration_seconds=None)
+
+    row = db.query(MarketBreadth).one()
+    assert (row.above_sma200_pct, row.down_20pct_from_high_pct) == (40.0, 30.0)
+    assert (row.sma200_eligible_count, row.off_high_eligible_count) == (10, 10)
+    assert row.up_4pct_near_high_count == 2

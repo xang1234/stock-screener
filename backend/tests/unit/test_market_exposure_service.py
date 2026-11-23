@@ -959,3 +959,205 @@ def test_compute_and_store_skips_write_when_no_benchmark(monkeypatch):
         assert db.query(MarketExposure).count() == 0
     finally:
         db.close()
+
+
+def _breadth(day, **values):
+    from app.models.market_breadth import MarketBreadth
+
+    return MarketBreadth(
+        market="US", date=day, stocks_up_4pct=values.pop("stocks_up_4pct", 0),
+        stocks_down_4pct=0, total_stocks_scanned=100, calculation_revision=3, **values,
+    )
+
+
+def _exposure(day, **values):
+    from app.models.market_exposure import MarketExposure
+
+    return MarketExposure(market="US", date=day, exposure_score=70.0, stance="Confirmed Uptrend", **values)
+
+
+def _payload(*rows, as_of_date=None):
+    from app.database import SessionLocal
+    from app.schemas.market_scan import MarketHealthExposure
+
+    db = SessionLocal()
+    try:
+        db.add_all(rows)
+        db.commit()
+        payload = build_exposure_payload(db, "US", as_of_date=as_of_date)
+        MarketHealthExposure.model_validate(payload)
+        return payload
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "index_off_high_pct, above_sma200_pct, highs, lows, flagged",
+    [
+        (-1.2, 34.0, 10, 5, True),    # near the high, most stocks below the 200-day
+        (-3.0, 49.99, 10, 5, True),   # exactly 3% off still counts as near the high
+        (-1.2, 60.0, 5, 10, True),    # new lows outnumber new highs
+        (-1.2, 60.0, 20, 5, False),   # healthy participation
+        (-3.01, 34.0, 5, 10, False),  # index not near its high
+    ],
+)
+def test_breadth_divergence_flags_an_index_near_its_high_with_weak_participation(
+    index_off_high_pct, above_sma200_pct, highs, lows, flagged,
+):
+    day = date(2026, 10, 30)
+    payload = _payload(
+        _exposure(day, index_off_high_pct=index_off_high_pct),
+        _breadth(day, above_sma200_pct=above_sma200_pct, new_high_52week_count=highs, new_low_52week_count=lows),
+    )
+
+    assert payload["breadth_divergence"] == {
+        "index_off_high_pct": index_off_high_pct,
+        "above_sma200_pct": above_sma200_pct,
+        "new_high_52week_count": highs,
+        "new_low_52week_count": lows,
+        "flagged": flagged,
+    }
+
+
+@pytest.mark.parametrize(
+    "exposure_values, breadth_values",
+    [
+        ({"index_off_high_pct": -1.2}, None),  # no breadth row that day
+        ({"index_off_high_pct": -1.2}, {"new_high_52week_count": 10, "new_low_52week_count": 5}),  # row predates participation
+        ({}, {"above_sma200_pct": 34.0, "new_high_52week_count": 5, "new_low_52week_count": 10}),  # exposure predates the column
+    ],
+)
+def test_breadth_divergence_is_unknown_not_false_when_an_input_is_missing(exposure_values, breadth_values):
+    day = date(2026, 10, 30)
+    rows = [_exposure(day, **exposure_values)]
+    if breadth_values is not None:
+        rows.append(_breadth(day, **breadth_values))
+
+    assert _payload(*rows)["breadth_divergence"]["flagged"] is None
+
+
+def test_breadth_divergence_counts_an_index_exactly_3pct_off_its_high_as_near():
+    from app.services.market_exposure_service import divergence_flagged
+
+    exactly_3pct_off = (97.0 / 100.0 - 1) * 100  # -3.0000000000000027 in floating point
+    assert divergence_flagged(exactly_3pct_off, 34.0, 10, 5) is True
+
+
+@pytest.mark.parametrize("above_sma200_pct, flagged", [(60.0, None), (34.0, True)])
+def test_breadth_divergence_treats_highs_and_lows_without_eligible_stocks_as_unknown(above_sma200_pct, flagged):
+    day = date(2026, 10, 30)
+    divergence = _payload(
+        _exposure(day, index_off_high_pct=-1.2),
+        _breadth(
+            day, above_sma200_pct=above_sma200_pct, high_low_52week_eligible_count=0,
+            new_high_52week_count=0, new_low_52week_count=0,
+        ),
+    )["breadth_divergence"]
+
+    assert (divergence["new_high_52week_count"], divergence["new_low_52week_count"]) == (None, None)
+    assert divergence["flagged"] is flagged
+
+
+def test_ftd_quality_reads_the_breadth_row_of_the_ftd_session():
+    ftd, today = date(2026, 11, 11), date(2026, 11, 20)
+    payload = _payload(
+        _exposure(today, cycle_state="uptrend", follow_through_day=True, follow_through_date=ftd),
+        _breadth(ftd, stocks_up_4pct=137, up_4pct_near_high_count=52,
+                 new_high_52week_count=30, new_low_52week_count=12),
+        _breadth(today, stocks_up_4pct=40, up_4pct_near_high_count=35),
+    )
+
+    assert payload["ftd_quality"] == {
+        "ftd_date": "2026-11-11",
+        "stocks_up_4pct": 137,
+        "up_4pct_near_high_count": 52,
+        "near_high_share": pytest.approx(52 / 137),
+        "new_high_52week_count": 30,
+        "new_low_52week_count": 12,
+    }
+
+
+@pytest.mark.parametrize(
+    "ftd_breadth, expected",
+    [
+        ({"stocks_up_4pct": 0, "up_4pct_near_high_count": 0}, (0, 0, None)),
+        (None, (None, None, None)),
+    ],
+)
+def test_ftd_quality_has_no_share_without_gainers_or_a_breadth_row(ftd_breadth, expected):
+    ftd, today = date(2026, 11, 11), date(2026, 11, 20)
+    rows = [_exposure(today, cycle_state="uptrend", follow_through_day=True, follow_through_date=ftd)]
+    if ftd_breadth is not None:
+        rows.append(_breadth(ftd, **ftd_breadth))
+
+    quality = _payload(*rows)["ftd_quality"]
+
+    assert quality["ftd_date"] == "2026-11-11"
+    assert (quality["stocks_up_4pct"], quality["up_4pct_near_high_count"], quality["near_high_share"]) == expected
+
+
+def test_ftd_quality_treats_highs_and_lows_without_eligible_stocks_as_unknown():
+    ftd, today = date(2026, 11, 11), date(2026, 11, 20)
+    quality = _payload(
+        _exposure(today, cycle_state="uptrend", follow_through_day=True, follow_through_date=ftd),
+        _breadth(ftd, stocks_up_4pct=10, up_4pct_near_high_count=4, high_low_52week_eligible_count=0,
+                 new_high_52week_count=0, new_low_52week_count=0),
+    )["ftd_quality"]
+
+    assert (quality["new_high_52week_count"], quality["new_low_52week_count"]) == (None, None)
+    assert quality["near_high_share"] == pytest.approx(0.4)
+
+
+def test_ftd_quality_is_absent_outside_a_confirmed_uptrend():
+    ftd = date(2026, 11, 11)
+    assert _payload(_exposure(date(2026, 11, 20), cycle_state="correction"))["ftd_quality"] is None
+    # A row stored before the market cycle has no cycle_state.
+    legacy = _exposure(ftd, follow_through_day=True, follow_through_date=ftd)
+    assert _payload(legacy, as_of_date=ftd)["ftd_quality"] is None
+
+
+def test_compute_exposure_stores_how_far_the_index_sits_below_its_cycle_high(monkeypatch):
+    closes = [float(c) for c in range(100, 350)] + [340.0]
+    result = _compute(_df(closes, [1000] * len(closes)), monkeypatch)
+
+    # Full precision, so the 3% test isn't decided by rounding; the UI rounds.
+    assert result["index_off_high_pct"] == pytest.approx((340 / 349 - 1) * 100, abs=1e-9)
+    assert type(result["index_off_high_pct"]) is float  # psycopg2 and Celery JSON reject numpy floats
+
+
+def test_breadth_participation_never_moves_the_exposure_score(monkeypatch):
+    from app.database import SessionLocal
+
+    closes = [float(c) for c in range(100, 350)]
+    df = _df(closes, [1000] * len(closes))
+    as_of = df.index[-1].date()
+
+    def score_with(**participation):
+        db = SessionLocal()
+        try:
+            db.query(svc.MarketBreadth).delete()
+            db.add(_breadth(as_of, **participation))
+            db.commit()
+        finally:
+            db.close()
+        return _compute(df, monkeypatch)["exposure_score"]
+
+    assert score_with() == score_with(
+        above_sma200_pct=10.0, down_20pct_from_high_pct=70.0,
+        new_high_52week_count=1, new_low_52week_count=90,
+    )
+
+
+def test_index_off_high_migration_follows_the_participation_migration():
+    from importlib.util import module_from_spec, spec_from_file_location
+    from pathlib import Path
+
+    from app.models.market_exposure import MarketExposure
+
+    path = Path(__file__).resolve().parents[2] / "alembic/versions/20261123_0078_index_off_high_column.py"
+    spec = spec_from_file_location("exposure_off_high", path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert (module.revision, module.down_revision) == ("20261123_0078", "20261123_0077")
+    assert MarketExposure.__table__.c.index_off_high_pct.nullable is True

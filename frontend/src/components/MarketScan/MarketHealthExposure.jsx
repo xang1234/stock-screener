@@ -41,6 +41,25 @@ function cycleLabel({ cycle_state: state, rally_day: rallyDay, follow_through_da
   return null;
 }
 
+// Only a flag the backend set to true is shown; null means unknown, not healthy.
+function divergenceText(divergence) {
+  if (divergence?.flagged !== true) return null;
+  const {
+    index_off_high_pct: offHigh,
+    above_sma200_pct: above200,
+    new_high_52week_count: highs,
+    new_low_52week_count: lows,
+  } = divergence;
+  const lowsLead = lows > highs ? `, ${lows} new lows vs ${highs} new highs` : '';
+  return `Divergence: index ${fmt(Math.abs(offHigh), 1)}% off high, ${fmt(above200, 0)}% of stocks above 200-day${lowsLead}`;
+}
+
+function ftdQualityText(quality) {
+  if (quality?.near_high_share == null) return null;
+  const share = fmt(quality.near_high_share * 100, 0);
+  return `FTD ${format(parseISO(quality.ftd_date), 'M/d')}: ${share}% of 4% gainers near highs (${quality.up_4pct_near_high_count} of ${quality.stocks_up_4pct})`;
+}
+
 function humanize(key) {
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -126,6 +145,10 @@ function MarketHealthExposure({ exposure }) {
   }
 
   const score = exposure.exposure_score;
+  const breadthNotes = [
+    [divergenceText(exposure.breadth_divergence), 'warning.main'],
+    [ftdQualityText(exposure.ftd_quality), 'text.secondary'],
+  ].filter(([text]) => text);
 
   return (
     <Paper elevation={0} sx={{ p: 1.5, mb: 2, border: '1px solid', borderColor: 'divider' }}>
@@ -181,6 +204,12 @@ function MarketHealthExposure({ exposure }) {
               </Fragment>
             ))}
           </Box>
+
+          {breadthNotes.map(([text, color]) => (
+            <Typography key={text} variant="caption" sx={{ display: 'block', mt: 1, color }}>
+              {text}
+            </Typography>
+          ))}
         </Grid>
 
         {/* Right: score-over-time timeline */}

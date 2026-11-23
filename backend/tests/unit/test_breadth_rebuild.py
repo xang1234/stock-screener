@@ -266,3 +266,83 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
         required_as_of_date=calculation_date,
         minimum_rows=1,
     )
+
+
+def _staged_one_symbol_rebuild():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
+            StockUniverse.__table__,
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+        ],
+    )
+    db = sessionmaker(bind=engine)()
+    calculation_date = date(2026, 8, 21)
+    prices = pd.DataFrame(
+        {
+            "Open": 100.0,
+            "High": 101.0,
+            "Low": 99.0,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 1_000_000,
+        },
+        index=pd.bdate_range(end=calculation_date, periods=2),
+    )
+
+    class _UniverseService:
+        def resolve(self, _db, *, market, as_of_date):
+            return PointInTimeUniverse(
+                market=market,
+                as_of_date=as_of_date,
+                symbols=("AAA",),
+                universe_hash=hash_point_in_time_universe_symbols(("AAA",)),
+                members=(PointInTimeUniverseMember(symbol="AAA", currency="USD"),),
+            )
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": prices}
+    service = BreadthRebuildService(
+        db,
+        price_cache=price_cache,
+        universe_service=_UniverseService(),
+        calendar_service=SimpleNamespace(
+            is_trading_day=lambda _market, day: day == calculation_date,
+        ),
+        required_markets=("US",),
+    )
+    service.build(markets=("US",), start_date=calculation_date, end_date=calculation_date)
+    return db, service
+
+
+def test_rebuild_stages_participation_and_accepts_an_empty_sma200_denominator():
+    db, service = _staged_one_symbol_rebuild()
+
+    row = db.execute(
+        text(
+            "SELECT sma200_eligible_count, above_sma200_pct, "
+            "off_high_eligible_count, down_20pct_from_high_pct "
+            "FROM market_breadth_rebuild"
+        )
+    ).one()
+
+    assert tuple(row) == (0, None, 1, 0.0)
+    assert service.validate()["valid"] is True
+
+
+def test_rebuild_validation_rejects_a_participation_pct_that_does_not_reconcile():
+    db, service = _staged_one_symbol_rebuild()
+    db.execute(text("UPDATE market_breadth_rebuild SET down_20pct_from_high_pct = 50.0"))
+
+    result = service.validate()
+
+    assert result["valid"] is False
+    assert any(
+        error.startswith("pct_reconciliation:down_20pct_from_high_pct")
+        for error in result["errors"]
+    )

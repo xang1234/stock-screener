@@ -65,6 +65,8 @@ class SymbolMetricEligibility:
     t2108: bool = False
     high_low_52week: bool = False
     atr_extension: bool = False
+    sma200: bool = False
+    off_high: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +89,9 @@ class SymbolBreadthSignals:
     new_low_52week: bool = False
     t2108_above: bool = False
     atr_10x_extension: bool = False
+    above_sma200: bool = False
+    down_20pct_from_high: bool = False
+    up_4pct_near_high: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +135,8 @@ class BreadthEligibilityCounts:
     t2108_eligible_count: int = 0
     high_low_52week_eligible_count: int = 0
     atr_extension_eligible_count: int = 0
+    sma200_eligible_count: int = 0
+    off_high_eligible_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +161,30 @@ class BreadthIndicatorValues:
     t2108_count: int = 0
     t2108_pct: float | None = None
     atr_10x_extension_count: int = 0
+    above_sma200_count: int = 0
+    above_sma200_pct: float | None = None
+    down_20pct_from_high_count: int = 0
+    down_20pct_from_high_pct: float | None = None
+    up_4pct_near_high_count: int = 0
+
+
+# (pct field, count field, eligible denominator field) on one breadth row.
+BREADTH_SHARE_FIELDS = (
+    ("t2108_pct", "t2108_count", "t2108_eligible_count"),
+    ("above_sma200_pct", "above_sma200_count", "sma200_eligible_count"),
+    (
+        "down_20pct_from_high_pct",
+        "down_20pct_from_high_count",
+        "off_high_eligible_count",
+    ),
+)
+
+
+def share_pct(count: int | None, eligible: int | None) -> float | None:
+    """Percent of an eligible denominator, None when nothing was eligible."""
+    if count is None or not eligible:
+        return None
+    return round(count / eligible * 100.0, 2)
 
 
 @dataclass(frozen=True, slots=True)
