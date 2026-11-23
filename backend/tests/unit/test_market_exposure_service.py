@@ -1023,7 +1023,7 @@ def test_breadth_divergence_flags_an_index_near_its_high_with_weak_participation
     "exposure_values, breadth_values",
     [
         ({"index_off_high_pct": -1.2}, None),  # no breadth row that day
-        ({"index_off_high_pct": -1.2}, {"new_high_52week_count": 5, "new_low_52week_count": 10}),  # row predates participation
+        ({"index_off_high_pct": -1.2}, {"new_high_52week_count": 10, "new_low_52week_count": 5}),  # row predates participation
         ({}, {"above_sma200_pct": 34.0, "new_high_52week_count": 5, "new_low_52week_count": 10}),  # exposure predates the column
     ],
 )
@@ -1034,6 +1034,21 @@ def test_breadth_divergence_is_unknown_not_false_when_an_input_is_missing(exposu
         rows.append(_breadth(day, **breadth_values))
 
     assert _payload(*rows)["breadth_divergence"]["flagged"] is None
+
+
+@pytest.mark.parametrize("above_sma200_pct, flagged", [(60.0, None), (34.0, True)])
+def test_breadth_divergence_treats_highs_and_lows_without_eligible_stocks_as_unknown(above_sma200_pct, flagged):
+    day = date(2026, 10, 30)
+    divergence = _payload(
+        _exposure(day, index_off_high_pct=-1.2),
+        _breadth(
+            day, above_sma200_pct=above_sma200_pct, high_low_52week_eligible_count=0,
+            new_high_52week_count=0, new_low_52week_count=0,
+        ),
+    )["breadth_divergence"]
+
+    assert (divergence["new_high_52week_count"], divergence["new_low_52week_count"]) == (None, None)
+    assert divergence["flagged"] is flagged
 
 
 def test_ftd_quality_reads_the_breadth_row_of_the_ftd_session():

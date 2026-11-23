@@ -451,12 +451,16 @@ def divergence_flagged(
     new_highs: Optional[int],
     new_lows: Optional[int],
 ) -> Optional[bool]:
-    """None when any input is missing: unknown is never reported as healthy."""
-    if None in (index_off_high_pct, above_sma200_pct, new_highs, new_lows):
+    """None when the inputs can't decide it: unknown is never reported as healthy."""
+    if index_off_high_pct is None:
         return None
-    return index_off_high_pct >= DIVERGENCE_NEAR_HIGH_PCT and (
-        above_sma200_pct < DIVERGENCE_ABOVE_200_PCT or new_lows > new_highs
-    )
+    if index_off_high_pct < DIVERGENCE_NEAR_HIGH_PCT:
+        return False
+    weak_200 = None if above_sma200_pct is None else above_sma200_pct < DIVERGENCE_ABOVE_200_PCT
+    lows_lead = None if None in (new_highs, new_lows) else new_lows > new_highs
+    if weak_200 or lows_lead:
+        return True
+    return None if None in (weak_200, lows_lead) else False
 
 
 def near_high_share(near_high: Optional[int], gainers: Optional[int]) -> Optional[float]:
@@ -469,8 +473,10 @@ def near_high_share(near_high: Optional[int], gainers: Optional[int]) -> Optiona
 def _breadth_divergence(db: Session, market: str, latest: MarketExposure) -> dict:
     row = _breadth_on_date(db, market, latest.date)
     above = getattr(row, "above_sma200_pct", None)
-    highs = getattr(row, "new_high_52week_count", None)
-    lows = getattr(row, "new_low_52week_count", None)
+    highs = lows = None
+    if getattr(row, "high_low_52week_eligible_count", None) != 0:
+        highs = getattr(row, "new_high_52week_count", None)
+        lows = getattr(row, "new_low_52week_count", None)
     return {
         "index_off_high_pct": latest.index_off_high_pct,
         "above_sma200_pct": above,
