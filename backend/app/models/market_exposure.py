@@ -43,6 +43,8 @@ class MarketExposure(Base):
     benchmark_ma50 = Column(Float, nullable=True)
     benchmark_ma200 = Column(Float, nullable=True)
     trend = Column(String(20), nullable=True)  # bullish | neutral | bearish
+    # Close vs the highest close in the cycle window, as a percent (<= 0).
+    index_off_high_pct = Column(Float, nullable=True)
 
     distribution_day_count = Column(Integer, nullable=False, default=0, server_default="0")
 
