@@ -1089,6 +1089,18 @@ def test_ftd_quality_has_no_share_without_gainers_or_a_breadth_row(ftd_breadth, 
     assert (quality["stocks_up_4pct"], quality["up_4pct_near_high_count"], quality["near_high_share"]) == expected
 
 
+def test_ftd_quality_treats_highs_and_lows_without_eligible_stocks_as_unknown():
+    ftd, today = date(2026, 11, 11), date(2026, 11, 20)
+    quality = _payload(
+        _exposure(today, cycle_state="uptrend", follow_through_day=True, follow_through_date=ftd),
+        _breadth(ftd, stocks_up_4pct=10, up_4pct_near_high_count=4, high_low_52week_eligible_count=0,
+                 new_high_52week_count=0, new_low_52week_count=0),
+    )["ftd_quality"]
+
+    assert (quality["new_high_52week_count"], quality["new_low_52week_count"]) == (None, None)
+    assert quality["near_high_share"] == pytest.approx(0.4)
+
+
 def test_ftd_quality_is_absent_outside_a_confirmed_uptrend():
     ftd = date(2026, 11, 11)
     assert _payload(_exposure(date(2026, 11, 20), cycle_state="correction"))["ftd_quality"] is None
@@ -1101,7 +1113,8 @@ def test_compute_exposure_stores_how_far_the_index_sits_below_its_cycle_high(mon
     closes = [float(c) for c in range(100, 350)] + [340.0]
     result = _compute(_df(closes, [1000] * len(closes)), monkeypatch)
 
-    assert result["index_off_high_pct"] == pytest.approx((340 / 349 - 1) * 100, abs=0.01)
+    # Full precision, so the 3% test isn't decided by rounding; the UI rounds.
+    assert result["index_off_high_pct"] == pytest.approx((340 / 349 - 1) * 100, abs=1e-9)
     assert type(result["index_off_high_pct"]) is float  # psycopg2 and Celery JSON reject numpy floats
 
 

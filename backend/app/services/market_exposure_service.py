@@ -325,7 +325,7 @@ def compute_exposure(
     dist = count_distribution_days(df)
     window = df.tail(CYCLE_LOOKBACK_SESSIONS)
     cycle_high = float(window["Close"].max())
-    index_off_high_pct = round((float(window["Close"].iloc[-1]) / cycle_high - 1) * 100, 2)
+    index_off_high_pct = (float(window["Close"].iloc[-1]) / cycle_high - 1) * 100
     cycle = market_cycle([
         CycleBar(*bar)
         for bar in zip(
@@ -470,13 +470,17 @@ def near_high_share(near_high: Optional[int], gainers: Optional[int]) -> Optiona
     return near_high / gainers
 
 
+def _new_highs_lows(row: Optional[MarketBreadth]) -> tuple[Optional[int], Optional[int]]:
+    """New 52-week highs and lows; unknown when no stock had a year of history."""
+    if row is None or row.high_low_52week_eligible_count == 0:
+        return None, None
+    return row.new_high_52week_count, row.new_low_52week_count
+
+
 def _breadth_divergence(db: Session, market: str, latest: MarketExposure) -> dict:
     row = _breadth_on_date(db, market, latest.date)
     above = getattr(row, "above_sma200_pct", None)
-    highs = lows = None
-    if getattr(row, "high_low_52week_eligible_count", None) != 0:
-        highs = getattr(row, "new_high_52week_count", None)
-        lows = getattr(row, "new_low_52week_count", None)
+    highs, lows = _new_highs_lows(row)
     return {
         "index_off_high_pct": latest.index_off_high_pct,
         "above_sma200_pct": above,
@@ -493,13 +497,14 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
     row = _breadth_on_date(db, market, latest.follow_through_date)
     gainers = getattr(row, "stocks_up_4pct", None)
     near_high = getattr(row, "up_4pct_near_high_count", None)
+    highs, lows = _new_highs_lows(row)
     return {
         "ftd_date": latest.follow_through_date.isoformat(),
         "stocks_up_4pct": gainers,
         "up_4pct_near_high_count": near_high,
         "near_high_share": near_high_share(near_high, gainers),
-        "new_high_52week_count": getattr(row, "new_high_52week_count", None),
-        "new_low_52week_count": getattr(row, "new_low_52week_count", None),
+        "new_high_52week_count": highs,
+        "new_low_52week_count": lows,
     }
 
 

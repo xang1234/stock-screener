@@ -106,6 +106,8 @@ These are ranked by how well each answers the problems above, and by cost. The r
 
 **First slice.** Add `pct_above_20dma`, `pct_above_50dma`, `pct_above_200dma` and `pct_down_20_from_high` to the breadth calculation, using the existing eligible-universe counts. Then add the #44 flag, and pass the flag to market exposure as context, not as a score input.
 
+**Status.** #771 ships the 200-day share (`above_sma200_pct`), the 20%-off-high share (`down_20pct_from_high_pct`) and the flag (`breadth_divergence` on the exposure payload). It skips the 20- and 50-day shares, because T2108 already gives the share above the 40-day.
+
 **Mid-session.** The breadth calculation runs from end-of-day data. Count only the last completed session.
 
 ### 2. FTD quality grade (#32)
@@ -113,6 +115,8 @@ These are ranked by how well each answers the problems above, and by cost. The r
 **Why.** Now that #769 marks FTDs, the next question in November was whether this one is any good: "led by stocks at lows" ([NickSchmidt](https://x.com/NickSchmidt/status/2122030102506614790)), "C" ([Upticken](https://x.com/Upticken/status/2120617869985579203)).
 
 **First slice.** On an FTD date, store (a) the share of that day's 4%+ gainers within 15% of their 52-week high, and (b) the count of new Minervini-template entries over the next five sessions. Show both on the exposure card beside the FTD marker.
+
+**Status.** #771 ships (a), as `up_4pct_near_high_count` on the breadth row and `ftd_quality` on the exposure payload. (b) is still open.
 
 ### 3. Per-stock trend state: MA slope, pullback count, extension in ADR units (#34, #41, #42)
 
