@@ -7,6 +7,8 @@ import { BREADTH_VISUAL_COLORS } from './breadthVisualEncoding';
 
 const contextMetrics = [
   't2108_pct',
+  'above_sma200_pct',
+  'down_20pct_from_high_pct',
   'atr_10x_extension_count',
   'broad_universe_count',
 ];
@@ -23,9 +25,10 @@ const formatContextValue = (row, metric) => {
   }
   const eligible = eligibleValue(row, metric);
   if (!eligible) return '—';
-  if (metric === 't2108_pct') {
-    const count = row.t2108_count ?? 0;
-    const percentage = row.t2108_pct ?? (count / eligible) * 100;
+  const { countField } = breadthMetricDefinitions[metric];
+  if (countField) {
+    const count = row[countField] ?? 0;
+    const percentage = row[metric] ?? (count / eligible) * 100;
     return `${Number(percentage).toFixed(2)}% (${count} / ${eligible})`;
   }
   return `${row[metric] ?? 0} / ${eligible}`;
@@ -213,6 +216,7 @@ function BreadthContextStrip({ row }) {
           gridTemplateColumns: {
             xs: 'repeat(1, minmax(0, 1fr))',
             sm: 'repeat(3, minmax(0, 1fr))',
+            lg: `repeat(${contextMetrics.length}, minmax(0, 1fr))`,
           },
           gap: 1,
         }}

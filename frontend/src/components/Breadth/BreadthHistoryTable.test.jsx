@@ -23,6 +23,8 @@ const row = {
   stocks_down_13pct_34days: 6,
   atr_10x_extension_count: 3,
   t2108_pct: 57.89,
+  above_sma200_pct: 34.5,
+  down_20pct_from_high_pct: 45.25,
   broad_universe_count: 110,
 };
 
@@ -70,6 +72,29 @@ describe('BreadthHistoryTable', () => {
     expect(screen.getByText('Broad Universe')).toBeInTheDocument();
     expect(screen.getByText('2.00')).toBeInTheDocument();
     expect(screen.getByText('57.89%')).toBeInTheDocument();
+  });
+
+  it('renders participation columns and an em dash where a row has none', () => {
+    renderWithProviders(
+      <BreadthHistoryTable
+        rows={[
+          row,
+          {
+            ...row,
+            date: '2026-08-20',
+            above_sma200_pct: null,
+            down_20pct_from_high_pct: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('breadth-header-above_sma200_pct')).toBeInTheDocument();
+    expect(screen.getByTestId('breadth-header-down_20pct_from_high_pct')).toBeInTheDocument();
+    expect(screen.getByText('34.50%')).toBeInTheDocument();
+    expect(screen.getByText('45.25%')).toBeInTheDocument();
+    const legacyRow = screen.getByText('08/20/26').closest('tr');
+    expect(within(legacyRow).getAllByText('—')).toHaveLength(2);
   });
 
   it('describes each indicator family in a distinct group band', () => {
