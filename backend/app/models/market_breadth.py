@@ -65,6 +65,11 @@ class MarketBreadth(Base):
     t2108_count = Column(Integer, nullable=True)
     t2108_pct = Column(Float, nullable=True)
     atr_10x_extension_count = Column(Integer, nullable=True)
+    above_sma200_count = Column(Integer, nullable=True)
+    above_sma200_pct = Column(Float, nullable=True)
+    down_20pct_from_high_count = Column(Integer, nullable=True)
+    down_20pct_from_high_pct = Column(Float, nullable=True)
+    up_4pct_near_high_count = Column(Integer, nullable=True)
 
     # Explicit metric-family denominators
     broad_universe_count = Column(Integer, nullable=True)
@@ -76,6 +81,8 @@ class MarketBreadth(Base):
     t2108_eligible_count = Column(Integer, nullable=True)
     high_low_52week_eligible_count = Column(Integer, nullable=True)
     atr_extension_eligible_count = Column(Integer, nullable=True)
+    sma200_eligible_count = Column(Integer, nullable=True)
+    off_high_eligible_count = Column(Integer, nullable=True)
 
     # Metadata
     # Deprecated compatibility alias; current writers set this equal to

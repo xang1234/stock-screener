@@ -318,3 +318,56 @@ def test_accumulator_finish_on_a_subset_matches_a_request_for_that_subset():
     )
     with pytest.raises(ValueError, match="accumulated dates"):
         accumulator.finish(dates=(date(2020, 1, 2),))
+
+
+def _single_date_result(prices_by_symbol):
+    calculation_date = date(2026, 8, 21)
+    snapshot = BreadthUniverseSnapshot(
+        calculation_date=calculation_date,
+        members=tuple(BreadthUniverseMember(s, "USD") for s in sorted(prices_by_symbol)),
+        broad_signature=hash_point_in_time_universe_symbols(tuple(sorted(prices_by_symbol))),
+    )
+    return BreadthEngine().calculate(
+        BreadthEngineRequest(
+            market="US",
+            dates=(calculation_date,),
+            universes_by_date={calculation_date: snapshot},
+            prices_by_symbol=prices_by_symbol,
+            market_policy=get_breadth_market_policy("US"),
+        )
+    )[calculation_date]
+
+
+def test_engine_counts_participation_against_its_own_denominators():
+    index = pd.bdate_range(end="2026-08-21", periods=252)
+    result = _single_date_result(
+        {
+            "LEADER": _prices(index, [100.0] * 251 + [104.0]),
+            "LAGGARD": _prices(index, [200.0] + [100.0] * 250 + [104.0]),
+            "DECLINER": _prices(index, [100.0] * 251 + [90.0]),
+            "IPO": _prices(index[-2:], [10.0, 11.0]),
+        }
+    )
+
+    assert result.eligibility.sma200_eligible_count == 3
+    assert result.values.above_sma200_count == 2
+    assert result.values.above_sma200_pct == pytest.approx(66.67)
+    assert result.eligibility.off_high_eligible_count == 4
+    assert result.values.down_20pct_from_high_count == 1
+    assert result.values.down_20pct_from_high_pct == pytest.approx(25.0)
+    assert result.values.stocks_up_4pct == 2
+    assert result.values.up_4pct_near_high_count == 1
+
+    record = result.to_record_mapping()
+    assert record["above_sma200_pct"] == pytest.approx(66.67)
+    assert record["off_high_eligible_count"] == 4
+
+
+def test_engine_reports_no_participation_pct_without_eligible_stocks():
+    index = pd.bdate_range(end="2026-08-21", periods=2)
+    result = _single_date_result({"IPO": _prices(index, [10.0, 11.0])})
+
+    assert result.eligibility.sma200_eligible_count == 0
+    assert result.values.above_sma200_pct is None
+    assert result.eligibility.off_high_eligible_count == 1
+    assert result.values.down_20pct_from_high_pct == 0.0

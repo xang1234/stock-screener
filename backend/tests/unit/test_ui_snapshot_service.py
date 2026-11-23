@@ -551,6 +551,8 @@ def test_market_breadth_snapshot_serializes_revision_2_context_and_denominators(
     payload = market_breadth_to_dict(row)
 
     assert payload["t2108_pct"] == 57.89
+    assert payload["above_sma200_pct"] is None
+    assert payload["sma200_eligible_count"] is None
     assert payload["broad_universe_count"] == 110
     assert payload["stockbee_daily_eligible_count"] == 95
     assert payload["stockbee_eligibility_signature"] == "stockbee"
@@ -944,3 +946,28 @@ def test_publish_themes_bootstrap_backfills_metrics_before_resolving_the_revisio
     service._publish_themes_bootstrap("technical", "grouped")  # noqa: SLF001
 
     assert order.index("backfill") < order.index("revision")
+
+
+def test_market_breadth_dict_carries_participation():
+    row = MarketBreadth(
+        market="US",
+        date=date(2026, 8, 21),
+        stocks_up_4pct=10,
+        stocks_down_4pct=4,
+        total_stocks_scanned=100,
+        above_sma200_count=34,
+        above_sma200_pct=34.0,
+        sma200_eligible_count=100,
+        down_20pct_from_high_count=45,
+        down_20pct_from_high_pct=45.0,
+        off_high_eligible_count=100,
+        up_4pct_near_high_count=6,
+    )
+
+    payload = market_breadth_to_dict(row)
+
+    assert payload["above_sma200_pct"] == 34.0
+    assert payload["above_sma200_count"] == 34
+    assert payload["down_20pct_from_high_pct"] == 45.0
+    assert payload["up_4pct_near_high_count"] == 6
+    assert payload["off_high_eligible_count"] == 100

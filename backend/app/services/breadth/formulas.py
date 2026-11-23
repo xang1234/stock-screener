@@ -21,6 +21,8 @@ from .types import (
 
 _REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
 BREADTH_FEATURE_WARMUP_SESSIONS = 251
+DOWN_FROM_HIGH_RATIO = 0.80
+NEAR_HIGH_RATIO = 0.85
 
 
 def _normalized_session_index(values: object) -> pd.DatetimeIndex:
@@ -143,6 +145,9 @@ def prepare_feature_frame(
     result["high_65"] = adjusted_close.rolling(65, min_periods=65).max()
     result["sma40"] = adjusted_close.rolling(40, min_periods=40).mean()
     result["sma50"] = adjusted_close.rolling(50, min_periods=50).mean()
+    result["sma200"] = adjusted_close.rolling(200, min_periods=200).mean()
+    # min_periods=1: a recent listing measures from its listing high.
+    result["high_252"] = result["adjusted_high"].rolling(252, min_periods=1).max()
 
     previous_close = adjusted_close.shift(1)
     true_range = pd.concat(
@@ -234,6 +239,8 @@ def evaluate_symbol_at(
     atr_extension = (
         _finite(row.adjusted_close, row.sma50, row.atr14) and float(row.atr14) > 0
     )
+    sma200 = _finite(row.adjusted_close, row.sma200)
+    off_high = _finite(row.adjusted_close, row.high_252) and float(row.high_252) > 0
 
     eligibility = SymbolMetricEligibility(
         advance_decline=advance_decline,
@@ -245,6 +252,8 @@ def evaluate_symbol_at(
         t2108=t2108,
         high_low_52week=high_low_52week,
         atr_extension=atr_extension,
+        sma200=sma200,
+        off_high=off_high,
     )
 
     daily_volume_filter = (
@@ -253,6 +262,10 @@ def evaluate_symbol_at(
         and float(row.volume) > float(row.prior_volume)
     )
     daily_return = float(row.daily_return) if _finite(row.daily_return) else np.nan
+    up_4pct = daily_volume_filter and _at_least(daily_return, 0.04)
+    ratio_to_high = (
+        float(row.adjusted_close) / float(row.high_252) if off_high else np.nan
+    )
     month_return = float(row.month_return) if _finite(row.month_return) else np.nan
     gain_from_low_34 = (
         float(row.adjusted_close / row.low_34 - 1.0) if day_34 else np.nan
@@ -296,7 +309,7 @@ def evaluate_symbol_at(
         and float(row.adjusted_close) < float(row.prior_adjusted_close),
         unchanged=advance_decline
         and float(row.adjusted_close) == float(row.prior_adjusted_close),
-        up_4pct=daily_volume_filter and _at_least(daily_return, 0.04),
+        up_4pct=up_4pct,
         down_4pct=daily_volume_filter and _at_most(daily_return, -0.04),
         up_25pct_quarter=quarter and _at_least(gain_from_low_65, 0.25),
         down_25pct_quarter=quarter and _at_most(loss_from_high_65, -0.25),
@@ -312,6 +325,12 @@ def evaluate_symbol_at(
         and float(row.adjusted_low) < float(row.previous_251_low),
         t2108_above=t2108 and float(row.adjusted_close) > float(row.sma40),
         atr_10x_extension=atr_10x,
+        above_sma200=sma200 and float(row.adjusted_close) > float(row.sma200),
+        down_20pct_from_high=off_high
+        and _at_most(ratio_to_high, DOWN_FROM_HIGH_RATIO),
+        up_4pct_near_high=up_4pct
+        and off_high
+        and _at_least(ratio_to_high, NEAR_HIGH_RATIO),
     )
     candidate_values = {
         "up_4pct": daily_return * 100.0,

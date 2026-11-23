@@ -23,6 +23,7 @@ from .contributors import (
 from .formulas import evaluate_symbol_at, prepare_feature_frame, validate_price_frame
 from .ratios import calculate_inclusive_ratios
 from .types import (
+    BREADTH_SHARE_FIELDS,
     CURRENT_BREADTH_CALCULATION_REVISION,
     BreadthContributor,
     BreadthContributorMetadata,
@@ -37,6 +38,7 @@ from .types import (
     BreadthUniverseMember,
     BreadthUniverseSnapshot,
     SymbolBreadthEvaluation,
+    share_pct,
 )
 from .universe import breadth_eligibility_signature
 
@@ -141,6 +143,8 @@ _ELIGIBILITY_ATTRIBUTES = (
     ("t2108_eligible_count", "t2108"),
     ("high_low_52week_eligible_count", "high_low_52week"),
     ("atr_extension_eligible_count", "atr_extension"),
+    ("sma200_eligible_count", "sma200"),
+    ("off_high_eligible_count", "off_high"),
 )
 _VALUE_ATTRIBUTES = (
     *(
@@ -153,6 +157,9 @@ _VALUE_ATTRIBUTES = (
     ("new_high_52week_count", "new_high_52week"),
     ("new_low_52week_count", "new_low_52week"),
     ("t2108_count", "t2108_above"),
+    ("above_sma200_count", "above_sma200"),
+    ("down_20pct_from_high_count", "down_20pct_from_high"),
+    ("up_4pct_near_high_count", "up_4pct_near_high"),
 )
 _COUNTED_VALUE_FIELDS = tuple(field_name for field_name, _ in _VALUE_ATTRIBUTES)
 
@@ -292,14 +299,18 @@ class BreadthAccumulator:
             snapshot = self._snapshots[calculation_date]
             totals = self._totals[calculation_date]
             eligibility = BreadthEligibilityCounts(**totals.eligibility)
-            t2108_count = totals.values["t2108_count"]
+            for _, count_field, eligible_field in BREADTH_SHARE_FIELDS:
+                count = totals.values[count_field]
+                if not 0 <= count <= totals.eligibility[eligible_field]:
+                    raise AssertionError(f"{count_field} exceeds its eligible denominator")
             values = BreadthIndicatorValues(
                 **totals.values,
-                t2108_pct=(
-                    round(t2108_count / eligibility.t2108_eligible_count * 100.0, 2)
-                    if eligibility.t2108_eligible_count
-                    else None
-                ),
+                **{
+                    pct_field: share_pct(
+                        totals.values[count_field], totals.eligibility[eligible_field]
+                    )
+                    for pct_field, count_field, eligible_field in BREADTH_SHARE_FIELDS
+                },
             )
 
             if (
@@ -307,8 +318,8 @@ class BreadthAccumulator:
                 != eligibility.advance_decline_eligible_count
             ):
                 raise AssertionError("Advance/decline counts do not reconcile")
-            if not 0 <= values.t2108_count <= eligibility.t2108_eligible_count:
-                raise AssertionError("T2108 count exceeds its eligible denominator")
+            if values.up_4pct_near_high_count > values.stocks_up_4pct:
+                raise AssertionError("Near-high 4% gainers exceed all 4% gainers")
             if policy.calculation_revision != CURRENT_BREADTH_CALCULATION_REVISION:
                 raise AssertionError(
                     "Canonical breadth engine must produce the current revision"

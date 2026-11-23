@@ -51,6 +51,8 @@ def _feature_row(**overrides):
         "adjusted_low": 103.0,
         "previous_251_high": 104.0,
         "previous_251_low": 90.0,
+        "sma200": 100.0,
+        "high_252": 105.0,
     }
     values.update(overrides)
     return pd.DataFrame([values], index=[CALCULATION_DATE])
@@ -374,3 +376,109 @@ def test_signal_lookup_requires_exact_session_and_invalid_prices_are_ineligible(
     assert missing.eligibility.advance_decline is False
     assert invalid.eligibility.advance_decline is False
     assert invalid.eligibility.stockbee_daily is False
+
+
+def _flat_prices(sessions, close=100.0, *, end="2026-08-21"):
+    index = pd.bdate_range(end=end, periods=sessions)
+    return pd.DataFrame(
+        {
+            "Open": close,
+            "High": close,
+            "Low": close,
+            "Close": close,
+            "Adj Close": close,
+            "Volume": 1_000_000,
+        },
+        index=index,
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "eligible", "above"),
+    [
+        ({"adjusted_close": 100.001, "sma200": 100.0}, True, True),
+        ({"adjusted_close": 100.0, "sma200": 100.0}, True, False),
+        ({"adjusted_close": 90.0, "sma200": 100.0}, True, False),
+        ({"sma200": float("nan")}, False, False),
+    ],
+)
+def test_above_sma200_is_strict_and_needs_the_average(overrides, eligible, above):
+    signals = signal_flags_at(
+        _feature_row(**overrides), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+
+    assert signals.eligibility.sma200 is eligible
+    assert signals.above_sma200 is above
+
+
+@pytest.mark.parametrize(
+    ("close", "eligible", "down"),
+    [
+        (80.0, True, True),
+        (80.01, True, False),
+        (float("nan"), False, False),
+    ],
+)
+def test_down_20pct_from_high_includes_the_boundary(close, eligible, down):
+    signals = signal_flags_at(
+        _feature_row(adjusted_close=close, high_252=100.0),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+    )
+
+    assert signals.eligibility.off_high is eligible
+    assert signals.down_20pct_from_high is down
+
+
+@pytest.mark.parametrize(
+    ("overrides", "near"),
+    [
+        ({"high_252": 104.0 / 0.85}, True),
+        ({"high_252": 130.0}, False),
+        ({"high_252": 105.0, "daily_return": 0.039999}, False),
+    ],
+)
+def test_up_4pct_near_high_needs_a_4pct_gain_within_15pct_of_the_high(
+    overrides, near
+):
+    signals = signal_flags_at(
+        _feature_row(**overrides), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+
+    assert signals.up_4pct_near_high is near
+
+
+def test_sma200_needs_200_sessions():
+    short = prepare_feature_frame(_flat_prices(199))
+    full = prepare_feature_frame(_flat_prices(200))
+
+    short_signals = signal_flags_at(short, CALCULATION_DATE.date(), BreadthFormulaPolicy())
+    full_signals = signal_flags_at(full, CALCULATION_DATE.date(), BreadthFormulaPolicy())
+
+    assert short_signals.eligibility.sma200 is False
+    assert full_signals.eligibility.sma200 is True
+
+
+def test_recent_ipo_measures_its_drawdown_from_the_listing_high():
+    prices = _flat_prices(30, close=38.0)
+    prices.iloc[0, prices.columns.get_loc("High")] = 50.0
+
+    signals = signal_flags_at(
+        prepare_feature_frame(prices), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+
+    assert signals.eligibility.sma200 is False
+    assert signals.eligibility.off_high is True
+    assert signals.down_20pct_from_high is True
+
+
+@pytest.mark.parametrize(("sessions", "down"), [(252, True), (253, False)])
+def test_52_week_high_window_is_252_sessions_including_today(sessions, down):
+    prices = _flat_prices(sessions)
+    prices.iloc[0, prices.columns.get_loc("High")] = 200.0
+
+    signals = signal_flags_at(
+        prepare_feature_frame(prices), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+
+    assert signals.down_20pct_from_high is down

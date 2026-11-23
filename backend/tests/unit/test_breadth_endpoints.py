@@ -305,6 +305,42 @@ async def test_revision_3_fields_are_flat_and_legacy_fields_are_unchanged(client
     assert payload["calculation_revision"] == 3
     assert "stockbee" not in payload
     assert "context" not in payload
+    assert payload["above_sma200_pct"] is None
+    assert payload["down_20pct_from_high_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_current_and_trend_serve_participation(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    row = _breadth_row("US", date.today(), up=10, down=4)
+    for name, value in {
+        **_revision_3_values(),
+        "above_sma200_count": 68,
+        "above_sma200_pct": 34.0,
+        "sma200_eligible_count": 200,
+        "down_20pct_from_high_count": 90,
+        "down_20pct_from_high_pct": 45.0,
+        "off_high_eligible_count": 200,
+        "up_4pct_near_high_count": 4,
+    }.items():
+        setattr(row, name, value)
+    session.add(row)
+    session.commit()
+
+    current = (
+        await client.get("/api/v1/breadth/current", params={"market": "US"})
+    ).json()
+    trend = await client.get(
+        "/api/v1/breadth/trend/above_sma200_pct",
+        params={"days": 1, "market": "US"},
+    )
+
+    assert current["above_sma200_pct"] == pytest.approx(34.0)
+    assert current["down_20pct_from_high_pct"] == pytest.approx(45.0)
+    assert current["up_4pct_near_high_count"] == 4
+    assert current["off_high_eligible_count"] == 200
+    assert trend.status_code == 200
+    assert trend.json()["data"][0]["value"] == pytest.approx(34.0)
 
 
 @pytest.mark.asyncio
