@@ -85,6 +85,8 @@ CYCLE_LOOKBACK_SESSIONS = 252
 DIVERGENCE_NEAR_HIGH_PCT = -3.0
 DIVERGENCE_ABOVE_200_PCT = 50.0
 _OFF_HIGH_TOLERANCE = 1e-9  # an exact 3% computes as -3.0000000000000027
+# FTD quality counts new trend-template entries over this many sessions after it.
+FTD_TEMPLATE_ENTRY_SESSIONS = 5
 
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
@@ -491,6 +493,26 @@ def _breadth_divergence(db: Session, market: str, latest: MarketExposure) -> dic
     }
 
 
+def _template_entries_after(
+    db: Session, market: str, ftd: date, through: date
+) -> tuple[Optional[int], int]:
+    """New trend-template entries over the sessions after the FTD, and how many
+    of those sessions had a known count. None until one does."""
+    rows = (
+        breadth_query(db, market=market)
+        .filter(MarketBreadth.date > ftd, MarketBreadth.date <= through)
+        .order_by(MarketBreadth.date.asc())
+        .limit(FTD_TEMPLATE_ENTRY_SESSIONS)
+        .all()
+    )
+    known = [
+        row.trend_template_entry_count
+        for row in rows
+        if row.trend_template_entry_count is not None and row.trend_template_entry_eligible_count
+    ]
+    return (sum(known) if known else None), len(known)
+
+
 def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[dict]:
     # Rows stored before the market cycle carry a looser follow_through_date.
     if not (latest.cycle_state and latest.follow_through_date):
@@ -499,6 +521,9 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
     gainers = getattr(row, "stocks_up_4pct", None)
     near_high = getattr(row, "up_4pct_near_high_count", None)
     highs, lows = _new_highs_lows(row)
+    entries, entry_sessions = _template_entries_after(
+        db, market, latest.follow_through_date, latest.date
+    )
     return {
         "ftd_date": latest.follow_through_date.isoformat(),
         "stocks_up_4pct": gainers,
@@ -506,6 +531,8 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
         "near_high_share": near_high_share(near_high, gainers),
         "new_high_52week_count": highs,
         "new_low_52week_count": lows,
+        "new_template_entries": entries,
+        "template_entry_sessions": entry_sessions,
     }
 
 

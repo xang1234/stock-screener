@@ -1074,7 +1074,68 @@ def test_ftd_quality_reads_the_breadth_row_of_the_ftd_session():
         "near_high_share": pytest.approx(52 / 137),
         "new_high_52week_count": 30,
         "new_low_52week_count": 12,
+        "new_template_entries": None,
+        "template_entry_sessions": 0,
     }
+
+
+_FTD = date(2026, 11, 11)
+# Trading sessions after the 11/11 FTD; 11/14-15 are a weekend.
+_AFTER_FTD = [date(2026, 11, d) for d in (12, 13, 16, 17, 18, 19, 20)]
+
+
+def _template_entries(*rows, today=date(2026, 11, 20), as_of_date=None):
+    """rows: (day, trend_template_entry_count, trend_template_entry_eligible_count)."""
+    quality = _payload(
+        _exposure(today, cycle_state="uptrend", follow_through_day=True, follow_through_date=_FTD),
+        *(
+            _breadth(day, trend_template_entry_count=count, trend_template_entry_eligible_count=eligible)
+            for day, count, eligible in rows
+        ),
+        as_of_date=as_of_date,
+    )["ftd_quality"]
+    return quality["new_template_entries"], quality["template_entry_sessions"]
+
+
+def test_template_entries_sum_the_five_sessions_after_the_ftd():
+    rows = [(_FTD, 100, 500), *((day, 10 * (i + 1), 500) for i, day in enumerate(_AFTER_FTD))]
+
+    # The FTD day (100) and the sixth and seventh sessions (60, 70) are left out.
+    assert _template_entries(*rows) == (10 + 20 + 30 + 40 + 50, 5)
+
+
+def test_template_entries_count_the_sessions_so_far():
+    assert _template_entries((_AFTER_FTD[0], 12, 500), (_AFTER_FTD[1], 30, 500)) == (42, 2)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [(_FTD, 100, 500)],
+        [(_AFTER_FTD[0], None, None)],  # row stored before the column existed
+        [(_AFTER_FTD[0], 0, 0)],  # no stock had the history to judge
+    ],
+)
+def test_template_entries_are_unknown_until_a_session_after_the_ftd_has_a_count(rows):
+    assert _template_entries(*rows) == (None, 0)
+
+
+def test_template_entries_skip_unknown_sessions_instead_of_counting_them_as_zero():
+    rows = [
+        (_AFTER_FTD[0], 12, 500),
+        (_AFTER_FTD[1], None, None),
+        (_AFTER_FTD[2], 0, 0),
+        (_AFTER_FTD[3], 0, 500),
+    ]
+
+    assert _template_entries(*rows) == (12, 2)
+
+
+def test_template_entries_stop_at_the_exposure_date():
+    rows = [(_AFTER_FTD[0], 12, 500), (_AFTER_FTD[1], 30, 500)]
+
+    assert _template_entries(*rows, today=_AFTER_FTD[0], as_of_date=_AFTER_FTD[0]) == (12, 1)
 
 
 @pytest.mark.parametrize(
