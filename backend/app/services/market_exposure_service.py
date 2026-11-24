@@ -499,18 +499,23 @@ def _template_entries_after(
     """New trend-template entries over the sessions after the FTD: the total
     (None until a session has a known count), the sessions with a known count,
     and the sessions elapsed. Exposure rows mark the sessions, so a missing
-    breadth row leaves a gap instead of pulling in a later session."""
-    sessions = [
+    breadth row leaves a gap instead of pulling in a later session. History
+    that starts after the FTD (a static build seeds ~220 days) can't place the
+    window, so it stays unknown."""
+    days = [
         day
         for (day,) in db.query(MarketExposure.date)
         .filter(
             MarketExposure.market == market,
-            MarketExposure.date > ftd,
+            MarketExposure.date >= ftd,
             MarketExposure.date <= through,
         )
         .order_by(MarketExposure.date.asc())
-        .limit(FTD_TEMPLATE_ENTRY_SESSIONS)
+        .limit(FTD_TEMPLATE_ENTRY_SESSIONS + 1)
     ]
+    if not days or days[0] != ftd:
+        return None, 0, 0
+    sessions = days[1:]
     rows = (
         breadth_query(db, market=market).filter(MarketBreadth.date.in_(sessions)).all()
         if sessions

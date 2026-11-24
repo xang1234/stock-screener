@@ -1076,7 +1076,7 @@ def test_ftd_quality_reads_the_breadth_row_of_the_ftd_session():
         "new_low_52week_count": 12,
         "new_template_entries": None,
         "template_entry_sessions": 0,
-        "template_window_sessions": 1,  # the 11/20 session itself
+        "template_window_sessions": 0,  # no exposure row on the FTD to anchor the window
     }
 
 
@@ -1125,6 +1125,22 @@ def test_a_missing_breadth_row_does_not_pull_in_a_session_after_the_window():
     rows = [(day, 10 * (i + 1), 500) for i, day in enumerate(_AFTER_FTD) if i != 2]
 
     assert _template_entries(*rows) == (10 + 20 + 40 + 50, 4, 5)
+
+
+def test_template_entries_are_unknown_when_exposure_history_starts_after_the_ftd():
+    # A static build seeds ~220 days of exposure; an older FTD has no stored
+    # sessions right after it, so later sessions must not stand in for them.
+    rows = [(day, 10, 500) for day in _AFTER_FTD]
+    quality = _payload(
+        *(_exposure(day) for day in _AFTER_FTD[3:-1]),
+        _exposure(_AFTER_FTD[-1], cycle_state="uptrend", follow_through_day=True,
+                  follow_through_date=_FTD),
+        *(_breadth(day, trend_template_entry_count=c, trend_template_entry_eligible_count=e)
+          for day, c, e in rows),
+    )["ftd_quality"]
+
+    assert (quality["new_template_entries"], quality["template_entry_sessions"],
+            quality["template_window_sessions"]) == (None, 0, 0)
 
 
 def test_a_closed_window_with_unknown_sessions_reports_them_as_unknown():
