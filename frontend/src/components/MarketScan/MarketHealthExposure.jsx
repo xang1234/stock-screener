@@ -54,10 +54,26 @@ function divergenceText(divergence) {
   return `Divergence: index ${fmt(Math.abs(offHigh), 1)}% off high, ${fmt(above200, 0)}% of stocks above 200-day${lowsLead}`;
 }
 
+// The backend counts template entries over this many sessions after the FTD.
+const FTD_TEMPLATE_SESSIONS = 5;
+
+function templateEntriesText({ new_template_entries: entries, template_entry_sessions: sessions }) {
+  if (entries == null) return null;
+  const counted = `${entries} new template ${entries === 1 ? 'entry' : 'entries'}`;
+  return sessions < FTD_TEMPLATE_SESSIONS
+    ? `${counted} (${sessions} of ${FTD_TEMPLATE_SESSIONS} sessions so far)`
+    : `${counted} in ${FTD_TEMPLATE_SESSIONS} sessions`;
+}
+
 function ftdQualityText(quality) {
-  if (quality?.near_high_share == null) return null;
-  const share = fmt(quality.near_high_share * 100, 0);
-  return `FTD ${format(parseISO(quality.ftd_date), 'M/d')}: ${share}% of 4% gainers near highs (${quality.up_4pct_near_high_count} of ${quality.stocks_up_4pct})`;
+  if (!quality) return null;
+  const parts = [
+    quality.near_high_share != null
+      && `${fmt(quality.near_high_share * 100, 0)}% of 4% gainers near highs (${quality.up_4pct_near_high_count} of ${quality.stocks_up_4pct})`,
+    templateEntriesText(quality),
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  return `FTD ${format(parseISO(quality.ftd_date), 'M/d')}: ${parts.join(' · ')}`;
 }
 
 function humanize(key) {

@@ -23,6 +23,8 @@ const row = {
   stocks_down_13pct_34days: 6,
   atr_10x_extension_count: 3,
   t2108_pct: 57.89,
+  above_sma20_pct: 61.25,
+  above_sma50_pct: 52.75,
   above_sma200_pct: 34.5,
   down_20pct_from_high_pct: 45.25,
   broad_universe_count: 110,
@@ -93,6 +95,24 @@ describe('BreadthHistoryTable', () => {
     expect(screen.getByTestId('breadth-header-down_20pct_from_high_pct')).toBeInTheDocument();
     expect(screen.getByText('34.50%')).toBeInTheDocument();
     expect(screen.getByText('45.25%')).toBeInTheDocument();
+    const legacyRow = screen.getByText('08/20/26').closest('tr');
+    expect(within(legacyRow).getAllByText('—')).toHaveLength(2);
+  });
+
+  it('renders the 20- and 50-day participation columns', () => {
+    renderWithProviders(
+      <BreadthHistoryTable
+        rows={[
+          row,
+          { ...row, date: '2026-08-20', above_sma20_pct: null, above_sma50_pct: null },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('breadth-header-above_sma20_pct')).toBeInTheDocument();
+    expect(screen.getByTestId('breadth-header-above_sma50_pct')).toBeInTheDocument();
+    expect(screen.getByText('61.25%')).toBeInTheDocument();
+    expect(screen.getByText('52.75%')).toBeInTheDocument();
     const legacyRow = screen.getByText('08/20/26').closest('tr');
     expect(within(legacyRow).getAllByText('—')).toHaveLength(2);
   });

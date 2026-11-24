@@ -140,6 +140,24 @@ export const breadthMetricDefinitions = {
     eligibleField: 't2108_eligible_count',
     countField: 't2108_count',
   },
+  above_sma20_pct: {
+    label: '% Above 20D',
+    formulaOrigin: 'Standard breadth',
+    groupOrigin: 'Context',
+    description: 'Percentage of eligible stocks with adjusted close above their 20-session simple moving average.',
+    requiredHistory: '20 sessions',
+    eligibleField: 'sma20_eligible_count',
+    countField: 'above_sma20_count',
+  },
+  above_sma50_pct: {
+    label: '% Above 50D',
+    formulaOrigin: 'Standard breadth',
+    groupOrigin: 'Context',
+    description: 'Percentage of eligible stocks with adjusted close above their 50-session simple moving average.',
+    requiredHistory: '50 sessions',
+    eligibleField: 'sma50_eligible_count',
+    countField: 'above_sma50_count',
+  },
   above_sma200_pct: {
     label: '% Above 200D',
     formulaOrigin: 'Standard breadth',
@@ -198,6 +216,8 @@ export const secondaryBreadthMetrics = [
 export const tableContextMetrics = [
   'atr_10x_extension_count',
   't2108_pct',
+  'above_sma20_pct',
+  'above_sma50_pct',
   'above_sma200_pct',
   'down_20pct_from_high_pct',
   'broad_universe_count',

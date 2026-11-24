@@ -91,6 +91,36 @@ describe('MarketHealthExposure', () => {
     expect(screen.getByText('FTD 11/11: 38% of 4% gainers near highs (52 of 137)')).toBeInTheDocument();
   });
 
+  it.each([
+    [5, 'FTD 11/11: 38% of 4% gainers near highs (52 of 137) · 42 new template entries in 5 sessions'],
+    [3, 'FTD 11/11: 38% of 4% gainers near highs (52 of 137) · 42 new template entries (3 of 5 sessions so far)'],
+  ])('adds new template entries after the FTD with %s sessions counted', (sessions, text) => {
+    const ftdQuality = {
+      ftd_date: '2026-11-11', stocks_up_4pct: 137, up_4pct_near_high_count: 52, near_high_share: 52 / 137,
+      new_template_entries: 42, template_entry_sessions: sessions,
+    };
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, ftd_quality: ftdQuality }} />);
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it('shows template entries alone when the near-high share is unknown', () => {
+    const ftdQuality = {
+      ftd_date: '2026-11-11', stocks_up_4pct: 0, up_4pct_near_high_count: 0, near_high_share: null,
+      new_template_entries: 1, template_entry_sessions: 1,
+    };
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, ftd_quality: ftdQuality }} />);
+    expect(screen.getByText('FTD 11/11: 1 new template entry (1 of 5 sessions so far)')).toBeInTheDocument();
+  });
+
+  it('hides template entries while none of the sessions after the FTD has a count', () => {
+    const ftdQuality = {
+      ftd_date: '2026-11-11', stocks_up_4pct: 137, up_4pct_near_high_count: 52, near_high_share: 52 / 137,
+      new_template_entries: null, template_entry_sessions: 0,
+    };
+    renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, ftd_quality: ftdQuality }} />);
+    expect(screen.getByText('FTD 11/11: 38% of 4% gainers near highs (52 of 137)')).toBeInTheDocument();
+  });
+
   it('omits the FTD line when the share is unknown', () => {
     const ftdQuality = { ftd_date: '2026-11-11', stocks_up_4pct: null, up_4pct_near_high_count: null, near_high_share: null };
     renderWithProviders(<MarketHealthExposure exposure={{ ...SAMPLE, ftd_quality: ftdQuality }} />);

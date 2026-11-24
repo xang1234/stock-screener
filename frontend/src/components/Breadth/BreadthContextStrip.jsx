@@ -7,6 +7,8 @@ import { BREADTH_VISUAL_COLORS } from './breadthVisualEncoding';
 
 const contextMetrics = [
   't2108_pct',
+  'above_sma20_pct',
+  'above_sma50_pct',
   'above_sma200_pct',
   'down_20pct_from_high_pct',
   'atr_10x_extension_count',

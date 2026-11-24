@@ -109,9 +109,34 @@ describe('BreadthContextStrip', () => {
     ).toHaveTextContent('45.00% (45 / 100)');
   });
 
+  it('shows the 20- and 50-day shares over their own eligible universes', () => {
+    renderWithProviders(
+      <BreadthContextStrip
+        row={{
+          ...row,
+          above_sma20_count: 61,
+          above_sma20_pct: 61,
+          sma20_eligible_count: 100,
+          above_sma50_count: 45,
+          above_sma50_pct: 50,
+          sma50_eligible_count: 90,
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('breadth-context-above_sma20_pct')).toHaveTextContent(
+      '61.00% (61 / 100)',
+    );
+    expect(screen.getByTestId('breadth-context-above_sma50_pct')).toHaveTextContent(
+      '50.00% (45 / 90)',
+    );
+  });
+
   it('shows an em dash for participation on rows stored before it existed', () => {
     renderWithProviders(<BreadthContextStrip row={row} />);
 
+    expect(screen.getByTestId('breadth-context-above_sma20_pct')).toHaveTextContent('—');
+    expect(screen.getByTestId('breadth-context-above_sma50_pct')).toHaveTextContent('—');
     expect(screen.getByTestId('breadth-context-above_sma200_pct')).toHaveTextContent('—');
     expect(
       screen.getByTestId('breadth-context-down_20pct_from_high_pct'),
