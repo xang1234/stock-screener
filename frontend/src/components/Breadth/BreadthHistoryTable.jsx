@@ -67,6 +67,8 @@ const metricHeaderLines = {
   stocks_down_13pct_34days: ['Down 13%+', '34 Days'],
   atr_10x_extension_count: ['10x ATR', 'Extension'],
   t2108_pct: ['T2108', '> 40D SMA'],
+  above_sma20_pct: ['% Above', '20D SMA'],
+  above_sma50_pct: ['% Above', '50D SMA'],
   above_sma200_pct: ['% Above', '200D SMA'],
   down_20pct_from_high_pct: ['20%+ Off', '52W High'],
   broad_universe_count: ['Broad Universe'],

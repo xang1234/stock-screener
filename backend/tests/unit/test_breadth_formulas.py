@@ -3,7 +3,9 @@ import pytest
 
 from app.services.breadth.formulas import (
     prepare_feature_frame,
+    prices_for_feature_window,
     signal_flags_at as calculate_signal_flags,
+    trend_template,
 )
 from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import BreadthFormulaPolicy
@@ -53,6 +55,9 @@ def _feature_row(**overrides):
         "previous_251_low": 90.0,
         "sma200": 100.0,
         "high_252": 105.0,
+        "sma20": 100.0,
+        "trend_template": 1.0,
+        "prior_trend_template": 1.0,
     }
     values.update(overrides)
     return pd.DataFrame([values], index=[CALCULATION_DATE])
@@ -496,3 +501,169 @@ def test_a_missing_high_inside_the_52_week_window_makes_the_off_high_unknown(
     )
 
     assert signals.eligibility.off_high is eligible
+
+
+@pytest.mark.parametrize(
+    ("average", "signal"), [("sma20", "above_sma20"), ("sma50", "above_sma50")]
+)
+@pytest.mark.parametrize(
+    ("close", "average_value", "eligible", "above"),
+    [
+        (100.001, 100.0, True, True),
+        (100.0, 100.0, True, False),
+        (90.0, 100.0, True, False),
+        (100.0, float("nan"), False, False),
+    ],
+)
+def test_above_sma20_and_sma50_are_strict_and_need_the_average(
+    average, signal, close, average_value, eligible, above
+):
+    signals = signal_flags_at(
+        _feature_row(adjusted_close=close, **{average: average_value}),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+    )
+
+    assert getattr(signals.eligibility, average) is eligible
+    assert getattr(signals, signal) is above
+
+
+@pytest.mark.parametrize("window", [20, 50])
+def test_sma20_and_sma50_need_their_full_window(window):
+    average = f"sma{window}"
+    short = prepare_feature_frame(_flat_prices(window - 1))
+    full = prepare_feature_frame(_flat_prices(window))
+
+    short_signals = signal_flags_at(short, CALCULATION_DATE.date(), BreadthFormulaPolicy())
+    full_signals = signal_flags_at(full, CALCULATION_DATE.date(), BreadthFormulaPolicy())
+
+    assert getattr(short_signals.eligibility, average) is False
+    assert getattr(full_signals.eligibility, average) is True
+
+
+# Both inclusive boundaries sit exactly on their limit: 1.30 * 60 == 78 == 0.75 * 104.
+_TEMPLATE_ROW = {
+    "adjusted_close": 78.0,
+    "sma50": 70.0,
+    "sma150": 65.0,
+    "sma200": 60.0,
+    "sma200_month_ago": 58.0,
+    "low_252": 60.0,
+    "high_252": 104.0,
+}
+
+
+def _template(**overrides):
+    return trend_template(pd.DataFrame([{**_TEMPLATE_ROW, **overrides}])).iloc[0]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "passes"),
+    [
+        ({}, True),
+        ({"sma50": 78.0}, False),  # close must be above the 50-day
+        ({"sma150": 70.0}, False),  # 50-day must be above the 150-day
+        ({"sma150": 60.0}, False),  # 150-day must be above the 200-day
+        # The 200-day must be at least 1% above a month ago, as the Minervini scanner requires.
+        ({"sma200_month_ago": 60.0 / 1.01}, True),
+        ({"sma200_month_ago": 59.5}, False),
+        ({"low_252": 60.01}, False),  # at least 30% above the 52-week low
+        ({"high_252": 104.01}, False),  # within 25% of the 52-week high
+    ],
+)
+def test_trend_template_boundaries(overrides, passes):
+    assert _template(**overrides) == (1.0 if passes else 0.0)
+
+
+def test_the_200_day_a_month_ago_is_the_one_the_minervini_scanner_reads():
+    prices = _flat_prices(260)
+    prices["Adj Close"] = [float(value) for value in range(100, 360)]
+    features = prepare_feature_frame(prices)
+
+    sma200 = prices["Adj Close"].rolling(200).mean()
+    assert features["sma200_month_ago"].iloc[-1] == pytest.approx(sma200.iloc[-21])
+
+
+@pytest.mark.parametrize("column", sorted(_TEMPLATE_ROW))
+def test_trend_template_is_unknown_when_an_input_is_missing(column):
+    assert pd.isna(_template(**{column: float("nan")}))
+
+
+def test_trend_template_is_unknown_even_when_a_known_criterion_fails():
+    assert pd.isna(_template(sma50=78.0, low_252=float("nan")))
+
+
+@pytest.mark.parametrize(
+    ("prior", "today", "eligible", "entry"),
+    [
+        (0.0, 1.0, True, True),
+        (1.0, 1.0, True, False),
+        (0.0, 0.0, True, False),
+        (1.0, 0.0, True, False),
+        (float("nan"), 1.0, False, False),
+        (0.0, float("nan"), False, False),
+    ],
+)
+def test_trend_template_entry_needs_a_known_false_to_true_turn(
+    prior, today, eligible, entry
+):
+    signals = signal_flags_at(
+        _feature_row(prior_trend_template=prior, trend_template=today),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+    )
+
+    assert signals.eligibility.template_entry is eligible
+    assert signals.trend_template_entry is entry
+
+
+def _prices_from_closes(closes, *, end="2026-08-21"):
+    index = pd.bdate_range(end=end, periods=len(closes))
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Adj Close": closes,
+            "Volume": 1_000_000,
+        },
+        index=index,
+    )
+
+
+@pytest.mark.parametrize(("dip", "entry"), [(True, True), (False, False)])
+def test_a_rising_stock_enters_the_template_the_day_it_recovers_its_50_day(
+    dip, entry
+):
+    closes = [50.0 + 0.5 * i for i in range(260)]
+    if dip:
+        closes[-2] = 150.0  # below its 50-day, so out of the template yesterday
+
+    signals = signal_flags_at(
+        prepare_feature_frame(_prices_from_closes(closes)),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+    )
+
+    assert signals.eligibility.template_entry is True
+    assert signals.trend_template_entry is entry
+
+
+def test_one_date_feature_window_reads_yesterdays_full_52_week_low():
+    # Yesterday passes the 30%-above-low test only through the low 252
+    # sessions before it; a window one session short would report an entry.
+    closes = [787.0 + position for position in range(300)]
+    full = _prices_from_closes(closes)
+    windowed = prices_for_feature_window({"A": full}, (CALCULATION_DATE.date(),))["A"]
+
+    from_full = signal_flags_at(
+        prepare_feature_frame(full), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+    from_window = signal_flags_at(
+        prepare_feature_frame(windowed), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+
+    assert from_full.eligibility.template_entry is True
+    assert from_full.trend_template_entry is False
+    assert from_window.trend_template_entry is False

@@ -1,6 +1,7 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
 from app.models.market_breadth import MarketBreadth
 from sqlalchemy import Float, Integer, String
 
@@ -83,26 +84,52 @@ PARTICIPATION_COLUMNS = {
     "sma200_eligible_count": Integer,
     "off_high_eligible_count": Integer,
 }
+SHORT_TERM_COLUMNS = {
+    "above_sma20_count": Integer,
+    "above_sma20_pct": Float,
+    "above_sma50_count": Integer,
+    "above_sma50_pct": Float,
+    "trend_template_entry_count": Integer,
+    "sma20_eligible_count": Integer,
+    "sma50_eligible_count": Integer,
+    "trend_template_entry_eligible_count": Integer,
+}
 
 
 def test_market_breadth_has_nullable_participation_columns():
     columns = MarketBreadth.__table__.c
 
-    for name, column_type in PARTICIPATION_COLUMNS.items():
+    for name, column_type in {**PARTICIPATION_COLUMNS, **SHORT_TERM_COLUMNS}.items():
         assert isinstance(columns[name].type, column_type)
         assert columns[name].nullable is True
 
 
-def test_participation_migration_adds_the_model_columns_after_current_head():
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "alembic/versions/20261123_0077_breadth_participation_columns.py"
-    )
-    spec = spec_from_file_location("breadth_participation_migration", path)
+@pytest.mark.parametrize(
+    ("filename", "revision", "down_revision", "columns"),
+    [
+        (
+            "20261123_0077_breadth_participation_columns.py",
+            "20261123_0077",
+            "20261122_0076",
+            PARTICIPATION_COLUMNS,
+        ),
+        (
+            "20261124_0079_breadth_short_term_and_template_columns.py",
+            "20261124_0079",
+            "20261123_0078",
+            SHORT_TERM_COLUMNS,
+        ),
+    ],
+)
+def test_participation_migrations_add_the_model_columns_after_their_head(
+    filename, revision, down_revision, columns
+):
+    path = Path(__file__).resolve().parents[2] / "alembic/versions" / filename
+    spec = spec_from_file_location(f"breadth_migration_{revision}", path)
     module = module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
 
-    assert module.revision == "20261123_0077"
-    assert module.down_revision == "20261122_0076"
-    assert {name for name, _ in module._COLUMNS} == set(PARTICIPATION_COLUMNS)
+    assert module.revision == revision
+    assert module.down_revision == down_revision
+    assert {name for name, _ in module._COLUMNS} == set(columns)

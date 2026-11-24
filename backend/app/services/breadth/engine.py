@@ -145,6 +145,9 @@ _ELIGIBILITY_ATTRIBUTES = (
     ("atr_extension_eligible_count", "atr_extension"),
     ("sma200_eligible_count", "sma200"),
     ("off_high_eligible_count", "off_high"),
+    ("sma20_eligible_count", "sma20"),
+    ("sma50_eligible_count", "sma50"),
+    ("trend_template_entry_eligible_count", "template_entry"),
 )
 _VALUE_ATTRIBUTES = (
     *(
@@ -160,6 +163,9 @@ _VALUE_ATTRIBUTES = (
     ("above_sma200_count", "above_sma200"),
     ("down_20pct_from_high_count", "down_20pct_from_high"),
     ("up_4pct_near_high_count", "up_4pct_near_high"),
+    ("above_sma20_count", "above_sma20"),
+    ("above_sma50_count", "above_sma50"),
+    ("trend_template_entry_count", "trend_template_entry"),
 )
 _COUNTED_VALUE_FIELDS = tuple(field_name for field_name, _ in _VALUE_ATTRIBUTES)
 

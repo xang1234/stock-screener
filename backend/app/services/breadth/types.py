@@ -67,6 +67,9 @@ class SymbolMetricEligibility:
     atr_extension: bool = False
     sma200: bool = False
     off_high: bool = False
+    sma20: bool = False
+    sma50: bool = False
+    template_entry: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +95,9 @@ class SymbolBreadthSignals:
     above_sma200: bool = False
     down_20pct_from_high: bool = False
     up_4pct_near_high: bool = False
+    above_sma20: bool = False
+    above_sma50: bool = False
+    trend_template_entry: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +143,9 @@ class BreadthEligibilityCounts:
     atr_extension_eligible_count: int = 0
     sma200_eligible_count: int = 0
     off_high_eligible_count: int = 0
+    sma20_eligible_count: int = 0
+    sma50_eligible_count: int = 0
+    trend_template_entry_eligible_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,11 +175,18 @@ class BreadthIndicatorValues:
     down_20pct_from_high_count: int = 0
     down_20pct_from_high_pct: float | None = None
     up_4pct_near_high_count: int = 0
+    above_sma20_count: int = 0
+    above_sma20_pct: float | None = None
+    above_sma50_count: int = 0
+    above_sma50_pct: float | None = None
+    trend_template_entry_count: int = 0
 
 
 # (pct field, count field, eligible denominator field) on one breadth row.
 BREADTH_SHARE_FIELDS = (
     ("t2108_pct", "t2108_count", "t2108_eligible_count"),
+    ("above_sma20_pct", "above_sma20_count", "sma20_eligible_count"),
+    ("above_sma50_pct", "above_sma50_count", "sma50_eligible_count"),
     ("above_sma200_pct", "above_sma200_count", "sma200_eligible_count"),
     (
         "down_20pct_from_high_pct",

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -346,3 +347,52 @@ def test_rebuild_validation_rejects_a_participation_pct_that_does_not_reconcile(
         error.startswith("pct_reconciliation:down_20pct_from_high_pct")
         for error in result["errors"]
     )
+
+
+def test_rebuild_stages_short_term_participation_and_template_entries():
+    db, service = _staged_one_symbol_rebuild()
+
+    row = db.execute(
+        text(
+            "SELECT sma20_eligible_count, above_sma20_pct, sma50_eligible_count, "
+            "above_sma50_pct, trend_template_entry_eligible_count, "
+            "trend_template_entry_count FROM market_breadth_rebuild"
+        )
+    ).one()
+
+    assert tuple(row) == (0, None, 0, None, 0, 0)
+    assert service.validate()["valid"] is True
+
+
+@pytest.mark.parametrize(
+    ("assignment", "error_prefix"),
+    [
+        ("above_sma50_pct = 50.0", "pct_reconciliation:above_sma50_pct"),
+        (
+            "trend_template_entry_count = 1",
+            "count_exceeds_eligibility:trend_template_entry_count",
+        ),
+        (
+            "trend_template_entry_count = -1",
+            "count_exceeds_eligibility:trend_template_entry_count",
+        ),
+        (
+            "trend_template_entry_count = NULL",
+            "count_exceeds_eligibility:trend_template_entry_count",
+        ),
+        (
+            "up_4pct_near_high_count = -1",
+            "count_exceeds_eligibility:up_4pct_near_high_count",
+        ),
+    ],
+)
+def test_rebuild_validation_rejects_short_term_fields_that_do_not_reconcile(
+    assignment, error_prefix
+):
+    db, service = _staged_one_symbol_rebuild()
+    db.execute(text(f"UPDATE market_breadth_rebuild SET {assignment}"))
+
+    result = service.validate()
+
+    assert result["valid"] is False
+    assert any(error.startswith(error_prefix) for error in result["errors"])

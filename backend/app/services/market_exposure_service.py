@@ -85,6 +85,8 @@ CYCLE_LOOKBACK_SESSIONS = 252
 DIVERGENCE_NEAR_HIGH_PCT = -3.0
 DIVERGENCE_ABOVE_200_PCT = 50.0
 _OFF_HIGH_TOLERANCE = 1e-9  # an exact 3% computes as -3.0000000000000027
+# FTD quality counts new trend-template entries over this many sessions after it.
+FTD_TEMPLATE_ENTRY_SESSIONS = 5
 
 # --- History seeding (one-time, so the timeline renders on launch) ----------
 EXPOSURE_HISTORY_MIN_ROWS = 60   # below this many stored rows -> seed history
@@ -491,6 +493,42 @@ def _breadth_divergence(db: Session, market: str, latest: MarketExposure) -> dic
     }
 
 
+def _template_entries_after(
+    db: Session, market: str, ftd: date, through: date
+) -> tuple[Optional[int], int, int]:
+    """New trend-template entries over the sessions after the FTD: the total
+    (None until a session has a known count), the sessions with a known count,
+    and the sessions elapsed. Exposure rows mark the sessions, so a missing
+    breadth row leaves a gap instead of pulling in a later session. History
+    that starts after the FTD (a static build seeds ~220 days) can't place the
+    window, so it stays unknown."""
+    days = [
+        day
+        for (day,) in db.query(MarketExposure.date)
+        .filter(
+            MarketExposure.market == market,
+            MarketExposure.date >= ftd,
+            MarketExposure.date <= through,
+        )
+        .order_by(MarketExposure.date.asc())
+        .limit(FTD_TEMPLATE_ENTRY_SESSIONS + 1)
+    ]
+    if not days or days[0] != ftd:
+        return None, 0, 0
+    sessions = days[1:]
+    rows = (
+        breadth_query(db, market=market).filter(MarketBreadth.date.in_(sessions)).all()
+        if sessions
+        else []
+    )
+    known = [
+        row.trend_template_entry_count
+        for row in rows
+        if row.trend_template_entry_count is not None and row.trend_template_entry_eligible_count
+    ]
+    return (sum(known) if known else None), len(known), len(sessions)
+
+
 def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[dict]:
     # Rows stored before the market cycle carry a looser follow_through_date.
     if not (latest.cycle_state and latest.follow_through_date):
@@ -499,6 +537,9 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
     gainers = getattr(row, "stocks_up_4pct", None)
     near_high = getattr(row, "up_4pct_near_high_count", None)
     highs, lows = _new_highs_lows(row)
+    entries, entry_sessions, window_sessions = _template_entries_after(
+        db, market, latest.follow_through_date, latest.date
+    )
     return {
         "ftd_date": latest.follow_through_date.isoformat(),
         "stocks_up_4pct": gainers,
@@ -506,6 +547,9 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
         "near_high_share": near_high_share(near_high, gainers),
         "new_high_52week_count": highs,
         "new_low_52week_count": lows,
+        "new_template_entries": entries,
+        "template_entry_sessions": entry_sessions,
+        "template_window_sessions": window_sessions,
     }
 
 

@@ -202,7 +202,8 @@ class MarketHealthBreadthDivergence(BaseModel):
 
 
 class MarketHealthFtdQuality(BaseModel):
-    """How many of the FTD session's 4% gainers closed near their highs."""
+    """How many of the FTD session's 4% gainers closed near their highs, and how
+    many stocks entered the trend template over the five sessions after it."""
     model_config = ConfigDict(extra="forbid")
 
     ftd_date: str
@@ -211,6 +212,9 @@ class MarketHealthFtdQuality(BaseModel):
     near_high_share: Optional[float] = None
     new_high_52week_count: Optional[int] = None
     new_low_52week_count: Optional[int] = None
+    new_template_entries: Optional[int] = None
+    template_entry_sessions: int = 0  # sessions with a known count
+    template_window_sessions: int = 0  # sessions elapsed since the FTD, up to five
 
 
 class MarketHealthExposure(BaseModel):

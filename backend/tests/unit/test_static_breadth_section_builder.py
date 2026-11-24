@@ -42,8 +42,8 @@ def test_static_inputs_retain_only_the_local_price_feature_window():
     )
 
     retained_index = inputs.request.prices_by_symbol["0700.HK"].index
-    assert len(retained_index) == 371
-    assert retained_index[0] == recent_index[29]
+    assert len(retained_index) == 372
+    assert retained_index[0] == recent_index[28]
     assert pd.Timestamp("2020-01-02") not in retained_index
     assert inputs.request.market_policy.market == "HK"
     assert inputs.request.market_policy.currency == "HKD"

@@ -106,7 +106,7 @@ These are ranked by how well each answers the problems above, and by cost. The r
 
 **First slice.** Add `pct_above_20dma`, `pct_above_50dma`, `pct_above_200dma` and `pct_down_20_from_high` to the breadth calculation, using the existing eligible-universe counts. Then add the #44 flag, and pass the flag to market exposure as context, not as a score input.
 
-**Status.** #771 ships the 200-day share (`above_sma200_pct`), the 20%-off-high share (`down_20pct_from_high_pct`) and the flag (`breadth_divergence` on the exposure payload). It skips the 20- and 50-day shares, because T2108 already gives the share above the 40-day.
+**Status.** #771 ships the 200-day share (`above_sma200_pct`), the 20%-off-high share (`down_20pct_from_high_pct`) and the flag (`breadth_divergence` on the exposure payload). `feat/breadth-50-20-ftd-leaders` adds the 20- and 50-day shares (`above_sma20_pct`, `above_sma50_pct`), each over its own eligible universe, on the breadth row and in the breadth UI. Priority 1 is done.
 
 **Mid-session.** The breadth calculation runs from end-of-day data. Count only the last completed session.
 
@@ -116,7 +116,7 @@ These are ranked by how well each answers the problems above, and by cost. The r
 
 **First slice.** On an FTD date, store (a) the share of that day's 4%+ gainers within 15% of their 52-week high, and (b) the count of new Minervini-template entries over the next five sessions. Show both on the exposure card beside the FTD marker.
 
-**Status.** #771 ships (a), as `up_4pct_near_high_count` on the breadth row and `ftd_quality` on the exposure payload. (b) is still open.
+**Status.** #771 ships (a), as `up_4pct_near_high_count` on the breadth row and `ftd_quality` on the exposure payload. `feat/breadth-50-20-ftd-leaders` ships (b). The breadth row counts `trend_template_entry_count`, the stocks that pass the price criteria of the trend template today but not the session before. RS rank is left out, since breadth has no cross-section to rank against. `ftd_quality.new_template_entries` sums that count over the five sessions after the FTD, and the exposure card shows it beside the near-high share. Priority 2 is done.
 
 ### 3. Per-stock trend state: MA slope, pullback count, extension in ADR units (#34, #41, #42)
 

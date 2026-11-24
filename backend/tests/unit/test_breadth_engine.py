@@ -371,3 +371,31 @@ def test_engine_reports_no_participation_pct_without_eligible_stocks():
     assert result.values.above_sma200_pct is None
     assert result.eligibility.off_high_eligible_count == 1
     assert result.values.down_20pct_from_high_pct == 0.0
+
+
+def test_engine_counts_20_and_50_day_participation_and_template_entries():
+    index = pd.bdate_range(end="2026-08-21", periods=260)
+    rising = [50.0 + 0.5 * i for i in range(260)]
+    entering = [*rising[:-2], 150.0, rising[-1]]  # below its 50-day yesterday
+    result = _single_date_result(
+        {
+            "ENTERING": _prices(index, entering),
+            "HOLDING": _prices(index, rising),
+            "FALLING": _prices(index, [*rising[:-1], 100.0]),
+            "IPO": _prices(index[-30:], [10.0] * 29 + [11.0]),
+        }
+    )
+
+    assert result.eligibility.sma20_eligible_count == 4
+    assert result.values.above_sma20_count == 3
+    assert result.values.above_sma20_pct == pytest.approx(75.0)
+    assert result.eligibility.sma50_eligible_count == 3
+    assert result.values.above_sma50_count == 2
+    assert result.values.above_sma50_pct == pytest.approx(66.67)
+    assert result.eligibility.trend_template_entry_eligible_count == 3
+    assert result.values.trend_template_entry_count == 1
+
+    record = result.to_record_mapping()
+    assert record["above_sma50_pct"] == pytest.approx(66.67)
+    assert record["trend_template_entry_count"] == 1
+    assert record["trend_template_entry_eligible_count"] == 3
