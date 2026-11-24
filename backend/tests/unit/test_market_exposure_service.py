@@ -1076,6 +1076,7 @@ def test_ftd_quality_reads_the_breadth_row_of_the_ftd_session():
         "new_low_52week_count": 12,
         "new_template_entries": None,
         "template_entry_sessions": 0,
+        "template_window_sessions": 1,  # the 11/20 session itself
     }
 
 
@@ -1084,9 +1085,14 @@ _FTD = date(2026, 11, 11)
 _AFTER_FTD = [date(2026, 11, d) for d in (12, 13, 16, 17, 18, 19, 20)]
 
 
-def _template_entries(*rows, today=date(2026, 11, 20), as_of_date=None):
-    """rows: (day, trend_template_entry_count, trend_template_entry_eligible_count)."""
+def _template_entries(*rows, today=_AFTER_FTD[-1], as_of_date=None):
+    """rows: (day, trend_template_entry_count, trend_template_entry_eligible_count).
+
+    Returns (entries, sessions with a known count, sessions elapsed in the window).
+    Every session from the FTD through ``today`` has an exposure row."""
+    sessions = [day for day in [_FTD, *_AFTER_FTD] if day < today]
     quality = _payload(
+        *(_exposure(day) for day in sessions),
         _exposure(today, cycle_state="uptrend", follow_through_day=True, follow_through_date=_FTD),
         *(
             _breadth(day, trend_template_entry_count=count, trend_template_entry_eligible_count=eligible)
@@ -1094,18 +1100,39 @@ def _template_entries(*rows, today=date(2026, 11, 20), as_of_date=None):
         ),
         as_of_date=as_of_date,
     )["ftd_quality"]
-    return quality["new_template_entries"], quality["template_entry_sessions"]
+    return (
+        quality["new_template_entries"],
+        quality["template_entry_sessions"],
+        quality["template_window_sessions"],
+    )
 
 
 def test_template_entries_sum_the_five_sessions_after_the_ftd():
     rows = [(_FTD, 100, 500), *((day, 10 * (i + 1), 500) for i, day in enumerate(_AFTER_FTD))]
 
     # The FTD day (100) and the sixth and seventh sessions (60, 70) are left out.
-    assert _template_entries(*rows) == (10 + 20 + 30 + 40 + 50, 5)
+    assert _template_entries(*rows) == (10 + 20 + 30 + 40 + 50, 5, 5)
 
 
 def test_template_entries_count_the_sessions_so_far():
-    assert _template_entries((_AFTER_FTD[0], 12, 500), (_AFTER_FTD[1], 30, 500)) == (42, 2)
+    rows = [(_AFTER_FTD[0], 12, 500), (_AFTER_FTD[1], 30, 500)]
+
+    assert _template_entries(*rows, today=_AFTER_FTD[1], as_of_date=_AFTER_FTD[1]) == (42, 2, 2)
+
+
+def test_a_missing_breadth_row_does_not_pull_in_a_session_after_the_window():
+    # No breadth row for the third session; the sixth (60) must stay out.
+    rows = [(day, 10 * (i + 1), 500) for i, day in enumerate(_AFTER_FTD) if i != 2]
+
+    assert _template_entries(*rows) == (10 + 20 + 40 + 50, 4, 5)
+
+
+def test_a_closed_window_with_unknown_sessions_reports_them_as_unknown():
+    # Rows stored before the columns existed, then counted ones.
+    rows = [(_AFTER_FTD[0], None, None), (_AFTER_FTD[1], None, None),
+            *((day, 10, 500) for day in _AFTER_FTD[2:5])]
+
+    assert _template_entries(*rows) == (30, 3, 5)
 
 
 @pytest.mark.parametrize(
@@ -1118,7 +1145,7 @@ def test_template_entries_count_the_sessions_so_far():
     ],
 )
 def test_template_entries_are_unknown_until_a_session_after_the_ftd_has_a_count(rows):
-    assert _template_entries(*rows) == (None, 0)
+    assert _template_entries(*rows) == (None, 0, 5)
 
 
 def test_template_entries_skip_unknown_sessions_instead_of_counting_them_as_zero():
@@ -1129,13 +1156,13 @@ def test_template_entries_skip_unknown_sessions_instead_of_counting_them_as_zero
         (_AFTER_FTD[3], 0, 500),
     ]
 
-    assert _template_entries(*rows) == (12, 2)
+    assert _template_entries(*rows) == (12, 2, 5)
 
 
 def test_template_entries_stop_at_the_exposure_date():
     rows = [(_AFTER_FTD[0], 12, 500), (_AFTER_FTD[1], 30, 500)]
 
-    assert _template_entries(*rows, today=_AFTER_FTD[0], as_of_date=_AFTER_FTD[0]) == (12, 1)
+    assert _template_entries(*rows, today=_AFTER_FTD[0], as_of_date=_AFTER_FTD[0]) == (12, 1, 1)
 
 
 @pytest.mark.parametrize(

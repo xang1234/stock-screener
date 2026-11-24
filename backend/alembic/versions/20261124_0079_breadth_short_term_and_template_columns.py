@@ -2,7 +2,9 @@
 
 Additive and nullable. The calculation revision is unchanged, so rows written
 before this migration stay readable and show these fields as missing until the
-breadth rebuild refills history.
+breadth rebuild refills history: ``python -m app.scripts.rebuild_market_breadth
+build --market US --start-date <date>``, then ``validate`` and
+``activate --confirm-replace``.
 """
 
 import sqlalchemy as sa

@@ -495,22 +495,33 @@ def _breadth_divergence(db: Session, market: str, latest: MarketExposure) -> dic
 
 def _template_entries_after(
     db: Session, market: str, ftd: date, through: date
-) -> tuple[Optional[int], int]:
-    """New trend-template entries over the sessions after the FTD, and how many
-    of those sessions had a known count. None until one does."""
-    rows = (
-        breadth_query(db, market=market)
-        .filter(MarketBreadth.date > ftd, MarketBreadth.date <= through)
-        .order_by(MarketBreadth.date.asc())
+) -> tuple[Optional[int], int, int]:
+    """New trend-template entries over the sessions after the FTD: the total
+    (None until a session has a known count), the sessions with a known count,
+    and the sessions elapsed. Exposure rows mark the sessions, so a missing
+    breadth row leaves a gap instead of pulling in a later session."""
+    sessions = [
+        day
+        for (day,) in db.query(MarketExposure.date)
+        .filter(
+            MarketExposure.market == market,
+            MarketExposure.date > ftd,
+            MarketExposure.date <= through,
+        )
+        .order_by(MarketExposure.date.asc())
         .limit(FTD_TEMPLATE_ENTRY_SESSIONS)
-        .all()
+    ]
+    rows = (
+        breadth_query(db, market=market).filter(MarketBreadth.date.in_(sessions)).all()
+        if sessions
+        else []
     )
     known = [
         row.trend_template_entry_count
         for row in rows
         if row.trend_template_entry_count is not None and row.trend_template_entry_eligible_count
     ]
-    return (sum(known) if known else None), len(known)
+    return (sum(known) if known else None), len(known), len(sessions)
 
 
 def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[dict]:
@@ -521,7 +532,7 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
     gainers = getattr(row, "stocks_up_4pct", None)
     near_high = getattr(row, "up_4pct_near_high_count", None)
     highs, lows = _new_highs_lows(row)
-    entries, entry_sessions = _template_entries_after(
+    entries, entry_sessions, window_sessions = _template_entries_after(
         db, market, latest.follow_through_date, latest.date
     )
     return {
@@ -533,6 +544,7 @@ def _ftd_quality(db: Session, market: str, latest: MarketExposure) -> Optional[d
         "new_low_52week_count": lows,
         "new_template_entries": entries,
         "template_entry_sessions": entry_sessions,
+        "template_window_sessions": window_sessions,
     }
 
 

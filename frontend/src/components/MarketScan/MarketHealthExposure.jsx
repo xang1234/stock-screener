@@ -57,12 +57,19 @@ function divergenceText(divergence) {
 // The backend counts template entries over this many sessions after the FTD.
 const FTD_TEMPLATE_SESSIONS = 5;
 
-function templateEntriesText({ new_template_entries: entries, template_entry_sessions: sessions }) {
+function templateEntriesText({
+  new_template_entries: entries,
+  template_entry_sessions: known,
+  template_window_sessions: window,
+}) {
   if (entries == null) return null;
   const counted = `${entries} new template ${entries === 1 ? 'entry' : 'entries'}`;
-  return sessions < FTD_TEMPLATE_SESSIONS
-    ? `${counted} (${sessions} of ${FTD_TEMPLATE_SESSIONS} sessions so far)`
-    : `${counted} in ${FTD_TEMPLATE_SESSIONS} sessions`;
+  if (known === FTD_TEMPLATE_SESSIONS) return `${counted} in ${FTD_TEMPLATE_SESSIONS} sessions`;
+  const soFar = window < FTD_TEMPLATE_SESSIONS ? ' so far' : '';
+  // Sessions whose breadth count is unknown (e.g. stored before the column existed).
+  return known === window
+    ? `${counted} (${window} of ${FTD_TEMPLATE_SESSIONS} sessions${soFar})`
+    : `${counted} (counted on ${known} of ${window} sessions${soFar})`;
 }
 
 function ftdQualityText(quality) {
