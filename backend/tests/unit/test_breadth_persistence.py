@@ -265,9 +265,19 @@ def test_persistence_stores_participation_fields():
             down_20pct_from_high_count=3,
             down_20pct_from_high_pct=30.0,
             up_4pct_near_high_count=2,
+            above_sma20_count=6,
+            above_sma20_pct=60.0,
+            above_sma50_count=5,
+            above_sma50_pct=50.0,
+            trend_template_entry_count=1,
         ),
         eligibility=replace(
-            result.eligibility, sma200_eligible_count=10, off_high_eligible_count=10
+            result.eligibility,
+            sma200_eligible_count=10,
+            off_high_eligible_count=10,
+            sma20_eligible_count=10,
+            sma50_eligible_count=10,
+            trend_template_entry_eligible_count=8,
         ),
     )
 
@@ -277,3 +287,6 @@ def test_persistence_stores_participation_fields():
     assert (row.above_sma200_pct, row.down_20pct_from_high_pct) == (40.0, 30.0)
     assert (row.sma200_eligible_count, row.off_high_eligible_count) == (10, 10)
     assert row.up_4pct_near_high_count == 2
+    assert (row.above_sma20_pct, row.above_sma50_pct) == (60.0, 50.0)
+    assert (row.sma20_eligible_count, row.sma50_eligible_count) == (10, 10)
+    assert (row.trend_template_entry_count, row.trend_template_entry_eligible_count) == (1, 8)

@@ -89,13 +89,18 @@ def test_incompatible_bundles_restore_nothing(make_session, patch, reason):
     assert target.query(MarketBreadth).count() == 0
 
 
-def test_bundle_from_before_a_column_was_added_restores_nothing(make_session):
+@pytest.mark.parametrize(
+    "added_column", ["above_sma200_pct", "above_sma20_pct", "trend_template_entry_count"]
+)
+def test_bundle_from_before_a_column_was_added_restores_nothing(
+    make_session, added_column
+):
     source = make_session()
     source.add_all([_row(day) for day in range(30)])
     source.commit()
     bundle = export_bundle(source, market="US")
     for row in bundle["rows"]:
-        del row["above_sma200_pct"]
+        del row[added_column]
 
     target = make_session()
     assert import_bundle(target, bundle, market="US") == {

@@ -531,6 +531,9 @@ class BreadthRebuildService:
                 "atr_extension_eligible_count",
                 "sma200_eligible_count",
                 "off_high_eligible_count",
+                "sma20_eligible_count",
+                "sma50_eligible_count",
+                "trend_template_entry_eligible_count",
             )
             if broad is not None:
                 for eligible_name in eligible_names:
@@ -598,6 +601,7 @@ class BreadthRebuildService:
                 ("new_low_52week_count", "high_low_52week_eligible_count"),
                 ("atr_10x_extension_count", "atr_extension_eligible_count"),
                 ("up_4pct_near_high_count", "stocks_up_4pct"),
+                ("trend_template_entry_count", "trend_template_entry_eligible_count"),
             ):
                 if int(row[count_name] or 0) > int(row[eligible_name] or 0):
                     errors.append(

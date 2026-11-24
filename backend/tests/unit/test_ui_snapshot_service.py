@@ -962,9 +962,23 @@ def test_market_breadth_dict_carries_participation():
         down_20pct_from_high_pct=45.0,
         off_high_eligible_count=100,
         up_4pct_near_high_count=6,
+        above_sma20_count=61,
+        above_sma20_pct=61.0,
+        sma20_eligible_count=100,
+        above_sma50_count=52,
+        above_sma50_pct=52.0,
+        sma50_eligible_count=100,
+        trend_template_entry_count=3,
+        trend_template_entry_eligible_count=90,
     )
 
     payload = market_breadth_to_dict(row)
+
+    assert (payload["above_sma20_pct"], payload["above_sma20_count"]) == (61.0, 61)
+    assert (payload["above_sma50_pct"], payload["above_sma50_count"]) == (52.0, 52)
+    assert (payload["sma20_eligible_count"], payload["sma50_eligible_count"]) == (100, 100)
+    assert payload["trend_template_entry_count"] == 3
+    assert payload["trend_template_entry_eligible_count"] == 90
 
     assert payload["above_sma200_pct"] == 34.0
     assert payload["above_sma200_count"] == 34

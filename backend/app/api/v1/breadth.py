@@ -225,12 +225,17 @@ def get_indicator_trend(
         'above_sma200_count', 'above_sma200_pct',
         'down_20pct_from_high_count', 'down_20pct_from_high_pct',
         'up_4pct_near_high_count',
+        'above_sma20_count', 'above_sma20_pct',
+        'above_sma50_count', 'above_sma50_pct',
+        'trend_template_entry_count',
         'broad_universe_count', 'advance_decline_eligible_count',
         'stockbee_daily_eligible_count', 'stockbee_month_eligible_count',
         'stockbee_34day_eligible_count', 'stockbee_quarter_eligible_count',
         't2108_eligible_count', 'high_low_52week_eligible_count',
         'atr_extension_eligible_count', 'sma200_eligible_count',
-        'off_high_eligible_count', 'total_stocks_scanned'
+        'off_high_eligible_count', 'sma20_eligible_count',
+        'sma50_eligible_count', 'trend_template_entry_eligible_count',
+        'total_stocks_scanned'
     ]
 
     if indicator not in valid_indicators:

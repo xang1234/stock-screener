@@ -989,7 +989,7 @@ def test_backfill_range_requests_history_for_full_interval_and_warmup(monkeypatc
     )
 
 
-def test_history_period_uses_the_251st_prior_market_session(monkeypatch):
+def test_history_period_uses_the_252nd_prior_market_session(monkeypatch):
     calculation_date = date(2025, 9, 1)
     cache_anchor = date(2026, 8, 25)
 
@@ -1002,9 +1002,9 @@ def test_history_period_uses_the_251st_prior_market_session(monkeypatch):
             assert (market, as_of_date, offsets) == (
                 "US",
                 calculation_date,
-                (251,),
+                (252,),
             )
-            return {0: calculation_date, 251: date(2024, 8, 20)}
+            return {0: calculation_date, 252: date(2024, 8, 20)}
 
     import app.wiring.bootstrap as bootstrap_module
 

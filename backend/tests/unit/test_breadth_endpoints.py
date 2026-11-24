@@ -322,6 +322,14 @@ async def test_current_and_trend_serve_participation(client, session):
         "down_20pct_from_high_pct": 45.0,
         "off_high_eligible_count": 200,
         "up_4pct_near_high_count": 4,
+        "above_sma20_count": 120,
+        "above_sma20_pct": 60.0,
+        "sma20_eligible_count": 200,
+        "above_sma50_count": 104,
+        "above_sma50_pct": 52.0,
+        "sma50_eligible_count": 200,
+        "trend_template_entry_count": 7,
+        "trend_template_entry_eligible_count": 180,
     }.items():
         setattr(row, name, value)
     session.add(row)
@@ -341,6 +349,16 @@ async def test_current_and_trend_serve_participation(client, session):
     assert current["off_high_eligible_count"] == 200
     assert trend.status_code == 200
     assert trend.json()["data"][0]["value"] == pytest.approx(34.0)
+    assert current["above_sma20_pct"] == pytest.approx(60.0)
+    assert current["above_sma50_pct"] == pytest.approx(52.0)
+    assert current["sma50_eligible_count"] == 200
+    assert current["trend_template_entry_count"] == 7
+    assert current["trend_template_entry_eligible_count"] == 180
+    for indicator, value in (("above_sma20_pct", 60.0), ("trend_template_entry_count", 7)):
+        series = await client.get(
+            f"/api/v1/breadth/trend/{indicator}", params={"days": 1, "market": "US"}
+        )
+        assert series.json()["data"][0]["value"] == pytest.approx(value)
 
 
 @pytest.mark.asyncio

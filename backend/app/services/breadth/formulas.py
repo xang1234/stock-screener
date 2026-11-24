@@ -20,9 +20,15 @@ from .types import (
 )
 
 _REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
-BREADTH_FEATURE_WARMUP_SESSIONS = 251
+# Yesterday's trend template reads a 252-session low and high ending yesterday.
+BREADTH_FEATURE_WARMUP_SESSIONS = 252
 DOWN_FROM_HIGH_RATIO = 0.80
 NEAR_HIGH_RATIO = 0.85
+TEMPLATE_ABOVE_LOW_RATIO = 1.30
+TEMPLATE_NEAR_HIGH_RATIO = 0.75
+_TEMPLATE_INPUTS = (
+    "adjusted_close", "sma50", "sma150", "sma200", "sma200_21", "low_252", "high_252"
+)
 
 
 def _normalized_session_index(values: object) -> pd.DatetimeIndex:
@@ -51,7 +57,7 @@ def prices_for_feature_window(
     prices_by_symbol: Mapping[str, pd.DataFrame],
     calculation_dates: tuple[date, ...],
 ) -> dict[str, pd.DataFrame]:
-    """Retain requested sessions plus the exact 251-session warm-up."""
+    """Retain requested sessions plus the exact 252-session warm-up."""
     if not calculation_dates:
         return {}
     first_date = min(calculation_dates)
@@ -96,6 +102,30 @@ def _wilder_average(values: pd.Series, period: int) -> pd.Series:
             previous = ((previous * (period - 1)) + current) / period
         output[position] = previous
     return pd.Series(output, index=values.index, dtype=float)
+
+
+def _reaches(values: pd.Series, limit: pd.Series) -> pd.Series:
+    return (values >= limit) | np.isclose(values, limit, rtol=1e-12, atol=1e-12)
+
+
+def trend_template(features: pd.DataFrame) -> pd.Series:
+    """Minervini's trend template on price alone: 1.0 pass, 0.0 fail, NaN unknown.
+
+    The RS-rank criterion is left out: breadth sees one symbol at a time, with
+    no cross-section to rank it against.
+    """
+    close = features["adjusted_close"]
+    # close > 50-day > 150-day > 200-day covers every moving-average ordering.
+    passed = (
+        (close > features["sma50"])
+        & (features["sma50"] > features["sma150"])
+        & (features["sma150"] > features["sma200"])
+        & (features["sma200"] > features["sma200_21"])
+        & _reaches(close, TEMPLATE_ABOVE_LOW_RATIO * features["low_252"])
+        & _reaches(close, TEMPLATE_NEAR_HIGH_RATIO * features["high_252"])
+    )
+    known = np.isfinite(features[list(_TEMPLATE_INPUTS)]).all(axis=1)
+    return passed.astype(float).where(known)
 
 
 def prepare_feature_frame(
@@ -143,15 +173,24 @@ def prepare_feature_frame(
     result["high_34"] = adjusted_close.rolling(34, min_periods=34).max()
     result["low_65"] = adjusted_close.rolling(65, min_periods=65).min()
     result["high_65"] = adjusted_close.rolling(65, min_periods=65).max()
+    result["sma20"] = adjusted_close.rolling(20, min_periods=20).mean()
     result["sma40"] = adjusted_close.rolling(40, min_periods=40).mean()
     result["sma50"] = adjusted_close.rolling(50, min_periods=50).mean()
+    result["sma150"] = adjusted_close.rolling(150, min_periods=150).mean()
     result["sma200"] = adjusted_close.rolling(200, min_periods=200).mean()
-    # min_periods=1: a recent listing measures from its listing high.
-    # A missing High inside the window makes the high unknown, like previous_251_high.
-    high_gaps = result["adjusted_high"].isna().rolling(252, min_periods=1).sum()
+    result["sma200_21"] = result["sma200"].shift(21)
+    # min_periods=1: a recent listing measures from its listing high and low.
+    # A missing value inside the window makes them unknown, like previous_251_high.
+    year = result[["adjusted_high", "adjusted_low"]]
+    gap_free = year.isna().rolling(252, min_periods=1).sum() == 0
     result["high_252"] = (
-        result["adjusted_high"].rolling(252, min_periods=1).max().where(high_gaps == 0)
+        year["adjusted_high"].rolling(252, min_periods=1).max().where(gap_free["adjusted_high"])
     )
+    result["low_252"] = (
+        year["adjusted_low"].rolling(252, min_periods=1).min().where(gap_free["adjusted_low"])
+    )
+    result["trend_template"] = trend_template(result)
+    result["prior_trend_template"] = result["trend_template"].shift(1)
 
     previous_close = adjusted_close.shift(1)
     true_range = pd.concat(
@@ -243,8 +282,11 @@ def evaluate_symbol_at(
     atr_extension = (
         _finite(row.adjusted_close, row.sma50, row.atr14) and float(row.atr14) > 0
     )
+    sma20 = _finite(row.adjusted_close, row.sma20)
+    sma50 = _finite(row.adjusted_close, row.sma50)
     sma200 = _finite(row.adjusted_close, row.sma200)
     off_high = _finite(row.adjusted_close, row.high_252) and float(row.high_252) > 0
+    template_entry = _finite(row.trend_template, row.prior_trend_template)
 
     eligibility = SymbolMetricEligibility(
         advance_decline=advance_decline,
@@ -258,6 +300,9 @@ def evaluate_symbol_at(
         atr_extension=atr_extension,
         sma200=sma200,
         off_high=off_high,
+        sma20=sma20,
+        sma50=sma50,
+        template_entry=template_entry,
     )
 
     daily_volume_filter = (
@@ -335,6 +380,11 @@ def evaluate_symbol_at(
         up_4pct_near_high=up_4pct
         and off_high
         and _at_least(ratio_to_high, NEAR_HIGH_RATIO),
+        above_sma20=sma20 and float(row.adjusted_close) > float(row.sma20),
+        above_sma50=sma50 and float(row.adjusted_close) > float(row.sma50),
+        trend_template_entry=template_entry
+        and float(row.trend_template) == 1.0
+        and float(row.prior_trend_template) == 0.0,
     )
     candidate_values = {
         "up_4pct": daily_return * 100.0,
