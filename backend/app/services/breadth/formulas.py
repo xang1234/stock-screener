@@ -26,8 +26,11 @@ DOWN_FROM_HIGH_RATIO = 0.80
 NEAR_HIGH_RATIO = 0.85
 TEMPLATE_ABOVE_LOW_RATIO = 1.30
 TEMPLATE_NEAR_HIGH_RATIO = 0.75
+# Same as the Minervini scanner: the 200-day is 1%+ above its value 20 sessions back.
+TEMPLATE_SMA200_RISE_RATIO = 1.01
+TEMPLATE_SMA200_LOOKBACK_SESSIONS = 20
 _TEMPLATE_INPUTS = (
-    "adjusted_close", "sma50", "sma150", "sma200", "sma200_21", "low_252", "high_252"
+    "adjusted_close", "sma50", "sma150", "sma200", "sma200_month_ago", "low_252", "high_252"
 )
 
 
@@ -120,7 +123,7 @@ def trend_template(features: pd.DataFrame) -> pd.Series:
         (close > features["sma50"])
         & (features["sma50"] > features["sma150"])
         & (features["sma150"] > features["sma200"])
-        & (features["sma200"] > features["sma200_21"])
+        & _reaches(features["sma200"], TEMPLATE_SMA200_RISE_RATIO * features["sma200_month_ago"])
         & _reaches(close, TEMPLATE_ABOVE_LOW_RATIO * features["low_252"])
         & _reaches(close, TEMPLATE_NEAR_HIGH_RATIO * features["high_252"])
     )
@@ -178,7 +181,7 @@ def prepare_feature_frame(
     result["sma50"] = adjusted_close.rolling(50, min_periods=50).mean()
     result["sma150"] = adjusted_close.rolling(150, min_periods=150).mean()
     result["sma200"] = adjusted_close.rolling(200, min_periods=200).mean()
-    result["sma200_21"] = result["sma200"].shift(21)
+    result["sma200_month_ago"] = result["sma200"].shift(TEMPLATE_SMA200_LOOKBACK_SESSIONS)
     # min_periods=1: a recent listing measures from its listing high and low.
     # A missing value inside the window makes them unknown, like previous_251_high.
     year = result[["adjusted_high", "adjusted_low"]]

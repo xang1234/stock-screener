@@ -547,7 +547,7 @@ _TEMPLATE_ROW = {
     "sma50": 70.0,
     "sma150": 65.0,
     "sma200": 60.0,
-    "sma200_21": 58.0,
+    "sma200_month_ago": 58.0,
     "low_252": 60.0,
     "high_252": 104.0,
 }
@@ -564,13 +564,24 @@ def _template(**overrides):
         ({"sma50": 78.0}, False),  # close must be above the 50-day
         ({"sma150": 70.0}, False),  # 50-day must be above the 150-day
         ({"sma150": 60.0}, False),  # 150-day must be above the 200-day
-        ({"sma200_21": 60.0}, False),  # 200-day must be higher than a month ago
+        # The 200-day must be at least 1% above a month ago, as the Minervini scanner requires.
+        ({"sma200_month_ago": 60.0 / 1.01}, True),
+        ({"sma200_month_ago": 59.5}, False),
         ({"low_252": 60.01}, False),  # at least 30% above the 52-week low
         ({"high_252": 104.01}, False),  # within 25% of the 52-week high
     ],
 )
 def test_trend_template_boundaries(overrides, passes):
     assert _template(**overrides) == (1.0 if passes else 0.0)
+
+
+def test_the_200_day_a_month_ago_is_the_one_the_minervini_scanner_reads():
+    prices = _flat_prices(260)
+    prices["Adj Close"] = [float(value) for value in range(100, 360)]
+    features = prepare_feature_frame(prices)
+
+    sma200 = prices["Adj Close"].rolling(200).mean()
+    assert features["sma200_month_ago"].iloc[-1] == pytest.approx(sma200.iloc[-21])
 
 
 @pytest.mark.parametrize("column", sorted(_TEMPLATE_ROW))
