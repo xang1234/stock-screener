@@ -370,7 +370,19 @@ def test_rebuild_stages_short_term_participation_and_template_entries():
         ("above_sma50_pct = 50.0", "pct_reconciliation:above_sma50_pct"),
         (
             "trend_template_entry_count = 1",
-            "context_exceeds_eligibility:trend_template_entry_count",
+            "count_exceeds_eligibility:trend_template_entry_count",
+        ),
+        (
+            "trend_template_entry_count = -1",
+            "count_exceeds_eligibility:trend_template_entry_count",
+        ),
+        (
+            "trend_template_entry_count = NULL",
+            "count_exceeds_eligibility:trend_template_entry_count",
+        ),
+        (
+            "up_4pct_near_high_count = -1",
+            "count_exceeds_eligibility:up_4pct_near_high_count",
         ),
     ],
 )

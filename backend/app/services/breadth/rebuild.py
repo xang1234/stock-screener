@@ -558,6 +558,8 @@ class BreadthRebuildService:
                 ("stocks_down_13pct_34days", "stockbee_34day_eligible_count"),
                 ("stocks_up_25pct_quarter", "stockbee_quarter_eligible_count"),
                 ("stocks_down_25pct_quarter", "stockbee_quarter_eligible_count"),
+                ("up_4pct_near_high_count", "stocks_up_4pct"),
+                ("trend_template_entry_count", "trend_template_entry_eligible_count"),
                 *(
                     (count_name, eligible_name)
                     for _, count_name, eligible_name in BREADTH_SHARE_FIELDS
@@ -600,8 +602,6 @@ class BreadthRebuildService:
                 ("new_high_52week_count", "high_low_52week_eligible_count"),
                 ("new_low_52week_count", "high_low_52week_eligible_count"),
                 ("atr_10x_extension_count", "atr_extension_eligible_count"),
-                ("up_4pct_near_high_count", "stocks_up_4pct"),
-                ("trend_template_entry_count", "trend_template_entry_eligible_count"),
             ):
                 if int(row[count_name] or 0) > int(row[eligible_name] or 0):
                     errors.append(
