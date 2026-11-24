@@ -147,7 +147,11 @@ def prepare_feature_frame(
     result["sma50"] = adjusted_close.rolling(50, min_periods=50).mean()
     result["sma200"] = adjusted_close.rolling(200, min_periods=200).mean()
     # min_periods=1: a recent listing measures from its listing high.
-    result["high_252"] = result["adjusted_high"].rolling(252, min_periods=1).max()
+    # A missing High inside the window makes the high unknown, like previous_251_high.
+    high_gaps = result["adjusted_high"].isna().rolling(252, min_periods=1).sum()
+    result["high_252"] = (
+        result["adjusted_high"].rolling(252, min_periods=1).max().where(high_gaps == 0)
+    )
 
     previous_close = adjusted_close.shift(1)
     true_range = pd.concat(

@@ -482,3 +482,17 @@ def test_52_week_high_window_is_252_sessions_including_today(sessions, down):
     )
 
     assert signals.down_20pct_from_high is down
+
+
+@pytest.mark.parametrize(("sessions", "eligible"), [(252, False), (253, True)])
+def test_a_missing_high_inside_the_52_week_window_makes_the_off_high_unknown(
+    sessions, eligible
+):
+    prices = _flat_prices(sessions, close=38.0)
+    prices.iloc[0, prices.columns.get_loc("High")] = float("nan")
+
+    signals = signal_flags_at(
+        prepare_feature_frame(prices), CALCULATION_DATE.date(), BreadthFormulaPolicy()
+    )
+
+    assert signals.eligibility.off_high is eligible
