@@ -4,8 +4,9 @@ Additive and nullable. The calculation revision is unchanged, so rows written
 before this migration stay readable and show these fields as missing until the
 breadth rebuild refills history: ``python -m app.scripts.rebuild_market_breadth
 build --start-date <date>`` for every market (validation rejects a partial
-market set, and activation replaces all live rows), then ``validate`` and
-``activate --confirm-replace``.
+market set), then ``validate`` and ``activate --confirm-replace``. Activation
+replaces all live rows, so ``<date>`` must be the oldest breadth date to keep
+(``SELECT MIN(date) FROM market_breadth``); anything earlier is deleted.
 """
 
 import sqlalchemy as sa
