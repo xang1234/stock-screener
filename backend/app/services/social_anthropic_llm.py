@@ -51,8 +51,10 @@ class AnthropicMeteredLLM:
             )
         except anthropic.APIStatusError as exc:
             status = exc.status_code
-            # An empty prepaid balance is a 400, but like 402 it refuses every request.
-            if status == 400 and "credit balance" in str(exc.message).lower():
+            # An empty prepaid balance or a reached spend limit is a 400, but like 402
+            # it refuses every request.
+            message = str(exc.message).lower()
+            if status == 400 and ("credit balance" in message or "usage limits" in message):
                 status = 402
             logger.warning("Metered Anthropic dispatch failed: %s status=%s", type(exc).__name__, status)
             # A rate limit (429) is refused before inference; a timeout (408) may still have been billed.

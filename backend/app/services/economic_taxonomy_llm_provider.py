@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from functools import partial
+from http import HTTPStatus
 from typing import Any
 
 from sqlalchemy import func, select
@@ -23,6 +24,7 @@ from app.models.economic_taxonomy_runtime import (
     ProcessingRequestEvent,
 )
 from app.services.economic_exposure_extraction import (
+    CAPACITY_UNAVAILABLE,
     RetryableProviderError,
     TerminalProviderError,
     UncertainProviderError,
@@ -37,7 +39,6 @@ from app.services.llm.config import (
 from app.services.llm.llm_service import (
     LLMError,
     LLMPreDispatchError,
-    LLMQuotaExceededError,
     LLMRateLimitError,
     LLMService,
 )
@@ -157,13 +158,16 @@ class EconomicTaxonomyLLMProvider:
             raise RetryableProviderError(
                 "provider_configuration_error", dispatch_confirmed=False
             ) from exc
-        except (LLMRateLimitError, LLMQuotaExceededError) as exc:
-            raise RetryableProviderError(
-                "provider_capacity_unavailable",
-                actual_cost=Decimal(0),
-                dispatch_confirmed=True,
-            ) from exc
         except LLMError as exc:
+            # A rate or spend limit refuses the request before inference.
+            if isinstance(exc, LLMRateLimitError) or (
+                getattr(exc, "status_code", None) == HTTPStatus.PAYMENT_REQUIRED
+            ):
+                raise RetryableProviderError(
+                    CAPACITY_UNAVAILABLE,
+                    actual_cost=Decimal(0),
+                    dispatch_confirmed=True,
+                ) from exc
             raise UncertainProviderError(
                 "provider_outcome_uncertain", dispatch_confirmed=True
             ) from exc

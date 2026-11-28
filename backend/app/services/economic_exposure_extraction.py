@@ -32,6 +32,10 @@ class EvidenceSchemaError(ValueError):
     """A provider response cannot become a valid extraction artifact."""
 
 
+# The provider refused the call before inference for rate or spend limits.
+CAPACITY_UNAVAILABLE = "provider_capacity_unavailable"
+
+
 class BudgetExhausted(RuntimeError):
     """No provider reservation can be made for this call."""
 

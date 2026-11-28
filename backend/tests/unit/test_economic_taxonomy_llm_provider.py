@@ -269,15 +269,18 @@ HAIKU_PRICE = {
 }
 
 
-def status_error(status):
+USAGE_LIMIT = "You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC."
+
+
+def status_error(status, message="refused"):
     request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     return anthropic.APIStatusError(
-        "refused", response=httpx2.Response(status, request=request), body=None
+        message, response=httpx2.Response(status, request=request), body=None
     )
 
 
-def social_request(monkeypatch, *effects):
-    """One Social-backed processing request served by a scripted Haiku client.
+def social_request(monkeypatch, *effects, posts=1):
+    """Social-backed processing requests served by a scripted Haiku client; returns the first.
 
     Each effect is an exception to raise, a JSON answer, or text cut off at max_tokens.
     """
@@ -304,24 +307,28 @@ def social_request(monkeypatch, *effects):
             ]
         )
     with SessionLocal.begin() as db:
-        admitted = EconomicSourceAdmissionService(db).admit_content(
-            EvidenceAdmission(
-                provider="x",
-                canonical_item_id="haiku-post",
-                capture_route="social",
-                original_text="Memory pricing rose.",
-                preparation_version="social-v1",
-                available_at=NOW,
-                evidence_channels=("narrative",),
-                source_metadata={"social_work_id": 1},
+        request_ids = []
+        for post in range(posts):
+            admitted = EconomicSourceAdmissionService(db).admit_content(
+                EvidenceAdmission(
+                    provider="x",
+                    canonical_item_id=f"haiku-post-{post}",
+                    capture_route="social",
+                    original_text=f"Memory pricing rose {post}.",
+                    preparation_version="social-v1",
+                    available_at=NOW,
+                    evidence_channels=("narrative",),
+                    source_metadata={"social_work_id": 1},
+                )
             )
-        )
-        request_id = EconomicTaxonomyWorkRepository(db).enqueue_request(
-            source_lineage_id=admitted.source_lineage_id,
-            evidence_packet_id=admitted.packet_id,
-            policy_bundle_version=POLICY_BUNDLE_VERSION,
-            available_at=NOW,
-        ).id
+            request_ids.append(
+                EconomicTaxonomyWorkRepository(db).enqueue_request(
+                    source_lineage_id=admitted.source_lineage_id,
+                    evidence_packet_id=admitted.packet_id,
+                    policy_bundle_version=POLICY_BUNDLE_VERSION,
+                    available_at=NOW,
+                ).id
+            )
 
     effects = list(effects)
 
@@ -359,7 +366,7 @@ def social_request(monkeypatch, *effects):
     service = EconomicTaxonomyTaskService(
         SessionLocal, pipeline=SimpleNamespace(process=process), clock=lambda: NOW
     )
-    return request_id, service
+    return request_ids[0], service
 
 
 def outcomes(request_id):
@@ -378,10 +385,18 @@ def outcomes(request_id):
         )
 
 
-def test_rate_limited_haiku_dispatch_leaves_the_request_retryable_at_zero_cost(
-    monkeypatch,
+CAPACITY_REFUSALS = pytest.mark.parametrize(
+    "refusal",
+    [lambda: status_error(429), lambda: status_error(400, USAGE_LIMIT)],
+    ids=["rate_limit", "usage_limit"],
+)
+
+
+@CAPACITY_REFUSALS
+def test_capacity_refused_haiku_dispatch_leaves_the_request_retryable_at_zero_cost(
+    monkeypatch, refusal
 ):
-    request_id, service = social_request(monkeypatch, status_error(429))
+    request_id, service = social_request(monkeypatch, refusal())
 
     result = service.process(limit=1, worker_id="worker:test")
 
@@ -390,6 +405,19 @@ def test_rate_limited_haiku_dispatch_leaves_the_request_retryable_at_zero_cost(
         ("retryable", "provider_retryable"),
         ["retryable_failure"],
         [("reconciled", Decimal("0"))],
+    )
+
+
+@CAPACITY_REFUSALS
+def test_capacity_refusal_stops_the_batch(monkeypatch, refusal):
+    _request_id, service = social_request(monkeypatch, refusal(), refusal(), posts=2)
+
+    result = service.process(limit=2, worker_id="worker:test")
+
+    assert (result["claimed"], result["retryable"], result.get("reason")) == (
+        1,
+        1,
+        "provider_capacity_unavailable",
     )
 
 

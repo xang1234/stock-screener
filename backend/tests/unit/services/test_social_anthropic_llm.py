@@ -71,25 +71,26 @@ def test_reports_a_reply_cut_off_at_max_tokens_as_length():
     assert call(llm_with(create)).choices[0].finish_reason == "length"
 
 
-@pytest.mark.parametrize(("error", "expected"), [
-    (status_error(401), LLMProviderRejectedError),
-    (status_error(400, "Your credit balance is too low to access the Anthropic API."), LLMProviderRejectedError),
-    (status_error(400, "invalid request"), LLMProviderRejectedError),
-    (status_error(429), LLMRateLimitError),
-    (status_error(529), LLMError),
-    (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com")), LLMError),
+USAGE_LIMIT = "You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC."
+
+
+@pytest.mark.parametrize(("error", "expected", "status"), [
+    (status_error(401), LLMProviderRejectedError, 401),
+    (status_error(400, "Your credit balance is too low to access the Anthropic API."), LLMProviderRejectedError, 402),
+    (status_error(400, USAGE_LIMIT), LLMProviderRejectedError, 402),
+    (status_error(400, "invalid request"), LLMProviderRejectedError, 400),
+    (status_error(429), LLMRateLimitError, None),
+    (status_error(529), LLMError, None),
+    (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com")), LLMError, None),
 ])
-def test_maps_provider_errors_to_the_metered_contract(error, expected):
+def test_maps_provider_errors_to_the_metered_contract(error, expected, status):
     async def create(**_kwargs):
         raise error
 
     with pytest.raises(expected) as raised:
         call(llm_with(create))
-    if expected is LLMProviderRejectedError:
-        message = str(error.message).lower()
-        assert raised.value.status_code == (402 if "credit balance" in message else error.status_code)
-    else:
-        assert type(raised.value) is expected
+    assert type(raised.value) is expected
+    assert getattr(raised.value, "status_code", None) == status
 
 
 def test_missing_key_fails_before_dispatch(monkeypatch):

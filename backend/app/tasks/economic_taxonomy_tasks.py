@@ -42,6 +42,7 @@ from app.services.economic_exposure_claim_review import (
     EconomicExposureClaimReviewer,
 )
 from app.services.economic_exposure_extraction import (
+    CAPACITY_UNAVAILABLE,
     BudgetExhausted,
     EconomicExposureExtractor,
     EvidenceSchemaError,
@@ -372,7 +373,7 @@ class EconomicTaxonomyTaskService:
                 result["retryable"] += 1
                 result["reason"] = "budget_exhausted"
                 break
-            except RetryableProviderFailure:
+            except RetryableProviderFailure as exc:
                 delay = self._retry_delay(request_id)
                 self._retry_request(
                     request_id,
@@ -381,6 +382,9 @@ class EconomicTaxonomyTaskService:
                     delay=delay,
                 )
                 result["retryable"] += 1
+                if str(exc) == CAPACITY_UNAVAILABLE:
+                    result["reason"] = CAPACITY_UNAVAILABLE
+                    break
             except ProviderOutcomeUncertain:
                 self._terminal_request(
                     request_id,
