@@ -26,6 +26,7 @@ PROVIDER = "anthropic"
 # On 40 live posts Claude Haiku 5.5 kept 11 claims at medium against 7-9 at low;
 # high took ~41 s a call.
 EFFORT = "medium"
+_TRUNCATED = frozenset({"max_tokens", "model_context_window_exceeded"})
 
 
 class AnthropicMeteredLLM:
@@ -72,7 +73,7 @@ class AnthropicMeteredLLM:
             # "length" is LiteLLM's finish reason for a reply cut off at max_tokens.
             choices=[SimpleNamespace(
                 message=SimpleNamespace(content=text),
-                finish_reason="length" if response.stop_reason == "max_tokens" else response.stop_reason,
+                finish_reason="length" if response.stop_reason in _TRUNCATED else response.stop_reason,
             )],
             usage=SimpleNamespace(prompt_tokens=response.usage.input_tokens,
                                   completion_tokens=response.usage.output_tokens),

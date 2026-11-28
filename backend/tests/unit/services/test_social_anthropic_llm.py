@@ -59,13 +59,14 @@ def test_sends_one_schema_constrained_request_and_returns_the_ledger_shape():
     assert response._hidden_params == {"custom_llm_provider": "anthropic"}
 
 
-def test_reports_a_reply_cut_off_at_max_tokens_as_length():
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "model_context_window_exceeded"])
+def test_reports_a_reply_cut_off_at_max_tokens_as_length(stop_reason):
     async def create(**_kwargs):
         return SimpleNamespace(
             id="msg_1", model="claude-haiku-5-5",
             content=[SimpleNamespace(type="text", text='{"posts": [')],
             usage=SimpleNamespace(input_tokens=120, output_tokens=8192),
-            stop_reason="max_tokens",
+            stop_reason=stop_reason,
         )
 
     assert call(llm_with(create)).choices[0].finish_reason == "length"
