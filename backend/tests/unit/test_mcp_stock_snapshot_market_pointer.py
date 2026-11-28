@@ -159,6 +159,54 @@ def _seed_de_run(session_factory) -> int:
     return DE_RUN
 
 
+def _seed_failed_run_with_rows(session_factory, run_id: int = 4) -> int:
+    """A run that failed after its feature rows were written.
+
+    A pointer can be left behind on it, and the rows are real - which is exactly why the
+    status has to be checked instead of the rows.
+    """
+    session = session_factory()
+    try:
+        session.add(
+            FeatureRun(
+                id=run_id,
+                as_of_date=date(2026, 3, 31),
+                run_type="daily_snapshot",
+                status="failed",
+                created_at=datetime(2026, 3, 31, 18, 0, tzinfo=UTC),
+                completed_at=None,
+                published_at=None,
+            )
+        )
+        session.add(
+            StockFeatureDaily(
+                run_id=run_id,
+                symbol="NVDA",
+                as_of_date=date(2026, 3, 31),
+                composite_score=11.0,
+                overall_rating=1,
+                passes_count=0,
+                details_json=_details(
+                    "NVDA",
+                    11.0,
+                    "Avoid",
+                    4,
+                    12,
+                    "Semiconductors",
+                    100.0,
+                    1_000_000,
+                    3_000_000_000_000,
+                    0.0,
+                    0.0,
+                ),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+    return run_id
+
+
 def _newest_published_run_id(session_factory) -> int | None:
     """The run ``_latest_published_run`` would have answered before the fix.
 
@@ -286,6 +334,41 @@ def test_stock_snapshot_leaves_a_symbol_outside_the_universe_unchanged(
     assert payload["stock"] is None
     assert payload["technicals"] is None
     assert "NOSUCH" in payload["summary"]
+
+
+def test_stock_snapshot_falls_back_when_the_market_pointer_target_is_not_published(
+    service, session_factory
+):
+    """A pointer left on a failed run must not answer: the global pointer takes over.
+
+    ``get_latest_published()`` follows the pointer without checking the target's status,
+    and a failed run can still carry rows written before it failed. Resolving the pointer
+    blindly would serve those rows as if they were published.
+    """
+    failed_run = _seed_failed_run_with_rows(session_factory)
+    _set_market(session_factory, "NVDA", "US")
+    _point(session_factory, "latest_published_market:US", failed_run)
+    _point(session_factory, "latest_published", NEWEST_US_RUN)
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is not None
+    assert payload["technicals"]["run_id"] == NEWEST_US_RUN
+    assert payload["technicals"]["composite_score"] == 92.0
+
+
+def test_stock_snapshot_reports_no_run_when_no_pointer_target_is_published(
+    service, session_factory
+):
+    """Neither the market pointer nor a global pointer leads to a published run."""
+    failed_run = _seed_failed_run_with_rows(session_factory)
+    _set_market(session_factory, "NVDA", "US")
+    _point(session_factory, "latest_published_market:US", failed_run)
+    _drop_pointer(session_factory, "latest_published")
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is None
 
 
 def test_stock_snapshot_does_not_follow_the_pointer_of_another_market(
