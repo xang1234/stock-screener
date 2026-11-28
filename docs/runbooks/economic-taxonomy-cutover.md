@@ -282,7 +282,8 @@ target unless a reviewed operation ran since. Use the anchor's semantic hash as
 The repository has no exporter for `benchmark-actual.json` yet. The
 `benchmark_cases` in `contract_cases.json` hold only `required` and `forbidden`
 outcome labels. They hold no inputs. An exporter needs an input scenario for
-each case before it can produce this file.
+each case before it can produce this file. Running the fixtures processes new
+requests, so republish shadow again after they finish and before you export.
 
 Create `$RELEASE_DIR/benchmark-actual.json` by running every named
 `benchmark_cases` fixture through the deployed shadow processor and exporting
