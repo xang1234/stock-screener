@@ -13,7 +13,10 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.infra.db.repositories.economic_taxonomy_work_repo import OPERATOR_REQUEUE_REASON
+from app.infra.db.repositories.economic_taxonomy_work_repo import (
+    LEASE_DURATION,
+    OPERATOR_REQUEUE_REASON,
+)
 from app.models.economic_taxonomy_runtime import (
     EvidencePacket,
     ProcessingRequest,
@@ -60,6 +63,8 @@ whose theme, mechanism, facets, securities, and quoted evidence are mutually sup
 
 
 CLAUDE_HAIKU_55 = ModelConfig(model_id="anthropic/claude-haiku-5-5")
+# Extraction and review both dispatch inside one processing lease.
+REQUEST_TIMEOUT_SECONDS = LEASE_DURATION.total_seconds() / 3
 
 # The first entry whose credential is configured serves every call.
 _PROVIDERS = (
@@ -141,6 +146,7 @@ class EconomicTaxonomyLLMProvider:
                     response_format={"type": "json_object"},
                     temperature=0,
                     max_tokens=4000,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
                     num_retries=0,
                     metered=True,
                 )

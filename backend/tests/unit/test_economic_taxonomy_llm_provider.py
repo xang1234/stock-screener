@@ -16,6 +16,7 @@ from app.database import SessionLocal
 from app.infra.db.models.social_analysis import SocialLLMAttempt
 from app.infra.db.models.social_signals import SocialSourceRegistry
 from app.infra.db.repositories.economic_taxonomy_work_repo import (
+    LEASE_DURATION,
     EconomicTaxonomyWorkRepository,
 )
 from app.models.app_settings import AppSetting
@@ -102,6 +103,7 @@ def test_provider_uses_single_metered_json_dispatch():
     assert llm.calls[0]["metered"] is True
     assert llm.calls[0]["allow_fallbacks"] is False
     assert llm.calls[0]["num_retries"] == 0
+    assert 0 < 2 * llm.calls[0]["timeout"] < LEASE_DURATION.total_seconds()
 
 
 def test_provider_configuration_failure_is_retryable_before_dispatch():
@@ -189,6 +191,7 @@ def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
     assert sent["model"] == "claude-haiku-5-5"
     assert sent["max_tokens"] == RoutedEconomicReservationManager.OUTPUT_TOKEN_LIMIT
     assert sent["output_config"] == {"effort": "medium"}
+    assert 0 < 2 * sent["timeout"] < LEASE_DURATION.total_seconds()
     assert "temperature" not in sent and "response_format" not in sent
     assert result == {
         "status": "successful_empty",
