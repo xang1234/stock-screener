@@ -142,17 +142,19 @@ def test_requeue_leaves_a_request_claimed_while_it_waited_for_the_row_lock(facto
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(requeue, sessions, NOW, apply=True)
-        deadline = time.monotonic() + 5
-        while not _waiting_on_row_lock() and not pending.done():
-            assert time.monotonic() < deadline, "requeue never reached the row lock"
-            time.sleep(0.05)
-        lease_token = uuid4()
-        request.status = "leased"
-        request.lease_token = lease_token
-        request.lease_owner = "worker-1"
-        request.lease_expires_at = NOW
-        holder.commit()
-        holder.close()
+        try:
+            deadline = time.monotonic() + 5
+            while not _waiting_on_row_lock() and not pending.done():
+                assert time.monotonic() < deadline, "requeue never reached the row lock"
+                time.sleep(0.05)
+            lease_token = uuid4()
+            request.status = "leased"
+            request.lease_token = lease_token
+            request.lease_owner = "worker-1"
+            request.lease_expires_at = NOW
+            holder.commit()
+        finally:
+            holder.close()
         counts = pending.result(timeout=10)
 
     with sessions() as session:
@@ -192,15 +194,17 @@ def test_stale_worker_leaves_a_request_reclaimed_while_it_waited_for_the_row_loc
             .with_for_update()
         ).scalar_one()
         locked.set()
-        deadline = time.monotonic() + 5
-        while not _waiting_on_row_lock() and not pending.done():
-            assert time.monotonic() < deadline, "worker-a never reached the row lock"
-            time.sleep(0.05)
-        replacement = uuid4()
-        request.lease_token = replacement
-        request.lease_owner = "worker-b"
-        holder.commit()
-        holder.close()
+        try:
+            deadline = time.monotonic() + 5
+            while not _waiting_on_row_lock() and not pending.done():
+                assert time.monotonic() < deadline, "worker-a never reached the row lock"
+                time.sleep(0.05)
+            replacement = uuid4()
+            request.lease_token = replacement
+            request.lease_owner = "worker-b"
+            holder.commit()
+        finally:
+            holder.close()
         error = pending.exception(timeout=10)
 
     with sessions() as session:

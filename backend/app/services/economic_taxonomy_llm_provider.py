@@ -95,6 +95,14 @@ def _json_payload(text: str) -> dict[str, Any]:
     return parsed
 
 
+async def _dispatch(llm, **kwargs):
+    try:
+        return await llm.completion(**kwargs)
+    finally:
+        if isinstance(llm, AnthropicMeteredLLM):
+            await llm.client.close()
+
+
 class EconomicTaxonomyLLMProvider:
     """One-dispatch JSON provider shared by extraction and claim review."""
 
@@ -136,7 +144,8 @@ class EconomicTaxonomyLLMProvider:
             # Each dispatch runs in its own event loop, and an async client stays
             # bound to the loop that first used it.
             response = asyncio.run(
-                self.llm().completion(
+                _dispatch(
+                    self.llm(),
                     messages=[
                         {"role": "system", "content": system},
                         {

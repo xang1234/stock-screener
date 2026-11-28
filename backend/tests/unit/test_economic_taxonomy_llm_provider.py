@@ -69,10 +69,13 @@ def _response(payload: str):
 
 
 def _anthropic_create(monkeypatch, create):
+    async def close():
+        return None
+
     monkeypatch.setattr(
         anthropic,
         "AsyncAnthropic",
-        lambda **_kwargs: SimpleNamespace(messages=SimpleNamespace(create=create)),
+        lambda **_kwargs: SimpleNamespace(messages=SimpleNamespace(create=create), close=close),
     )
 
 
@@ -258,6 +261,24 @@ def test_haiku_extract_then_review_both_reach_the_provider(monkeypatch, messages
         "msg_2",
     )
     assert messages_api.served == 2
+
+
+def test_each_haiku_dispatch_closes_its_client(monkeypatch, messages_api):
+    _credentials(monkeypatch, anthropic="test-key")
+    closed = []
+    original_close = anthropic.AsyncAnthropic.close
+
+    async def close(self):
+        closed.append(self)
+        await original_close(self)
+
+    monkeypatch.setattr(anthropic.AsyncAnthropic, "close", close)
+    provider, _reservations = build_economic_taxonomy_provider(SessionLocal)
+
+    extraction = provider.extract(evidence={"original_text": "x"}, policy_version="v1")
+    provider.review(extraction=extraction, policy_version="v1", facet_catalog_semantic_hash="h")
+
+    assert len({id(client) for client in closed}) == 2
 
 
 NOW = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
