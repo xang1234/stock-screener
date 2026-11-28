@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -47,6 +48,8 @@ from app.services.social_llm_budget_service import (
     SocialEconomicReservationManager,
     SocialLLMBudgetService,
 )
+
+logger = logging.getLogger(__name__)
 
 _EXTRACTION_SYSTEM = """You extract investable economic themes from supplied evidence.
 Return one JSON object only. Use status successful_empty with candidates [] when no
@@ -100,7 +103,10 @@ async def _dispatch(llm, **kwargs):
         return await llm.completion(**kwargs)
     finally:
         if isinstance(llm, AnthropicMeteredLLM):
-            await llm.client.close()
+            try:
+                await llm.client.close()
+            except Exception as exc:  # cleanup must not replace the dispatch outcome
+                logger.warning("Anthropic client close failed: %s", type(exc).__name__)
 
 
 class EconomicTaxonomyLLMProvider:

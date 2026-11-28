@@ -281,6 +281,20 @@ def test_each_haiku_dispatch_closes_its_client(monkeypatch, messages_api):
     assert len({id(client) for client in closed}) == 2
 
 
+def test_a_failed_client_close_keeps_the_haiku_answer(monkeypatch, messages_api):
+    _credentials(monkeypatch, anthropic="test-key")
+
+    async def close(self):
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(anthropic.AsyncAnthropic, "close", close)
+    provider, _reservations = build_economic_taxonomy_provider(SessionLocal)
+
+    extraction = provider.extract(evidence={"original_text": "x"}, policy_version="v1")
+
+    assert extraction["provider_request_id"] == "msg_1"
+
+
 NOW = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
 HAIKU_PRICE = {
     "provider": "anthropic",
