@@ -158,6 +158,11 @@ class ToolSpec:
     handler: Callable[[Any], ToolEnvelope]
 
 
+#: How many of the newest published runs a pointerless install is searched for its market's
+#: run. A pointerless install is a legacy one, not a busy one.
+PUBLISHED_RUN_SCAN_LIMIT = 50
+
+
 class StoredFeatureRunInvalid(RuntimeError):
     """A stored run row cannot be read: broken enum values, not a bad request."""
 
@@ -1551,11 +1556,14 @@ class MarketCopilotService:
             )
 
         run = None
+        run_source = None
         if args.include_technicals:
             # Market-first: publication writes a pointer per market and no longer maintains
             # the global one, so a symbol must be resolved against the run of its own market.
             with self._uow_scope() as uow:
-                run = self._latest_published_run_for_symbol(uow, args.symbol)
+                run, run_source = self._resolve_published_run_for_symbol(
+                    uow, args.symbol, allow_published_scan=True
+                )
 
         stock_info = {
             "symbol": stock.symbol,
@@ -1580,6 +1588,7 @@ class MarketCopilotService:
                 technicals = {
                     "run_id": run.id,
                     "as_of_date": run.as_of_date.isoformat(),
+                    "run_source": run_source,
                     "composite_score": row.composite_score,
                     "overall_rating": row.rating,
                     "rs_rating": extended.get("rs_rating"),
@@ -1624,17 +1633,50 @@ class MarketCopilotService:
 
         Intended change: a single-market install without a global pointer now finds its run
         through the market pointer instead of reporting that none is published.
-        """
-        with self._uow_scope() as uow:
-            run = self._latest_published_run_for_symbol(uow, args.symbol)
 
+        The symbol is looked up before the run, so a run row that cannot be read does not turn
+        "not in the universe" into an error. ``technicals["run_source"]`` says which pointer -
+        or which published-run scan - answered, and breadth is left out for symbols outside
+        the US, whose breadth series this tool does not have.
+        """
+        # The symbol first: an unknown symbol has no market to resolve a run for, and a run row
+        # that cannot be read must not turn "not in the universe" into an error.
         with self._session_scope() as db:
             stock = (
                 db.query(StockUniverse)
                 .filter(StockUniverse.symbol == args.symbol, StockUniverse.is_active.is_(True))
                 .first()
             )
-            breadth = self._latest_breadth(db, getattr(run, "as_of_date", None))
+
+        if stock is None:
+            return self._envelope(
+                f"Symbol {args.symbol!r} was not found in the active stock universe.",
+                facts=[],
+                citations=[],
+                next_actions=["Verify the ticker symbol or check if it was delisted."],
+                freshness=self._freshness(),
+                stock=None,
+                technicals=None,
+                themes=[],
+                watchlists=[],
+                breadth=None,
+            )
+
+        with self._uow_scope() as uow:
+            symbol_market = self._symbol_market(uow, args.symbol)
+            run, run_source = self._resolve_published_run_for_symbol(
+                uow, args.symbol, allow_published_scan=True
+            )
+
+        with self._session_scope() as db:
+            # Breadth is read for the US market only (see _latest_breadth). Handing it another
+            # market's run date would match the US series to a day that market never opened on,
+            # so a symbol outside the US answers without breadth instead.
+            breadth = (
+                self._latest_breadth(db, getattr(run, "as_of_date", None))
+                if symbol_market in {"", "US"}
+                else None
+            )
             watchlists = (
                 db.query(UserWatchlist)
                 .join(WatchlistItem, WatchlistItem.watchlist_id == UserWatchlist.id)
@@ -1694,20 +1736,6 @@ class MarketCopilotService:
                     metrics is not None for _, _, metrics in constituent_rows
                 )
 
-        if stock is None:
-            return self._envelope(
-                f"Symbol {args.symbol!r} was not found in the active stock universe.",
-                facts=[],
-                citations=[],
-                next_actions=["Verify the ticker symbol or check if it was delisted."],
-                freshness=self._freshness(),
-                stock=None,
-                technicals=None,
-                themes=[],
-                watchlists=[],
-                breadth=None,
-            )
-
         technicals = None
         if run is not None:
             with self._uow_scope() as uow:
@@ -1721,6 +1749,9 @@ class MarketCopilotService:
                 technicals = self._candidate_record(row)
                 technicals["run_id"] = run.id
                 technicals["as_of_date"] = run.as_of_date.isoformat()
+                # Which pointer (or query) answered, so a reader can tell the market
+                # publication from a fallback instead of taking both as today's figures.
+                technicals["run_source"] = run_source
 
         breadth_record = self._breadth_record(breadth)
         watchlist_rows = [{"id": row.id, "name": row.name} for row in watchlists]
@@ -2131,12 +2162,20 @@ class MarketCopilotService:
         side effect: publication owns that key, and writing it here would mask a
         genuinely missing publication.
 
+        Thin wrapper over ``_resolve_published_run_for_symbol`` for callers that do not need
+        to say where the figures came from (``explain_symbol`` does not).
+
         A pointer is only trusted while its target is still published:
         ``get_latest_published`` follows the pointer and does not check the run's status,
         so a pointer left behind on a failed run would otherwise answer with it. The
         caller gets the global pointer's run instead, or ``None`` when that is not
         published either - the same guard ``_published_candidate_market_run`` applies.
         """
+        run, _source = self._resolve_published_run_for_symbol(uow, symbol)
+        return run
+
+    def _symbol_market(self, uow: SqlUnitOfWork, symbol: str) -> str:
+        """The market the universe carries for *symbol*, upper-cased, or ``""`` when unknown."""
         market = (
             uow.session.query(StockUniverse.market)
             .filter(
@@ -2145,18 +2184,112 @@ class MarketCopilotService:
             )
             .scalar()
         )
-        normalized_market = str(market or "").strip().upper()
+        return str(market or "").strip().upper()
+
+    def _resolve_published_run_for_symbol(
+        self,
+        uow: SqlUnitOfWork,
+        symbol: str,
+        *,
+        allow_published_scan: bool = False,
+    ) -> tuple[FeatureRunDomain | None, str | None]:
+        """The published run that applies to *symbol*, and what answered for it.
+
+        ``source`` names the answer - ``"market_pointer"``, ``"global_pointer"`` or
+        ``"published_run"`` - or is ``None`` when nothing applies. A caller that shows the
+        figures can therefore say where they came from instead of presenting a fallback as
+        today's publication.
+
+        The chain is the symbol's market pointer, then the global pointer while it is
+        published and belongs to the symbol's market (or declares no market at all), then -
+        with *allow_published_scan* - the newest published run of the symbol's market.
+
+        The scan exists because the previous code read ``status == "published"`` directly: an
+        install whose pointers were never written (legacy database, cleaned-up pointer, rows
+        inserted without one) has published runs but no pointer, and resolving through
+        pointers alone would answer ``technicals: null`` for every symbol. ``explain_symbol``
+        deliberately keeps the pointer-only contract its own tests pin; the snapshot tools
+        answer from published rows as they did before.
+
+        Raises ``StoredFeatureRunInvalid`` when a stored run cannot be read: the row is
+        damaged, the request was not.
+        """
+        normalized_market = self._symbol_market(uow, symbol)
+
+        def from_pointer(pointer_key: str) -> FeatureRunDomain | None:
+            """The run behind *pointer_key*, when it is published.
+
+            ``get_latest_published`` follows the pointer without checking the target, and
+            mapping a stored row with an unknown status or run type raises ``ValueError``.
+            Neither may reach ``call_tool``'s ``ValueError`` branch, which would report the
+            caller's arguments as invalid.
+            """
+            try:
+                run = uow.feature_runs.get_latest_published(pointer_key=pointer_key)
+            except ValueError as exc:
+                raise StoredFeatureRunInvalid(
+                    f"Stored run behind {pointer_key} has an unknown status or run type"
+                ) from exc
+            if run is None or run.status != RunStatus.PUBLISHED:
+                return None
+            return run
+
+        def applies_to_the_market(run: FeatureRunDomain | None) -> bool:
+            """Whether *run* may answer for the symbol: same market, or none declared."""
+            if run is None:
+                return False
+            if not normalized_market:
+                return True
+            run_market = feature_run_market(run)
+            return run_market is None or run_market == normalized_market
 
         if normalized_market:
-            latest_run = uow.feature_runs.get_latest_published(
-                pointer_key=f"latest_published_market:{normalized_market}"
-            )
-            if latest_run is not None and latest_run.status == RunStatus.PUBLISHED:
-                return latest_run
+            market_run = from_pointer(f"latest_published_market:{normalized_market}")
+            if market_run is not None:
+                return market_run, "market_pointer"
 
-        global_run = uow.feature_runs.get_latest_published()
-        if global_run is not None and global_run.status == RunStatus.PUBLISHED:
-            return global_run
+        global_run = from_pointer("latest_published")
+        if applies_to_the_market(global_run):
+            # The global pointer is not maintained on a market-first install, so it may be
+            # frozen on another market's or an old run; the market check is what keeps it
+            # from answering for this symbol.
+            return global_run, "global_pointer"
+
+        if allow_published_scan:
+            scanned = self._newest_published_run_of_market(uow, normalized_market)
+            if scanned is not None:
+                return scanned, "published_run"
+
+        return None, None
+
+    def _newest_published_run_of_market(
+        self,
+        uow: SqlUnitOfWork,
+        market: str,
+    ) -> FeatureRunDomain | None:
+        """The newest published run of *market*, for installs whose pointers were never written.
+
+        A run that declares no market is accepted: it predates market publication, so it
+        cannot belong to another market. Only the newest ``PUBLISHED_RUN_SCAN_LIMIT`` runs are
+        inspected - the search exists for a legacy install, not for a busy one.
+        """
+        rows = (
+            uow.session.query(FeatureRun.id)
+            .filter(FeatureRun.status == RunStatus.PUBLISHED.value)
+            .order_by(FeatureRun.as_of_date.desc(), FeatureRun.id.desc())
+            .limit(PUBLISHED_RUN_SCAN_LIMIT)
+            .all()
+        )
+        for (run_id,) in rows:
+            try:
+                run = uow.feature_runs.get_run(run_id)
+            except ValueError as exc:
+                raise StoredFeatureRunInvalid(
+                    f"Stored run {run_id} has an unknown status or run type"
+                ) from exc
+            run_market = feature_run_market(run)
+            if not market or run_market is None or run_market == market:
+                return run
         return None
 
     def _latest_breadth(self, db: Session, as_of_date: date | None) -> MarketBreadth | None:
