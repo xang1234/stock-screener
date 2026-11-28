@@ -4,14 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+import logging
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
+from functools import partial
+from http import HTTPStatus
 from typing import Any
 
+from sqlalchemy import func, select
+
 from app.config import settings
-from app.models.economic_taxonomy_runtime import EvidencePacket, ProcessingRequest
+from app.infra.db.repositories.economic_taxonomy_work_repo import (
+    LEASE_DURATION,
+    OPERATOR_REQUEUE_REASON,
+)
+from app.models.economic_taxonomy_runtime import (
+    EvidencePacket,
+    ProcessingRequest,
+    ProcessingRequestEvent,
+)
 from app.services.economic_exposure_extraction import (
+    CAPACITY_UNAVAILABLE,
     RetryableProviderError,
     TerminalProviderError,
     UncertainProviderError,
@@ -20,19 +34,22 @@ from app.services.llm.config import (
     MINIMAX_M27,
     OPENCODE_GO_DEEPSEEK_V4_FLASH,
     ZAI_GLM_47_FLASH,
+    ModelConfig,
     ModelPreset,
 )
 from app.services.llm.llm_service import (
     LLMError,
     LLMPreDispatchError,
-    LLMQuotaExceededError,
     LLMRateLimitError,
     LLMService,
 )
+from app.services.social_anthropic_llm import AnthropicMeteredLLM
 from app.services.social_llm_budget_service import (
     SocialEconomicReservationManager,
     SocialLLMBudgetService,
 )
+
+logger = logging.getLogger(__name__)
 
 _EXTRACTION_SYSTEM = """You extract investable economic themes from supplied evidence.
 Return one JSON object only. Use status successful_empty with candidates [] when no
@@ -49,14 +66,23 @@ candidate_key, decision (accepted, held, or rejected), and reason. Accept only c
 whose theme, mechanism, facets, securities, and quoted evidence are mutually supported."""
 
 
-def _configured_preset() -> ModelPreset | None:
-    if (settings.minimax_api_key or "").strip():
-        return ModelPreset(primary=MINIMAX_M27)
-    if settings.zai_api_keys_list:
-        return ModelPreset(primary=ZAI_GLM_47_FLASH)
-    if (settings.opencode_go_api_key or "").strip():
-        return ModelPreset(primary=OPENCODE_GO_DEEPSEEK_V4_FLASH)
-    return None
+CLAUDE_HAIKU_55 = ModelConfig(model_id="anthropic/claude-haiku-5-5")
+# Extraction and review both dispatch inside one processing lease.
+REQUEST_TIMEOUT_SECONDS = LEASE_DURATION.total_seconds() / 3
+# Claude's thinking counts against this cap.
+MAX_OUTPUT_TOKENS = 8_000
+
+# The first entry whose credential is configured serves every call.
+_PROVIDERS = (
+    (lambda: bool((settings.anthropic_api_key or "").strip()), CLAUDE_HAIKU_55),
+    (lambda: bool((settings.minimax_api_key or "").strip()), MINIMAX_M27),
+    (lambda: bool(settings.zai_api_keys_list), ZAI_GLM_47_FLASH),
+    (lambda: bool((settings.opencode_go_api_key or "").strip()), OPENCODE_GO_DEEPSEEK_V4_FLASH),
+)
+
+
+def _configured_model() -> ModelConfig | None:
+    return next((model for configured, model in _PROVIDERS if configured()), None)
 
 
 def _json_payload(text: str) -> dict[str, Any]:
@@ -72,12 +98,29 @@ def _json_payload(text: str) -> dict[str, Any]:
     return parsed
 
 
+async def _dispatch(llm, **kwargs):
+    try:
+        return await llm.completion(**kwargs)
+    finally:
+        if isinstance(llm, AnthropicMeteredLLM):
+            try:
+                await llm.client.close()
+            except Exception as exc:  # cleanup must not replace the dispatch outcome
+                logger.warning("Anthropic client close failed: %s", type(exc).__name__)
+
+
 class EconomicTaxonomyLLMProvider:
     """One-dispatch JSON provider shared by extraction and claim review."""
 
-    def __init__(self, llm: LLMService, *, budget: SocialLLMBudgetService | None = None):
+    def __init__(
+        self,
+        llm: Callable[[], LLMService | AnthropicMeteredLLM],
+        *,
+        model: str,
+        budget: SocialLLMBudgetService | None = None,
+    ):
         self.llm = llm
-        self.model = llm.preset.primary.model_id
+        self.model = model
         self.budget = budget
 
     def extract(self, *, evidence: Mapping[str, Any], policy_version: str):
@@ -104,8 +147,11 @@ class EconomicTaxonomyLLMProvider:
 
     def _complete(self, *, system: str, payload: Mapping[str, Any]):
         try:
+            # Each dispatch runs in its own event loop, and an async client stays
+            # bound to the loop that first used it.
             response = asyncio.run(
-                self.llm.completion(
+                _dispatch(
+                    self.llm(),
                     messages=[
                         {"role": "system", "content": system},
                         {
@@ -117,7 +163,8 @@ class EconomicTaxonomyLLMProvider:
                     allow_fallbacks=False,
                     response_format={"type": "json_object"},
                     temperature=0,
-                    max_tokens=4000,
+                    max_tokens=MAX_OUTPUT_TOKENS,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
                     num_retries=0,
                     metered=True,
                 )
@@ -126,18 +173,28 @@ class EconomicTaxonomyLLMProvider:
             raise RetryableProviderError(
                 "provider_configuration_error", dispatch_confirmed=False
             ) from exc
-        except (LLMRateLimitError, LLMQuotaExceededError) as exc:
-            raise RetryableProviderError(
-                "provider_capacity_unavailable",
-                actual_cost=Decimal(0),
-                dispatch_confirmed=True,
-            ) from exc
         except LLMError as exc:
+            # A rate or spend limit refuses the request before inference.
+            if isinstance(exc, LLMRateLimitError) or (
+                getattr(exc, "status_code", None) == HTTPStatus.PAYMENT_REQUIRED
+            ):
+                raise RetryableProviderError(
+                    CAPACITY_UNAVAILABLE,
+                    actual_cost=Decimal(0),
+                    dispatch_confirmed=True,
+                ) from exc
             raise UncertainProviderError(
                 "provider_outcome_uncertain", dispatch_confirmed=True
             ) from exc
 
         request_id, actual_cost = self._response_metadata(response)
+        if response.choices and response.choices[0].finish_reason == "length":
+            raise TerminalProviderError(
+                "provider_output_truncated",
+                provider_request_id=request_id,
+                actual_cost=actual_cost,
+                dispatch_confirmed=True,
+            )
         try:
             result = _json_payload(LLMService.extract_content(response))
         except (json.JSONDecodeError, TypeError) as exc:
@@ -193,7 +250,7 @@ class RoutedEconomicReservationManager:
     """Use Social's durable budget only for evidence admitted from Social work."""
 
     INPUT_TOKEN_LIMIT = 20_000
-    OUTPUT_TOKEN_LIMIT = 4_000
+    OUTPUT_TOKEN_LIMIT = MAX_OUTPUT_TOKENS
 
     def __init__(self, session_factory, *, budget: SocialLLMBudgetService, model: str):
         self.session_factory = session_factory
@@ -209,6 +266,16 @@ class RoutedEconomicReservationManager:
                 else None
             )
             social_work_id = (packet.source_metadata or {}).get("social_work_id") if packet else None
+            # An operator requeue opens a new logical operation, so an uncertain
+            # earlier attempt keeps its charge without blocking the retry.
+            requeues = session.scalar(
+                select(func.count(ProcessingRequestEvent.id)).where(
+                    ProcessingRequestEvent.processing_request_id == logical_request_id,
+                    ProcessingRequestEvent.event_type == "retry_scheduled",
+                    ProcessingRequestEvent.event_payload["reason"].as_string()
+                    == OPERATOR_REQUEUE_REASON,
+                )
+            )
         if social_work_id is None:
             return _UnmeteredReservation()
         if not isinstance(social_work_id, int) or isinstance(social_work_id, bool):
@@ -226,23 +293,30 @@ class RoutedEconomicReservationManager:
             output_token_limit=self.OUTPUT_TOKEN_LIMIT,
         ).reserve(
             attempt_key=attempt_key,
-            logical_request_id=logical_request_id,
+            logical_request_id=(
+                f"{logical_request_id}:requeue-{requeues}" if requeues else logical_request_id
+            ),
             operation_kind=operation_kind,
         )
 
 
 def build_economic_taxonomy_provider(session_factory):
-    preset = _configured_preset()
-    if preset is None:
+    model = _configured_model()
+    if model is None:
         return None, None
     budget = SocialLLMBudgetService(
         session_factory,
         daily_limit_usd=settings.social_llm_daily_budget_usd,
         budget_timezone=settings.social_llm_budget_timezone,
     )
-    provider = EconomicTaxonomyLLMProvider(
-        LLMService(use_case="extraction", preset=preset), budget=budget
+    # Extraction and review each define their JSON shape in the prompt, so
+    # Claude gets no Social schema.
+    llm = (
+        partial(AnthropicMeteredLLM, output_schema=None)
+        if model.model_id.startswith("anthropic/")
+        else partial(LLMService, use_case="extraction", preset=ModelPreset(primary=model))
     )
+    provider = EconomicTaxonomyLLMProvider(llm, model=model.model_id, budget=budget)
     reservations = RoutedEconomicReservationManager(
         session_factory, budget=budget, model=provider.model
     )

@@ -463,15 +463,18 @@ def test_metered_transport_performs_one_http_attempt_and_redacts_errors(monkeypa
     assert "synthetic-private-response" not in caplog.text
 
 
-@pytest.mark.parametrize("status,refused", [
-    (400, True), (401, True), (404, True), (408, False), (429, False), (500, False),
+@pytest.mark.parametrize("status,outcome", [
+    (400, "refused"), (401, "refused"), (404, "refused"), (408, "unknown"), (429, "rate_limited"),
+    (500, "unknown"),
 ])
 def test_metered_transport_separates_refused_requests_from_unknown_outcomes(
-    monkeypatch, caplog, status, refused,
+    monkeypatch, caplog, status, outcome,
 ):
     import asyncio
     import httpx
-    from app.services.llm.llm_service import LLMError, LLMProviderRejectedError, LLMService
+    from app.services.llm.llm_service import (
+        LLMError, LLMProviderRejectedError, LLMRateLimitError, LLMService,
+    )
     from litellm.llms.openai.openai import OpenAIChatCompletion
     async def respond(request):
         return httpx.Response(status, json={"error": {"message": "synthetic-private-response"}})
@@ -488,7 +491,58 @@ def test_metered_transport_separates_refused_requests_from_unknown_outcomes(
                     allow_fallbacks=False, num_retries=0, metered=True)
             return error.value
     error = asyncio.run(run())
-    assert (isinstance(error, LLMProviderRejectedError), getattr(error, "status_code", None)) == (
-        refused, status if refused else None)
+    expected = {"refused": LLMProviderRejectedError, "rate_limited": LLMRateLimitError, "unknown": LLMError}
+    assert type(error) is expected[outcome]
+    assert getattr(error, "status_code", None) == (status if outcome == "refused" else None)
     assert f"status={status}" in caplog.text
     assert "synthetic-private-response" not in caplog.text
+
+
+
+@pytest.mark.parametrize("status,outcome", [
+    (402, "refused"), (429, "rate_limited"), (500, "unknown"),
+])
+def test_metered_transport_reads_the_http_status_litellm_wraps_for_minimax(
+    monkeypatch, status, outcome,
+):
+    import asyncio
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from app.services.llm.llm_service import (
+        LLMError, LLMProviderRejectedError, LLMRateLimitError, LLMService,
+    )
+
+    class Refusing(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length", 0)))
+            body = json.dumps({"error": {"message": "synthetic-private-response"}}).encode()
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Refusing)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    def overrides(self, params):
+        params.update(api_key="synthetic-only", api_base=f"http://127.0.0.1:{server.server_port}/v1")
+        return None, None, None
+    monkeypatch.setattr(LLMService, "_apply_provider_overrides", overrides)
+    async def run():
+        with pytest.raises(LLMError) as error:
+            await LLMService(use_case="extraction").completion(model="minimax/MiniMax-M2.7",
+                messages=[{"role": "user", "content": "fixture"}], max_tokens=20,
+                allow_fallbacks=False, num_retries=0, metered=True)
+        return error.value
+    try:
+        error = asyncio.run(run())
+    finally:
+        server.shutdown()
+        server.server_close()
+    expected = {"refused": LLMProviderRejectedError, "rate_limited": LLMRateLimitError, "unknown": LLMError}
+    assert type(error) is expected[outcome]
+    assert getattr(error, "status_code", None) == (status if outcome == "refused" else None)

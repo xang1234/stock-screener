@@ -5,7 +5,12 @@ import anthropic
 import httpx2
 import pytest
 
-from app.services.llm.llm_service import LLMError, LLMPreDispatchError, LLMProviderRejectedError
+from app.services.llm.llm_service import (
+    LLMError,
+    LLMPreDispatchError,
+    LLMProviderRejectedError,
+    LLMRateLimitError,
+)
 from app.services.social_anthropic_llm import AnthropicMeteredLLM
 from app.services.social_extraction_service import EXTRACTION_SCHEMA
 
@@ -39,6 +44,7 @@ def test_sends_one_schema_constrained_request_and_returns_the_ledger_shape():
             id="msg_1", model="claude-haiku-5-5",
             content=[SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text='{"posts": []}')],
             usage=SimpleNamespace(input_tokens=120, output_tokens=40),
+            stop_reason="end_turn",
         )
 
     response = call(llm_with(create))
@@ -53,25 +59,39 @@ def test_sends_one_schema_constrained_request_and_returns_the_ledger_shape():
     assert response._hidden_params == {"custom_llm_provider": "anthropic"}
 
 
-@pytest.mark.parametrize(("error", "expected"), [
-    (status_error(401), LLMProviderRejectedError),
-    (status_error(400, "Your credit balance is too low to access the Anthropic API."), LLMProviderRejectedError),
-    (status_error(400, "invalid request"), LLMProviderRejectedError),
-    (status_error(429), LLMError),
-    (status_error(529), LLMError),
-    (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com")), LLMError),
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "model_context_window_exceeded"])
+def test_reports_a_reply_cut_off_at_max_tokens_as_length(stop_reason):
+    async def create(**_kwargs):
+        return SimpleNamespace(
+            id="msg_1", model="claude-haiku-5-5",
+            content=[SimpleNamespace(type="text", text='{"posts": [')],
+            usage=SimpleNamespace(input_tokens=120, output_tokens=8192),
+            stop_reason=stop_reason,
+        )
+
+    assert call(llm_with(create)).choices[0].finish_reason == "length"
+
+
+USAGE_LIMIT = "You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC."
+
+
+@pytest.mark.parametrize(("error", "expected", "status"), [
+    (status_error(401), LLMProviderRejectedError, 401),
+    (status_error(400, "Your credit balance is too low to access the Anthropic API."), LLMProviderRejectedError, 402),
+    (status_error(400, USAGE_LIMIT), LLMProviderRejectedError, 402),
+    (status_error(400, "invalid request"), LLMProviderRejectedError, 400),
+    (status_error(429), LLMRateLimitError, None),
+    (status_error(529), LLMError, None),
+    (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com")), LLMError, None),
 ])
-def test_maps_provider_errors_to_the_metered_contract(error, expected):
+def test_maps_provider_errors_to_the_metered_contract(error, expected, status):
     async def create(**_kwargs):
         raise error
 
     with pytest.raises(expected) as raised:
         call(llm_with(create))
-    if expected is LLMProviderRejectedError:
-        message = str(error.message).lower()
-        assert raised.value.status_code == (402 if "credit balance" in message else error.status_code)
-    else:
-        assert not isinstance(raised.value, LLMProviderRejectedError)
+    assert type(raised.value) is expected
+    assert getattr(raised.value, "status_code", None) == status
 
 
 def test_missing_key_fails_before_dispatch(monkeypatch):
