@@ -245,6 +245,14 @@ request and require `processed: 1`. The worker fails closed as
 `processor_unconfigured` when neither the default nor an override can be
 built. Do not start catch-up until a synthetic request succeeds.
 
+The default provider is the first configured one of Claude Haiku 5.5
+(`ANTHROPIC_API_KEY`), MiniMax, Z.AI, then OpenCode-Go. Social-sourced
+evidence is metered by Social's budget, so the `social_llm_pricing` app setting
+must price that model; an unpriced model reports `budget_exhausted` with no
+provider call. Celery beat runs discovery and processing as soon as authority
+leaves legacy, so stop `celery-beat` before publishing shadow if catch-up must
+wait for this check.
+
 Run discovery and processing repeatedly through the deployed Celery workers:
 
 ```bash
