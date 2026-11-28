@@ -60,8 +60,8 @@ def register_verified_benchmark(
     return result
 
 
-# Shadow results reach no reader. Every other mode, rollback included, can
-# serve the current processing taxonomy.
+# Shadow is an unbenchmarked preview whose projections never reach legacy
+# tables. Every other mode, rollback included, serves its taxonomy for real.
 BENCHMARK_EXEMPT_MODES = frozenset({"shadow"})
 
 
