@@ -225,8 +225,9 @@ compare-and-set barrier inside the coordinator. In shadow mode, legacy remains
 the read and write authority; comparison projections are not live state.
 
 Shadow publication needs no benchmark. Its generation records `benchmark: null`.
-Only dual and economic generations need one. Rollback publishes legacy and
-needs none, so a missing benchmark never blocks it.
+Its compatibility projections stay in shadow scope, so delivery never writes
+them to the legacy tables. Every other generation needs a benchmark, rollback
+included, because rollback publishes the current processing taxonomy.
 
 Now verify the processing pipeline. Processing is skipped in legacy mode, so
 this check cannot run before shadow. The worker builds the default Economic
@@ -256,9 +257,10 @@ inside the Social projection transaction or the publication fence.
 The benchmark is registered against the anchor. The anchor is the last
 taxonomy version a seed or reviewed operation created. Versions created by
 `system:economic-taxonomy-refresh` inherit its benchmark. That covers processor
-catch-up and the automatic lifecycle job. So the seed's `--actor` must not be
-that principal. After catch-up, the anchor is the sealed migration target unless
-a reviewed operation ran since. Use the anchor's semantic hash as
+catch-up and the automatic lifecycle job. The `system:` prefix is reserved, so
+the seed refuses such an `--actor` and settings reject such an
+`ADMIN_PRINCIPAL_ID`. After catch-up, the anchor is the sealed migration
+target unless a reviewed operation ran since. Use the anchor's semantic hash as
 `RECORDED_SEMANTIC_HASH` below.
 
 The repository has no exporter for `benchmark-actual.json` yet. The
@@ -290,8 +292,8 @@ Validate that export with the fail-closed contrast benchmark:
 An absent case, wrong taxonomy/policy hash, forbidden result, or benchmark
 failure is a stop.
 
-Register the passed report in the target database. Dual and economic
-publication fail closed unless this append-only result matches the anchor's
+Register the passed report in the target database. Every publication except
+shadow fails closed unless this append-only result matches the anchor's
 semantic hash and the `economic-taxonomy-v1` policy bundle:
 
 ```bash
@@ -302,8 +304,8 @@ semantic hash and the `economic-taxonomy-v1` policy bundle:
 
 Record the printed benchmark-result UUID with the release evidence. A reviewed
 operation creates a new anchor. It needs a new report and registration before
-the next dual or economic generation. A policy change does too. Processor
-catch-up does not.
+the next generation that is not shadow, a rollback included. A policy change
+does too. Processor catch-up does not.
 
 ## 5. Enter dual and drain required compatibility work
 

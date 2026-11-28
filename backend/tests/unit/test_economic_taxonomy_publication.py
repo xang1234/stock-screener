@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from app.domain.economic_taxonomy.contracts import AdminPrincipal
@@ -20,6 +21,7 @@ from app.models.economic_taxonomy_runtime import (
     TaxonomyProjectionEvent,
     TaxonomySourceRevisionLog,
 )
+from app.models.theme import ThemeCluster
 from app.services.economic_taxonomy_benchmark_store import (
     register_verified_benchmark,
 )
@@ -552,14 +554,107 @@ def test_reviewed_operation_requires_a_new_benchmark(db_session):
     assert benchmark["taxonomy_hash"] == reviewed.semantic_hash
 
 
-@pytest.mark.parametrize("mode", ["shadow", "legacy"])
-def test_non_economic_publication_needs_no_benchmark(db_session, mode):
+def test_shadow_publication_needs_no_benchmark(db_session):
     taxonomy, capability = _seed(db_session, include_benchmark=False)
     _advance_processing_head(
         db_session, taxonomy, actor=SYSTEM_ACTOR, theme_name="Tanker Shipping"
     )
 
-    assert _prepare_and_publish(db_session, capability, mode) is None
+    assert _prepare_and_publish(db_session, capability, "shadow") is None
+
+
+def test_rollback_after_unbenchmarked_reviewed_operation_is_rejected(db_session):
+    taxonomy, capability = _seed(db_session)
+    _prepare_and_publish(db_session, capability, "economic")
+    _advance_processing_head(
+        db_session, taxonomy, actor=ADMIN.subject, theme_name="HBM Memory"
+    )
+
+    with pytest.raises(BenchmarkRejected, match="benchmark_result_missing"):
+        _coordinator(db_session).rollback(principal=ADMIN)
+
+
+def _legacy_theme_compatibility(theme_id):
+    def compatibility(_session, context):
+        return [
+            CompatibilityProjection(
+                source_lineage="post:shadow",
+                projection_kind="legacy_theme",
+                projection_version=1,
+                target="legacy",
+                payload={
+                    "themes": [str(theme_id)],
+                    "theme_details": [
+                        {
+                            "economic_theme_id": str(theme_id),
+                            "display_name": "AI Memory",
+                            "definition": "Memory exposed to AI demand.",
+                            "lifecycle": "established",
+                            "constituents": ["MU"],
+                        }
+                    ],
+                },
+                origin_representation="economic",
+                selected_interpretation_version=str(context.interpretation_set_id),
+                mapping_version=str(context.taxonomy_version_id),
+            )
+        ]
+
+    return compatibility
+
+
+def _deliver_all(db_session):
+    with db_session.__class__(bind=db_session.get_bind()) as session:
+        runtime = EconomicTaxonomyRuntimeService(session)
+        claims = runtime.claim_deliveries_from_published_generations(
+            worker_id="test-worker",
+            expected_epoch=session.get(TaxonomyAuthority, 1).authority_epoch,
+            now=NOW,
+        )
+        for claim in claims:
+            runtime.apply_delivery(claim, expected_epoch=claim.claimed_epoch, now=NOW)
+        session.commit()
+        return claims
+
+
+def _legacy_clusters(db_session, theme_id):
+    with db_session.__class__(bind=db_session.get_bind()) as check:
+        return check.scalars(
+            select(ThemeCluster).where(
+                ThemeCluster.canonical_key == f"economic_{theme_id.hex}"
+            )
+        ).all()
+
+
+def test_shadow_generation_never_delivers_to_legacy_tables(db_session):
+    _taxonomy, capability = _seed(db_session)
+    theme_id = uuid4()
+    coordinator = _coordinator(
+        db_session, compatibility_builder=_legacy_theme_compatibility(theme_id)
+    )
+
+    def publish(target_mode):
+        prepared = coordinator.prepare_generation(
+            coordinator.capture_cutoff(principal=ADMIN, selections=[]),
+            principal=ADMIN,
+            reader_capability_manifest_id=capability.id,
+            target_mode=target_mode,
+        )
+        coordinator.publish_generation(prepared.id, principal=ADMIN)
+
+    publish("shadow")
+
+    assert _deliver_all(db_session) == []
+    assert _legacy_clusters(db_session, theme_id) == []
+    with db_session.__class__(bind=db_session.get_bind()) as check:
+        assert check.get(TaxonomyAuthority, 1).rollback_state == "ready"
+
+    publish("dual")
+
+    assert len(_deliver_all(db_session)) == 1
+    assert {
+        cluster.display_name for cluster in _legacy_clusters(db_session, theme_id)
+    } == {"AI Memory"}
 
 
 def test_processor_lineage_without_a_reviewed_anchor_fails_closed(db_session):

@@ -26,7 +26,7 @@ from app.models.economic_taxonomy_runtime import (
     TaxonomyProjectionEvent,
 )
 from app.services.economic_taxonomy_benchmark_store import (
-    BENCHMARKED_MODES,
+    BENCHMARK_EXEMPT_MODES,
     benchmark_anchor_version,
     find_verified_benchmark,
     verify_benchmark_reference,
@@ -38,7 +38,10 @@ from app.services.economic_taxonomy_publication_contracts import (
     PreparationContext,
     ReaderCapabilityRejected,
 )
-from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
+from app.services.economic_taxonomy_runtime import (
+    EconomicTaxonomyRuntimeService,
+    generation_delivery_scope,
+)
 from app.utils.file_hashing import canonical_json_sha256 as _hash
 
 
@@ -194,7 +197,7 @@ def verify_generation(
     if manifest.semantic_hash != details.get("manifest_semantic_hash"):
         raise PublicationInvariantError("manifest_hash_changed")
     verify_snapshot_entries(session, snapshots, reader_keys=reader_keys)
-    if details.get("target_mode") in BENCHMARKED_MODES:
+    if details.get("target_mode") not in BENCHMARK_EXEMPT_MODES:
         try:
             verify_benchmark_reference(
                 session,
@@ -260,7 +263,8 @@ def verify_staged_projections(
         select(TaxonomyProjectionEvent)
         .where(
             TaxonomyProjectionEvent.serving_generation_id == generation.id,
-            TaxonomyProjectionEvent.delivery_scope == "candidate",
+            TaxonomyProjectionEvent.delivery_scope
+            == generation_delivery_scope(str(details.get("target_mode"))),
         )
         .order_by(
             TaxonomyProjectionEvent.source_lineage,

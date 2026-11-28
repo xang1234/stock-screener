@@ -60,9 +60,9 @@ def register_verified_benchmark(
     return result
 
 
-# Only modes that serve economic results need a benchmark. Shadow and legacy
-# (including rollback) serve legacy readers.
-BENCHMARKED_MODES = frozenset({"dual", "economic"})
+# Shadow results reach no reader. Every other mode, rollback included, can
+# serve the current processing taxonomy.
+BENCHMARK_EXEMPT_MODES = frozenset({"shadow"})
 
 
 def benchmark_anchor_version(session: Session, version_id) -> TaxonomyVersion:

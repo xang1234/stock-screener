@@ -18,7 +18,7 @@ from app.models.economic_taxonomy_runtime import (
     ReaderCapabilityManifest,
 )
 from app.services.economic_taxonomy_benchmark_store import (
-    BENCHMARKED_MODES,
+    BENCHMARK_EXEMPT_MODES,
     benchmark_anchor_version,
     verify_benchmark_reference,
 )
@@ -40,7 +40,10 @@ from app.services.economic_taxonomy_publication_validation import (
     require_prior_acknowledgement,
     verify_capability,
 )
-from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
+from app.services.economic_taxonomy_runtime import (
+    EconomicTaxonomyRuntimeService,
+    generation_delivery_scope,
+)
 from app.services.economic_taxonomy_snapshot_builder import (
     GenerationSnapshotInputs,
     build_snapshot_bundle,
@@ -138,7 +141,7 @@ class PublicationPreparer:
                 target_mode=target_mode,
             )
             benchmark = None
-            if target_mode in BENCHMARKED_MODES:
+            if target_mode not in BENCHMARK_EXEMPT_MODES:
                 benchmark = self.benchmark_verifier(session, context)
                 if benchmark is False or not isinstance(benchmark, Mapping):
                     raise BenchmarkRejected("economic_taxonomy_benchmark_failed")
@@ -243,7 +246,7 @@ class PublicationPreparer:
                         projection.selected_interpretation_version
                     ),
                     mapping_version=projection.mapping_version,
-                    delivery_scope="candidate",
+                    delivery_scope=generation_delivery_scope(target_mode),
                 )
             session.commit()
             return PreparedGeneration(
