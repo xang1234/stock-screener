@@ -546,7 +546,9 @@ def test_stock_snapshot_dates_breadth_by_the_us_run_for_a_symbol_outside_the_us(
     assert payload["breadth"]["date"] == "2026-03-29"
 
 
-def _seed_rollout_run(session_factory, run_id: int = 5) -> int:
+def _seed_rollout_run(
+    session_factory, run_id: int = 5, *, with_pointer: bool = True
+) -> int:
     """A staged Market RS rollout run: published, but never activated.
 
     ``build_balanced_feature_snapshot`` publishes it under
@@ -562,7 +564,12 @@ def _seed_rollout_run(session_factory, run_id: int = 5) -> int:
                 as_of_date=date(2026, 3, 31),
                 run_type="daily_snapshot",
                 status="published",
-                config_json={"universe": {"market": "US"}},
+                config_json={
+                    "universe": {"market": "US"},
+                    # build_daily_snapshot records where it published, so the run says itself
+                    # that it is a staged rollout even after a retry moved the pointer.
+                    "publish_pointer_key": "rollout_rs:balanced_v3:US",
+                },
                 created_at=datetime(2026, 3, 31, 18, 0, tzinfo=UTC),
                 completed_at=datetime(2026, 3, 31, 19, 0, tzinfo=UTC),
                 published_at=datetime(2026, 3, 31, 19, 30, tzinfo=UTC),
@@ -591,9 +598,8 @@ def _seed_rollout_run(session_factory, run_id: int = 5) -> int:
                 ),
             )
         )
-        session.add(
-            FeatureRunPointer(key="rollout_rs:balanced_v3:US", run_id=run_id)
-        )
+        if with_pointer:
+            session.add(FeatureRunPointer(key="rollout_rs:balanced_v3:US", run_id=run_id))
         session.commit()
     finally:
         session.close()
@@ -659,3 +665,100 @@ def test_stock_snapshot_ignores_a_market_pointer_that_names_another_markets_run(
     assert payload["technicals"] is not None
     assert payload["technicals"]["run_id"] == NEWEST_US_RUN
     assert payload["technicals"]["run_source"] == "global_pointer"
+
+
+def _fail_runs(session_factory, run_ids) -> None:
+    session = session_factory()
+    try:
+        session.query(FeatureRun).filter(FeatureRun.id.in_(tuple(run_ids))).update(
+            {FeatureRun.status: "failed"}, synchronize_session=False
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_stock_snapshot_does_not_serve_a_superseded_rollout_run(service, session_factory):
+    """A retry moves the rollout pointer, the rejected run stays published and unpointed.
+
+    ``publish_atomically`` replaces the pointer target, so the earlier run is behind nothing at
+    all and the pointer table can no longer tell it apart from a legacy run. Its own config still
+    records the rollout key it was published to.
+    """
+    rollout_run = _seed_rollout_run(session_factory, with_pointer=False)
+    _set_market(session_factory, "NVDA", "US")
+    _drop_pointer(session_factory, "latest_published")
+    _drop_pointer(session_factory, "latest_published_market:US")
+    _fail_runs(session_factory, (US_RUN, NEWEST_US_RUN))
+
+    assert _newest_published_run_id(session_factory) == rollout_run
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is None
+
+
+def _seed_damaged_run(session_factory, run_id: int = 6) -> int:
+    """A published row whose stored status is outside the enum."""
+    session = session_factory()
+    try:
+        session.add(
+            FeatureRun(
+                id=run_id,
+                as_of_date=date(2026, 3, 30),
+                run_type="daily_snapshot",
+                status="exploded",  # not a RunStatus member
+                config_json={"universe": {"market": "US"}},
+                created_at=datetime(2026, 3, 30, 18, 0, tzinfo=UTC),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+    return run_id
+
+
+def test_stock_snapshot_keeps_a_foreign_symbol_when_the_us_run_is_damaged(
+    service, session_factory
+):
+    """Breadth is context for a symbol that lives in another market, not its own data.
+
+    A damaged US publication must not turn a German snapshot into ``invalid_stored_data``: the
+    German run is intact, and all that is lost is the date the US series is dated by.
+    """
+    _seed_de_run(session_factory)
+    _seed_damaged_run(session_factory)
+    _point(session_factory, "latest_published_market:DE", DE_RUN)
+    _point(session_factory, "latest_published_market:US", 6)
+
+    payload = _snapshot(service, "SAP.DE")
+
+    assert payload.get("error") is None
+    assert payload["technicals"] is not None
+    assert payload["technicals"]["run_id"] == DE_RUN
+    assert payload["breadth"] is not None
+
+
+def test_breadth_ignores_a_us_pointer_that_names_another_markets_run(service, session_factory):
+    """The breadth helper checks its target's market like the symbol resolver does.
+
+    ``latest_published_market:US`` is set to the German run by hand; the US published-run scan
+    holds a real US run dated 2026-03-29, while the German run sits on 2026-03-27.
+    """
+    _seed_de_run(session_factory)
+    session = session_factory()
+    try:
+        session.query(FeatureRun).filter(FeatureRun.id == DE_RUN).update(
+            {FeatureRun.as_of_date: date(2026, 3, 27)}, synchronize_session=False
+        )
+        session.commit()
+    finally:
+        session.close()
+    _point(session_factory, "latest_published_market:DE", DE_RUN)
+    _point(session_factory, "latest_published_market:US", DE_RUN)
+    _drop_pointer(session_factory, "latest_published")
+
+    payload = _snapshot(service, "SAP.DE")
+
+    assert payload["breadth"] is not None
+    assert payload["breadth"]["date"] == "2026-03-29"

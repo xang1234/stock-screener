@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import settings
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.feature_store.models import FeatureRunDomain, RunStatus
-from app.domain.feature_store.run_metadata import feature_run_market
+from app.domain.feature_store.run_metadata import (
+    feature_run_market,
+    feature_run_publish_pointer_key,
+)
 from app.domain.markets.symbol_suffixes import market_symbol_suffix_registry
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.scoring import is_core_scored
@@ -1677,7 +1680,16 @@ class MarketCopilotService:
             # run's date would match the US series to a day that market never traded on.
             breadth_date = getattr(run, "as_of_date", None)
             if symbol_market not in {"", "US"}:
-                us_run = self._published_run_for_market(uow, "US")
+                try:
+                    us_run = self._published_run_for_market(uow, "US")
+                except StoredFeatureRunInvalid:
+                    # Breadth is context for a symbol that lives in another market: a damaged US
+                    # publication must not fail this snapshot. The symbol's own run is a different
+                    # matter and still answers invalid_stored_data.
+                    logger.warning(
+                        "US breadth run unreadable, answering %s without its date", args.symbol
+                    )
+                    us_run = None
                 breadth_date = us_run.as_of_date if us_run is not None else None
 
         with self._session_scope() as db:
@@ -2277,6 +2289,19 @@ class MarketCopilotService:
             return None
         return run
 
+    @staticmethod
+    def _published_as_a_staged_rollout(run: FeatureRunDomain) -> bool:
+        """True when the run's own config says it was published to a rollout pointer."""
+        key = feature_run_publish_pointer_key(run)
+        return key is not None and key.startswith(ROLLOUT_POINTER_PREFIX)
+
+    def _run_applies_to_market(self, run: FeatureRunDomain | None, market: str) -> bool:
+        """A run applies to *market* when it declares that market, or no market at all."""
+        if run is None:
+            return False
+        declared = feature_run_market(run)
+        return declared is None or declared == (market or "").strip().upper()
+
     def _pointer_run_ids(self, uow: SqlUnitOfWork, key_pattern: str) -> set[int]:
         """The run ids named by pointers whose key matches *key_pattern*."""
         rows = (
@@ -2299,7 +2324,7 @@ class MarketCopilotService:
         normalized = (market or "").strip().upper()
         if normalized:
             run = self._run_behind_pointer(uow, f"latest_published_market:{normalized}")
-            if run is not None:
+            if self._run_applies_to_market(run, normalized):
                 return run
         return self._newest_published_run_of_market(uow, normalized)
 
@@ -2339,6 +2364,11 @@ class MarketCopilotService:
                 ) from exc
             run_market = feature_run_market(run)
             if not market or run_market is None or run_market == market:
+                # A retry moves the rollout pointer to the newer run and leaves the rejected one
+                # behind no pointer at all, so the pointer table no longer knows it was staged.
+                # The run's own config still does: it records the key it was published to.
+                if run_id not in live and self._published_as_a_staged_rollout(run):
+                    continue
                 return run
         return None
 
