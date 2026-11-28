@@ -2,7 +2,8 @@
 
 Each day's portfolio return is the equal-weight mean of the daily returns of the picks
 held that day. Its excess over the risk-free rate is regressed on Ken French daily
-factors, with Newey-West standard errors since holdings overlap across days.
+factors, with Newey-West standard errors since holdings overlap across days. A pick stays
+in the portfolio from entry until its exit or its first missing bar, whichever comes first.
 """
 
 from __future__ import annotations
@@ -58,9 +59,10 @@ def calendar_time_returns(
 ) -> pd.DataFrame:
     """Daily equal-weight portfolio returns over the market's ``sessions``.
 
-    A holding earns Close/Open - 1 on its entry session and Close_t / Close_t-1 - 1 after.
-    It leaves the portfolio from the first held session its history lacks or prices at or
-    below zero, so no return ever spans a gap. Days with no holding are absent. Returns
+    A holding earns Close/Open - 1 on its entry session and AdjClose_t / AdjClose_t-1 - 1
+    after, so dividends count; a history without ``Adj Close`` uses Close. It leaves the
+    portfolio from the first held session its history lacks or prices at or below zero, so
+    no return ever spans a gap. Days with no holding are absent. Returns
     are not stopped out: a stop makes the payoff non-linear and biases the loadings.
     """
     calendar = pd.DatetimeIndex(sessions)
@@ -71,12 +73,12 @@ def calendar_time_returns(
             & (calendar <= pd.Timestamp(holding.exit_at))
         ]
         bars = histories.get(holding.symbol, pd.DataFrame(columns=["Open", "Close"])).reindex(held)
-        opens = bars["Open"].to_numpy(dtype=float)
-        closes = bars["Close"].to_numpy(dtype=float)
-        previous = np.concatenate([opens[:1], closes[:-1]])
+        adjusted = bars.get("Adj Close", bars["Close"]).to_numpy(dtype=float)
+        ends = np.concatenate([bars["Close"].to_numpy(dtype=float)[:1], adjusted[1:]])
+        starts = np.concatenate([bars["Open"].to_numpy(dtype=float)[:1], adjusted[:-1]])
         # NaN compares False, so a missing bar ends the holding like a bad price does.
-        valid = np.logical_and.accumulate((closes > 0) & (previous > 0))
-        held_returns.append(pd.Series(closes[valid] / previous[valid] - 1.0, index=held[valid]))
+        valid = np.logical_and.accumulate((ends > 0) & (starts > 0))
+        held_returns.append(pd.Series(ends[valid] / starts[valid] - 1.0, index=held[valid]))
 
     if not held_returns:
         return pd.DataFrame({"ret": [], "n_holdings": []}, index=pd.DatetimeIndex([]))

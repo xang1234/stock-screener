@@ -1,7 +1,7 @@
 """Factor attribution of the replay picks against Ken French US daily factors.
 
 Holds every replay pick counted at one validation horizon from its entry session's open to
-its exit session's close, averages the held picks' daily returns into a calendar-time
+its exit session's close (the last completed session while its window is open), averages the held picks' daily returns into a calendar-time
 portfolio, and regresses its excess return on each model in FACTOR_MODELS. A significant
 alpha that survives momentum and size is skill; one that vanishes was factor exposure.
 
@@ -91,17 +91,22 @@ def collect_portfolio(db, calendar, price_cache, market: str, horizon: int) -> p
     # One read serves the evaluation and the returns, so both see the same bars.
     cached = SimpleNamespace(get_many_cached_only=lambda *_args, **_kwargs: frames)
     evaluated, _ = PriceOutcomeCalculator(cached).evaluate_many(events, sessions=sessions)
-    holdings = [
-        Holding(event.raw.symbol, event.entry_at, event.exits[horizon])
-        for event in mark_overlapping_windows(evaluated)
-        if event.entry_at is not None and horizon in event.exits and horizon not in event.suppressed
-    ]
+    holdings = held_picks(mark_overlapping_windows(evaluated), horizon, sessions[-1])
     histories = {
         symbol: history
         for symbol, frame in frames.items()
         if (history := _normalize_price_history(frame, through)) is not None
     }
     return calendar_time_returns(holdings, histories, sessions=sessions)
+
+
+def held_picks(events, horizon: int, last_session: date) -> list[Holding]:
+    """Picks counted at ``horizon``; an open window is held through ``last_session``."""
+    return [
+        Holding(event.raw.symbol, event.entry_at, event.exits.get(horizon, last_session))
+        for event in events
+        if event.entry_at is not None and horizon not in event.suppressed
+    ]
 
 
 def build_report(

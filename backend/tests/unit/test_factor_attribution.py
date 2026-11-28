@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from app.analysis.factor_attribution import (
+    FACTOR_MODELS,
     Holding,
     calendar_time_returns,
     fit_factor_model,
@@ -220,3 +221,70 @@ def test_fit_needs_ten_more_days_than_regressors():
     assert fit_factor_model(portfolio, factors, "carhart4").n_days == 15
     with pytest.raises(ValueError):
         fit_factor_model(portfolio.iloc[:14], factors, "carhart4")
+
+
+def test_returns_after_entry_include_dividends_through_adj_close():
+    # 3/4 is ex-dividend: Close drops 1% by the payout while Adj Close stays flat.
+    history = pd.DataFrame(
+        {"Open": [10.0, 11.0], "Close": [11.0, 10.89], "Adj Close": [10.89, 10.89]},
+        index=pd.DatetimeIndex([pd.Timestamp(2026, 3, 3), pd.Timestamp(2026, 3, 4)]),
+    )
+    holdings = [Holding("DIV", date(2026, 3, 3), date(2026, 3, 4))]
+
+    portfolio = calendar_time_returns(holdings, {"DIV": history}, sessions=SESSIONS)
+
+    # The entry day stays Close/Open - 1, both unadjusted; Adj Close is on another scale.
+    assert portfolio["ret"].tolist() == pytest.approx([0.10, 0.0])
+
+
+def _fixed_fixture() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """40 days of patterned factors and serially correlated residuals, no RNG."""
+    i = np.arange(40)
+    index = pd.bdate_range("2025-01-01", periods=40)
+    mkt = ((i * 7) % 11 - 5) / 1000
+    mom = ((i * 5) % 9 - 4) / 2000
+    shock = ((i * 3) % 7 - 3) / 2000
+    noise = shock + 0.8 * np.concatenate([[0.0], shock[:-1]])
+    factors = pd.DataFrame({"mkt_rf": mkt, "mom": mom, "rf": 0.0001}, index=index)
+    ret = 0.0003 + 1.1 * mkt + 0.4 * mom + 0.0001 + noise
+    return pd.DataFrame({"ret": ret, "n_holdings": 5}, index=index), factors
+
+
+def test_newey_west_t_stats_match_an_independent_hac_computation(monkeypatch):
+    portfolio, factors = _fixed_fixture()
+    monkeypatch.setitem(FACTOR_MODELS, "mkt_mom", ("mkt_rf", "mom"))
+
+    fit = fit_factor_model(portfolio, factors, "mkt_mom", hac_lags=3)
+
+    # statsmodels 0.14.6 OLS(...).fit(cov_type="HAC", cov_kwds={"maxlags": 3,
+    # "use_correction": False}) on the same data, computed outside the repo.
+    assert fit.alpha_t == pytest.approx(2.198856099436389, rel=1e-9)
+    assert fit.t_stats["mkt_rf"] == pytest.approx(23.17672266047837, rel=1e-9)
+    assert fit.t_stats["mom"] == pytest.approx(3.6517310089543535, rel=1e-9)
+
+
+def test_a_pick_whose_window_is_still_open_is_held_through_the_last_session():
+    from types import SimpleNamespace
+
+    from scripts.factor_attribution_report import held_picks
+
+    def pick(symbol, exits, suppressed=frozenset()):
+        return SimpleNamespace(
+            raw=SimpleNamespace(symbol=symbol),
+            entry_at=date(2026, 3, 2),
+            exits=exits,
+            suppressed=suppressed,
+        )
+
+    events = [
+        pick("CLOSED", {5: date(2026, 3, 6)}),
+        pick("OPEN", {}),
+        pick("REPEAT", {}, suppressed=frozenset({5})),
+    ]
+
+    holdings = held_picks(events, horizon=5, last_session=date(2026, 3, 4))
+
+    assert holdings == [
+        Holding("CLOSED", date(2026, 3, 2), date(2026, 3, 6)),
+        Holding("OPEN", date(2026, 3, 2), date(2026, 3, 4)),
+    ]
