@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
+from functools import partial
 from typing import Any
 
 from sqlalchemy import func, select
@@ -90,7 +91,7 @@ class EconomicTaxonomyLLMProvider:
 
     def __init__(
         self,
-        llm: LLMService | AnthropicMeteredLLM,
+        llm: Callable[[], LLMService | AnthropicMeteredLLM],
         *,
         model: str,
         budget: SocialLLMBudgetService | None = None,
@@ -123,8 +124,10 @@ class EconomicTaxonomyLLMProvider:
 
     def _complete(self, *, system: str, payload: Mapping[str, Any]):
         try:
+            # Each dispatch runs in its own event loop, and an async client stays
+            # bound to the loop that first used it.
             response = asyncio.run(
-                self.llm.completion(
+                self.llm().completion(
                     messages=[
                         {"role": "system", "content": system},
                         {
@@ -273,9 +276,9 @@ def build_economic_taxonomy_provider(session_factory):
     # Extraction and review each define their JSON shape in the prompt, so
     # Claude gets no Social schema.
     llm = (
-        AnthropicMeteredLLM(output_schema=None)
+        partial(AnthropicMeteredLLM, output_schema=None)
         if model.model_id.startswith("anthropic/")
-        else LLMService(use_case="extraction", preset=ModelPreset(primary=model))
+        else partial(LLMService, use_case="extraction", preset=ModelPreset(primary=model))
     )
     provider = EconomicTaxonomyLLMProvider(llm, model=model.model_id, budget=budget)
     reservations = RoutedEconomicReservationManager(

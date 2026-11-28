@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import anthropic
@@ -65,6 +67,14 @@ def _response(payload: str):
     )
 
 
+def _anthropic_create(monkeypatch, create):
+    monkeypatch.setattr(
+        anthropic,
+        "AsyncAnthropic",
+        lambda **_kwargs: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+
+
 def _credentials(monkeypatch, *, anthropic="", minimax="", zai="", opencode=""):
     settings = provider_module.settings
     monkeypatch.setattr(settings, "anthropic_api_key", anthropic)
@@ -77,7 +87,7 @@ def _credentials(monkeypatch, *, anthropic="", minimax="", zai="", opencode=""):
 def test_provider_uses_single_metered_json_dispatch():
     llm = _LLM(_response('{"status":"successful_empty","candidates":[]}'))
 
-    result = EconomicTaxonomyLLMProvider(llm, model="minimax/MiniMax-M2.7").extract(
+    result = EconomicTaxonomyLLMProvider(lambda: llm, model="minimax/MiniMax-M2.7").extract(
         evidence={"original_text": "No economic theme."},
         policy_version="economic-extraction-v1",
     )
@@ -96,7 +106,7 @@ def test_provider_uses_single_metered_json_dispatch():
 
 def test_provider_configuration_failure_is_retryable_before_dispatch():
     provider = EconomicTaxonomyLLMProvider(
-        _LLM(LLMPreDispatchError("missing credentials")), model="minimax/MiniMax-M2.7"
+        lambda: _LLM(LLMPreDispatchError("missing credentials")), model="minimax/MiniMax-M2.7"
     )
 
     with pytest.raises(RetryableProviderError) as error:
@@ -126,7 +136,7 @@ def test_first_configured_credential_selects_the_provider(
         assert (provider, reservations) == (None, None)
         return
     assert provider.model == reservations.model == expected
-    assert isinstance(provider.llm, AnthropicMeteredLLM if expected == HAIKU else LLMService)
+    assert isinstance(provider.llm(), AnthropicMeteredLLM if expected == HAIKU else LLMService)
 
 
 def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
@@ -168,8 +178,8 @@ def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
             usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
         )
 
+    _anthropic_create(monkeypatch, create)
     provider, _reservations = build_economic_taxonomy_provider(SessionLocal)
-    provider.llm.client = SimpleNamespace(messages=SimpleNamespace(create=create))
 
     result = provider.extract(
         evidence={"original_text": "No economic theme."},
@@ -187,6 +197,63 @@ def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
         "actual_cost": provider.budget.price(HAIKU).cost(1000, 200),
     }
     assert result["actual_cost"] == Decimal("0.0002")
+
+
+class _MessagesAPI(BaseHTTPRequestHandler):
+    # Keep-alive lets the SDK pool the connection across dispatches.
+    protocol_version = "HTTP/1.1"
+    served = 0
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        type(self).served += 1
+        body = json.dumps(
+            {
+                "id": f"msg_{self.served}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": '{"status":"successful_empty","candidates":[]}'}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+@pytest.fixture
+def messages_api(monkeypatch):
+    _MessagesAPI.served = 0
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MessagesAPI)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_port}")
+    yield _MessagesAPI
+    server.shutdown()
+    server.server_close()
+
+
+def test_haiku_extract_then_review_both_reach_the_provider(monkeypatch, messages_api):
+    _credentials(monkeypatch, anthropic="test-key")
+    provider, _reservations = build_economic_taxonomy_provider(SessionLocal)
+
+    extraction = provider.extract(evidence={"original_text": "x"}, policy_version="v1")
+    review = provider.review(
+        extraction=extraction, policy_version="v1", facet_catalog_semantic_hash="h"
+    )
+
+    assert (extraction["provider_request_id"], review["provider_request_id"]) == (
+        "msg_1",
+        "msg_2",
+    )
+    assert messages_api.served == 2
 
 
 NOW = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
@@ -262,8 +329,8 @@ def social_request(monkeypatch, *effects):
             usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
         )
 
+    _anthropic_create(monkeypatch, create)
     provider, reservations = build_economic_taxonomy_provider(SessionLocal)
-    provider.llm.client = SimpleNamespace(messages=SimpleNamespace(create=create))
     extractor = EconomicExposureExtractor(
         SessionLocal,
         provider=provider,
