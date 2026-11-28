@@ -376,10 +376,12 @@ class EconomicTaxonomyWorkRepository:
         return row
 
     def _lock_request(self, request_id: UUID) -> ProcessingRequest:
+        # A caller may have loaded the row before the lock; read what committed since.
         request = self.session.execute(
             select(ProcessingRequest)
             .where(ProcessingRequest.id == request_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
         if request is None:
             raise KeyError(f"processing request {request_id} not found")

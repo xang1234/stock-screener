@@ -776,11 +776,8 @@ class EconomicTaxonomyTaskService:
                 expected_epoch=observed.observed_authority_epoch,
                 allowed_modes={"shadow", "dual", "economic"},
             ) as authority:
-                request = session.execute(
-                    select(ProcessingRequest)
-                    .where(ProcessingRequest.id == request_id)
-                    .with_for_update()
-                ).scalar_one()
+                work = EconomicTaxonomyWorkRepository(session)
+                request = work._lock_request(request_id)
                 if request.lease_token != lease_token:
                     return
                 request.status = "terminal_failure"
@@ -788,7 +785,7 @@ class EconomicTaxonomyTaskService:
                 request.lease_token = None
                 request.lease_owner = None
                 request.lease_expires_at = None
-                EconomicTaxonomyWorkRepository(session)._append_request_event(
+                work._append_request_event(
                     request.id, "terminal_failure", {"reason": reason}
                 )
                 logical_key = f"processing_request:{request.id}"
