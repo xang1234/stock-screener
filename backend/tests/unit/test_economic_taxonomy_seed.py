@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event
+import pytest
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.infra.db.repositories.economic_taxonomy_repo import (
     EconomicTaxonomyRepository,
 )
-from app.models.economic_taxonomy import ECONOMIC_TAXONOMY_TABLES
+from app.models.economic_taxonomy import ECONOMIC_TAXONOMY_TABLES, TaxonomyVersion
 from app.services.economic_taxonomy_seed import (
     INITIAL_DIMENSIONS,
+    SeedRefused,
     normalize_facet,
+    seed_governed_snapshot,
     seed_initial_dimensions,
 )
 
@@ -76,3 +79,14 @@ def test_normalization_preserves_economic_dimension_semantics():
     assert normalize_facet("technology", "AI") == "artificial_intelligence"
     assert normalize_facet("commodity", "Copper Cathode") == "copper_cathode"
 
+
+
+def test_seed_refuses_the_reserved_system_actor_before_writing():
+    engine, session, _repo = _repository()
+    try:
+        with pytest.raises(SeedRefused, match="reserved"):
+            seed_governed_snapshot(session, actor="system:economic-taxonomy-refresh")
+        assert session.scalars(select(TaxonomyVersion)).all() == []
+    finally:
+        session.close()
+        engine.dispose()
