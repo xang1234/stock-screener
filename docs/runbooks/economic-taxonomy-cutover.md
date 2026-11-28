@@ -260,6 +260,16 @@ Repeat until eligible work is complete or durably held for review. This is
 catch-up outside the publication transaction. Provider calls must not occur
 inside the Social projection transaction or the publication fence.
 
+Republish shadow after catch-up. Readers serve the published shadow
+generation, so they still show the state before catch-up. The `refresh` task
+skips every mode except `economic`, so it does not republish shadow. The
+benchmark export below must read current output:
+
+```bash
+./venv/bin/python scripts/publish_economic_taxonomy.py \
+  --capability-id "$READER_CAPABILITY_ID" --mode shadow
+```
+
 The benchmark is registered against the anchor. The anchor is the last
 taxonomy version a seed or reviewed operation created. Versions created by
 `system:economic-taxonomy-refresh` inherit its benchmark. That covers processor
