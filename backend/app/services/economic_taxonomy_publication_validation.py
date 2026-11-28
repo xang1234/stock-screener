@@ -26,6 +26,7 @@ from app.models.economic_taxonomy_runtime import (
     TaxonomyProjectionEvent,
 )
 from app.services.economic_taxonomy_benchmark_store import (
+    benchmark_anchor_version,
     find_verified_benchmark,
     verify_benchmark_reference,
 )
@@ -89,13 +90,11 @@ def verified_benchmark(
     *,
     policy_bundle: str,
 ) -> Mapping[str, Any]:
-    taxonomy = session.get(TaxonomyVersion, context.taxonomy_version_id)
-    if taxonomy is None or not taxonomy.semantic_hash:
-        raise BenchmarkRejected("benchmark_taxonomy_missing")
     try:
+        anchor = benchmark_anchor_version(session, context.taxonomy_version_id)
         return find_verified_benchmark(
             session,
-            taxonomy_semantic_hash=str(taxonomy.semantic_hash),
+            taxonomy_semantic_hash=str(anchor.semantic_hash),
             policy_bundle=policy_bundle,
         )
     except (LookupError, ValueError) as exc:
@@ -174,7 +173,7 @@ def verify_generation(
         "interpretation_hash": interpretation.semantic_hash,
         "metrics_hash": metrics.semantic_hash,
         "snapshot_hash": snapshots.semantic_hash,
-        "benchmark": dict(details.get("benchmark", {})),
+        "benchmark": details.get("benchmark"),
         "target_mode": details.get("target_mode"),
         "expected_projections": list(details.get("expected_projections", [])),
     }
@@ -194,16 +193,18 @@ def verify_generation(
     if manifest.semantic_hash != details.get("manifest_semantic_hash"):
         raise PublicationInvariantError("manifest_hash_changed")
     verify_snapshot_entries(session, snapshots, reader_keys=reader_keys)
-    benchmark = details.get("benchmark", {})
-    try:
-        verify_benchmark_reference(
-            session,
-            benchmark,
-            taxonomy_semantic_hash=str(taxonomy.semantic_hash),
-            policy_bundle=policy_bundle,
-        )
-    except (LookupError, ValueError) as exc:
-        raise BenchmarkRejected(str(exc)) from exc
+    if details.get("target_mode") != "shadow":
+        try:
+            verify_benchmark_reference(
+                session,
+                details.get("benchmark") or {},
+                taxonomy_semantic_hash=str(
+                    benchmark_anchor_version(session, taxonomy.id).semantic_hash
+                ),
+                policy_bundle=policy_bundle,
+            )
+        except (LookupError, ValueError) as exc:
+            raise BenchmarkRejected(str(exc)) from exc
     verify_capability(
         capability,
         backend_contract=backend_contract,

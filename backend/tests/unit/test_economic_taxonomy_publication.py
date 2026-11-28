@@ -23,6 +23,7 @@ from app.models.economic_taxonomy_runtime import (
 from app.services.economic_taxonomy_benchmark_store import (
     register_verified_benchmark,
 )
+from app.services.economic_taxonomy_processor import SYSTEM_ACTOR
 from app.services.economic_taxonomy_publication import (
     BenchmarkRejected,
     CompatibilityProjection,
@@ -48,9 +49,9 @@ def test_publication_facade_preserves_split_contract_identity():
     assert SplitCompatibilityProjection is CompatibilityProjection
 
 
-def _seed(db_session, *, include_benchmark=True):
+def _seed(db_session, *, include_benchmark=True, actor=ADMIN.subject):
     repository = EconomicTaxonomyRepository(db_session)
-    draft = repository.create_draft(actor=ADMIN.subject, reason="publication fixture")
+    draft = repository.create_draft(actor=actor, reason="publication fixture")
     taxonomy = repository.seal_draft(draft.id)
     capability = ReaderCapabilityManifest(
         backend_contract=1,
@@ -72,20 +73,43 @@ def _seed(db_session, *, include_benchmark=True):
     )
     db_session.add_all([capability, authority])
     if include_benchmark:
-        register_verified_benchmark(
-            db_session,
-            report={
-                "passed": True,
-                "fixture_version": 1,
-                "taxonomy_hash": taxonomy.semantic_hash,
-                "policy_bundle": "economic-taxonomy-v1",
-                "errors": [],
-                "cases": [],
-            },
-            verified_by=ADMIN.subject,
-        )
+        _register_benchmark(db_session, taxonomy.semantic_hash)
     db_session.commit()
     return taxonomy, capability
+
+
+def _register_benchmark(db_session, taxonomy_hash):
+    register_verified_benchmark(
+        db_session,
+        report={
+            "passed": True,
+            "fixture_version": 1,
+            "taxonomy_hash": taxonomy_hash,
+            "policy_bundle": "economic-taxonomy-v1",
+            "errors": [],
+            "cases": [],
+        },
+        verified_by=ADMIN.subject,
+    )
+
+
+def _advance_processing_head(db_session, parent, *, actor, theme_name):
+    repository = EconomicTaxonomyRepository(db_session)
+    draft = repository.clone_draft(parent.id, actor=actor, reason=theme_name)
+    repository.create_theme(
+        draft.id,
+        display_name=theme_name,
+        definition=f"{theme_name} economics.",
+        mechanism=f"{theme_name} demand drives revenue.",
+        lifecycle="provisional",
+        lifecycle_policy_version="lifecycle-v1",
+        actor=actor,
+    )
+    child = repository.seal_draft(draft.id)
+    db_session.get(TaxonomyAuthority, 1).processing_taxonomy_version_id = child.id
+    db_session.commit()
+    assert child.semantic_hash != parent.semantic_hash
+    return child
 
 
 def _coordinator(db_session, **overrides):
@@ -466,4 +490,86 @@ def test_default_benchmark_verification_fails_closed_without_registered_result(
             cutoff,
             principal=ADMIN,
             reader_capability_manifest_id=capability.id,
+        )
+
+
+def _prepare_and_publish(db_session, capability, target_mode):
+    coordinator = _coordinator(db_session)
+    prepared = coordinator.prepare_generation(
+        coordinator.capture_cutoff(principal=ADMIN, selections=[]),
+        principal=ADMIN,
+        reader_capability_manifest_id=capability.id,
+        target_mode=target_mode,
+    )
+    coordinator.publish_generation(prepared.id, principal=ADMIN)
+    with db_session.__class__(bind=db_session.get_bind()) as check:
+        details = prepared.load(check).events[0].details
+        assert check.get(TaxonomyAuthority, 1).mode == target_mode
+        return details["benchmark"]
+
+
+@pytest.mark.parametrize("target_mode", ["dual", "economic"])
+def test_reviewed_benchmark_covers_processor_derived_versions(db_session, target_mode):
+    taxonomy, capability = _seed(db_session)
+    first = _advance_processing_head(
+        db_session, taxonomy, actor=SYSTEM_ACTOR, theme_name="Tanker Shipping"
+    )
+    _advance_processing_head(
+        db_session, first, actor=SYSTEM_ACTOR, theme_name="Copper Mining"
+    )
+
+    benchmark = _prepare_and_publish(db_session, capability, target_mode)
+
+    assert benchmark["taxonomy_hash"] == taxonomy.semantic_hash
+
+
+def test_reviewed_operation_requires_a_new_benchmark(db_session):
+    taxonomy, capability = _seed(db_session)
+    processed = _advance_processing_head(
+        db_session, taxonomy, actor=SYSTEM_ACTOR, theme_name="Tanker Shipping"
+    )
+    reviewed = _advance_processing_head(
+        db_session, processed, actor=ADMIN.subject, theme_name="HBM Memory"
+    )
+    coordinator = _coordinator(db_session)
+    cutoff = coordinator.capture_cutoff(principal=ADMIN, selections=[])
+
+    with pytest.raises(BenchmarkRejected, match="benchmark_result_missing"):
+        coordinator.prepare_generation(
+            cutoff,
+            principal=ADMIN,
+            reader_capability_manifest_id=capability.id,
+            target_mode="economic",
+        )
+
+    _register_benchmark(db_session, reviewed.semantic_hash)
+    db_session.commit()
+    _advance_processing_head(
+        db_session, reviewed, actor=SYSTEM_ACTOR, theme_name="Copper Mining"
+    )
+    benchmark = _prepare_and_publish(db_session, capability, "economic")
+
+    assert benchmark["taxonomy_hash"] == reviewed.semantic_hash
+
+
+def test_shadow_publication_needs_no_benchmark(db_session):
+    taxonomy, capability = _seed(db_session, include_benchmark=False)
+    _advance_processing_head(
+        db_session, taxonomy, actor=SYSTEM_ACTOR, theme_name="Tanker Shipping"
+    )
+
+    assert _prepare_and_publish(db_session, capability, "shadow") is None
+
+
+def test_processor_lineage_without_a_reviewed_anchor_fails_closed(db_session):
+    _taxonomy, capability = _seed(db_session, actor=SYSTEM_ACTOR)
+    coordinator = _coordinator(db_session)
+    cutoff = coordinator.capture_cutoff(principal=ADMIN, selections=[])
+
+    with pytest.raises(BenchmarkRejected, match="benchmark_anchor_missing"):
+        coordinator.prepare_generation(
+            cutoff,
+            principal=ADMIN,
+            reader_capability_manifest_id=capability.id,
+            target_mode="dual",
         )

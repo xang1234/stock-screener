@@ -9,7 +9,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.economic_taxonomy import TaxonomyVersion
 from app.models.economic_taxonomy_runtime import TaxonomyBenchmarkResult
+from app.services.economic_taxonomy_processor import SYSTEM_ACTOR
 from app.utils.file_hashing import canonical_json_sha256
 
 
@@ -56,6 +58,35 @@ def register_verified_benchmark(
     session.add(result)
     session.flush()
     return result
+
+
+def benchmark_anchor_version(session: Session, version_id) -> TaxonomyVersion:
+    """Return the nearest ancestor-or-self version the processor did not create.
+
+    Processor-derived versions inherit the benchmark of this anchor. A seed or a
+    reviewed operation becomes a new anchor that needs its own benchmark.
+    """
+    seen: set = set()
+    version = session.get(TaxonomyVersion, version_id)
+    # ponytail: one query per processor-derived version; a recursive CTE if chains grow long
+    while (
+        version is not None
+        and version.created_by == SYSTEM_ACTOR
+        and version.id not in seen
+    ):
+        seen.add(version.id)
+        version = (
+            session.get(TaxonomyVersion, version.parent_version_id)
+            if version.parent_version_id is not None
+            else None
+        )
+    if (
+        version is None
+        or version.created_by == SYSTEM_ACTOR
+        or not version.semantic_hash
+    ):
+        raise LookupError("benchmark_anchor_missing")
+    return version
 
 
 def find_verified_benchmark(
