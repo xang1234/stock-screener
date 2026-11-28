@@ -201,9 +201,12 @@ class EconomicTaxonomyPublicationCoordinator:
         target_mode: str | None = None,
     ) -> PreparedGeneration:
         self._require_admin(principal)
-        target_mode = target_mode or self._current_mode()
+        current_mode = self._current_mode()
+        target_mode = target_mode or current_mode
         if target_mode not in {"legacy", "shadow", "dual", "economic"}:
             raise PublicationInvariantError("invalid_target_mode")
+        if target_mode == "shadow" and current_mode in {"dual", "economic"}:
+            raise PublicationInvariantError("shadow_after_dual_unsupported")
         return PublicationPreparer(
             self.session_factory,
             clock=self.clock,

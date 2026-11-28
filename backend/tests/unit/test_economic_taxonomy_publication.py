@@ -7,8 +7,10 @@ import pytest
 from app.domain.economic_taxonomy.contracts import AdminPrincipal
 from app.infra.db.repositories.economic_taxonomy_publication_repo import (
     EconomicTaxonomyPublicationRepository,
+    PublicationInvariantError,
 )
 from app.infra.db.repositories.economic_taxonomy_repo import EconomicTaxonomyRepository
+from app.models.economic_taxonomy import TaxonomyVersion
 from app.models.economic_taxonomy_runtime import (
     GenerationInputManifest,
     InterpretationSet,
@@ -23,6 +25,7 @@ from app.models.economic_taxonomy_runtime import (
 )
 from app.models.theme import ThemeCluster
 from app.services.economic_taxonomy_benchmark_store import (
+    benchmark_anchor_version,
     register_verified_benchmark,
 )
 from app.services.economic_taxonomy_processor import SYSTEM_ACTOR
@@ -37,7 +40,7 @@ from app.services.economic_taxonomy_publication_compatibility import (
     CompatibilityProjection as SplitCompatibilityProjection,
 )
 from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
 ADMIN = AdminPrincipal(
@@ -51,7 +54,7 @@ def test_publication_facade_preserves_split_contract_identity():
     assert SplitCompatibilityProjection is CompatibilityProjection
 
 
-def _seed(db_session, *, include_benchmark=True, actor=ADMIN.subject):
+def _seed(db_session, *, include_benchmark=True, actor=ADMIN.subject, mode="dual"):
     repository = EconomicTaxonomyRepository(db_session)
     draft = repository.create_draft(actor=actor, reason="publication fixture")
     taxonomy = repository.seal_draft(draft.id)
@@ -64,7 +67,7 @@ def _seed(db_session, *, include_benchmark=True, actor=ADMIN.subject):
     )
     authority = TaxonomyAuthority(
         id=1,
-        mode="dual",
+        mode=mode,
         processing_taxonomy_version_id=taxonomy.id,
         processing_head_revision=4,
         authority_epoch=7,
@@ -555,7 +558,7 @@ def test_reviewed_operation_requires_a_new_benchmark(db_session):
 
 
 def test_shadow_publication_needs_no_benchmark(db_session):
-    taxonomy, capability = _seed(db_session, include_benchmark=False)
+    taxonomy, capability = _seed(db_session, include_benchmark=False, mode="legacy")
     _advance_processing_head(
         db_session, taxonomy, actor=SYSTEM_ACTOR, theme_name="Tanker Shipping"
     )
@@ -627,7 +630,7 @@ def _legacy_clusters(db_session, theme_id):
 
 
 def test_shadow_generation_never_delivers_to_legacy_tables(db_session):
-    _taxonomy, capability = _seed(db_session)
+    _taxonomy, capability = _seed(db_session, mode="legacy")
     theme_id = uuid4()
     coordinator = _coordinator(
         db_session, compatibility_builder=_legacy_theme_compatibility(theme_id)
@@ -669,3 +672,81 @@ def test_processor_lineage_without_a_reviewed_anchor_fails_closed(db_session):
             reader_capability_manifest_id=capability.id,
             target_mode="dual",
         )
+
+
+def test_shadow_publication_is_refused_after_dual(db_session):
+    _taxonomy, capability = _seed(db_session, mode="legacy")
+    _prepare_and_publish(db_session, capability, "shadow")
+    _prepare_and_publish(db_session, capability, "shadow")
+    coordinator = _coordinator(db_session)
+    stale_shadow = coordinator.prepare_generation(
+        coordinator.capture_cutoff(principal=ADMIN, selections=[]),
+        principal=ADMIN,
+        reader_capability_manifest_id=capability.id,
+        target_mode="shadow",
+    )
+    _prepare_and_publish(db_session, capability, "dual")
+
+    with pytest.raises(PublicationInvariantError, match="shadow_after_dual"):
+        coordinator.prepare_generation(
+            coordinator.capture_cutoff(principal=ADMIN, selections=[]),
+            principal=ADMIN,
+            reader_capability_manifest_id=capability.id,
+            target_mode="shadow",
+        )
+    with pytest.raises(ManifestChanged, match="expected_parent_changed"):
+        coordinator.publish_generation(stale_shadow.id, principal=ADMIN)
+    with db_session.__class__(bind=db_session.get_bind()) as check:
+        assert check.get(TaxonomyAuthority, 1).mode == "dual"
+
+
+def _version(
+    db_session, *, parent=None, actor=SYSTEM_ACTOR, semantic_hash="h", status="sealed"
+):
+    version = TaxonomyVersion(
+        parent_version_id=parent.id if parent is not None else None,
+        status=status,
+        semantic_hash=semantic_hash,
+        created_by=actor,
+        reason="anchor fixture",
+    )
+    db_session.add(version)
+    db_session.flush()
+    return version
+
+
+def test_anchor_walk_is_one_statement_for_a_deep_processor_chain(db_session):
+    anchor = _version(db_session, actor=ADMIN.subject, semantic_hash="anchor")
+    head = anchor
+    for index in range(12):
+        head = _version(db_session, parent=head, semantic_hash=f"processor-{index}")
+    anchor_id, head_id = anchor.id, head.id
+    db_session.commit()
+    statements = []
+
+    def record(_conn, _cursor, statement, *_args):
+        if "economic_taxonomy_versions" in statement:
+            statements.append(statement)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        found = benchmark_anchor_version(db_session, head_id)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert len(statements) == 1
+    assert found.id == anchor_id
+
+
+def test_anchor_walk_fails_closed_on_broken_or_cyclic_lineage(db_session):
+    first = _version(db_session, status="draft")
+    second = _version(db_session, parent=first)
+    first.parent_version_id = second.id
+    unhashed = _version(db_session, actor=ADMIN.subject, semantic_hash=None)
+    orphan = _version(db_session, parent=_version(db_session, parent=unhashed))
+    db_session.commit()
+
+    for version_id in (second.id, orphan.id, uuid4()):
+        with pytest.raises(LookupError, match="benchmark_anchor_missing"):
+            benchmark_anchor_version(db_session, version_id)

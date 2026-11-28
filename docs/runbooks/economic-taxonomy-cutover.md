@@ -229,6 +229,12 @@ Its compatibility projections stay in shadow scope, so delivery never writes
 them to the legacy tables. Every other generation needs a benchmark, rollback
 included, because rollback publishes the current processing taxonomy.
 
+The shadow generation is still a readable preview. The Themes page economic
+catalog and the review routes serve it, unbenchmarked, and the benchmark export
+below reads it through the shadow reader. Legacy tables and legacy readers are
+untouched. Shadow publication is refused once authority is `dual` or
+`economic` (`shadow_after_dual_unsupported`); to go back, roll back to legacy.
+
 Now verify the processing pipeline. Processing is skipped in legacy mode, so
 this check cannot run before shadow. The worker builds the default Economic
 Taxonomy pipeline from a sanctioned extraction-provider credential and the

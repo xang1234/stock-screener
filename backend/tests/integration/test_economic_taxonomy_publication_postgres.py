@@ -12,6 +12,7 @@ from app.infra.db.repositories.economic_taxonomy_publication_repo import (
     EconomicTaxonomyPublicationRepository,
 )
 from app.infra.db.repositories.economic_taxonomy_repo import EconomicTaxonomyRepository
+from app.models.economic_taxonomy import TaxonomyVersion
 from app.models.economic_taxonomy_runtime import (
     GenerationInputManifest,
     ReaderCapabilityManifest,
@@ -22,6 +23,7 @@ from app.models.economic_taxonomy_runtime import (
     TaxonomyProjectionEvent,
 )
 from app.services.economic_taxonomy_benchmark_store import (
+    benchmark_anchor_version,
     register_verified_benchmark,
 )
 from app.services.economic_taxonomy_fence import (
@@ -34,6 +36,7 @@ from app.services.economic_taxonomy_publication import (
     InjectedPublicationCrash,
     ManifestChanged,
 )
+from app.services.economic_taxonomy_processor import SYSTEM_ACTOR
 from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError
@@ -413,3 +416,29 @@ def test_abandoned_candidate_projection_is_never_claimed(seeded):
             limit=10,
         )
         assert claims == []
+
+
+def test_benchmark_anchor_walk_on_postgres(seeded):
+    taxonomy_id, _capability_id = seeded
+    with SessionLocal() as session:
+        head_id = taxonomy_id
+        for index in range(12):
+            version = TaxonomyVersion(
+                parent_version_id=head_id,
+                status="sealed",
+                semantic_hash=f"pg-processor-{index}",
+                created_by=SYSTEM_ACTOR,
+                reason="pg anchor",
+            )
+            session.add(version)
+            session.flush()
+            head_id = version.id
+        loop = TaxonomyVersion(status="draft", created_by=SYSTEM_ACTOR, reason="pg loop")
+        session.add(loop)
+        session.flush()
+        loop.parent_version_id = loop.id
+        session.commit()
+
+        assert benchmark_anchor_version(session, head_id).id == taxonomy_id
+        with pytest.raises(LookupError, match="benchmark_anchor_missing"):
+            benchmark_anchor_version(session, loop.id)

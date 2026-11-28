@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.economic_taxonomy import TaxonomyVersion
 from app.models.economic_taxonomy_runtime import TaxonomyBenchmarkResult
@@ -71,27 +71,29 @@ def benchmark_anchor_version(session: Session, version_id) -> TaxonomyVersion:
     Processor-derived versions inherit the benchmark of this anchor. A seed or a
     reviewed operation becomes a new anchor that needs its own benchmark.
     """
-    seen: set = set()
-    version = session.get(TaxonomyVersion, version_id)
-    # ponytail: one query per processor-derived version; a recursive CTE if chains grow long
-    while (
-        version is not None
-        and version.created_by == SYSTEM_ACTOR
-        and version.id not in seen
-    ):
-        seen.add(version.id)
-        version = (
-            session.get(TaxonomyVersion, version.parent_version_id)
-            if version.parent_version_id is not None
-            else None
+    lineage = (
+        select(
+            TaxonomyVersion.id,
+            TaxonomyVersion.parent_version_id,
+            TaxonomyVersion.created_by,
         )
-    if (
-        version is None
-        or version.created_by == SYSTEM_ACTOR
-        or not version.semantic_hash
-    ):
+        .where(TaxonomyVersion.id == version_id)
+        .cte("anchor_lineage", recursive=True)
+    )
+    parent = aliased(TaxonomyVersion)
+    lineage = lineage.union(
+        select(parent.id, parent.parent_version_id, parent.created_by)
+        .join(lineage, parent.id == lineage.c.parent_version_id)
+        .where(lineage.c.created_by == SYSTEM_ACTOR)
+    )
+    anchor = session.scalar(
+        select(TaxonomyVersion)
+        .join(lineage, TaxonomyVersion.id == lineage.c.id)
+        .where(lineage.c.created_by != SYSTEM_ACTOR)
+    )
+    if anchor is None or not anchor.semantic_hash:
         raise LookupError("benchmark_anchor_missing")
-    return version
+    return anchor
 
 
 def find_verified_benchmark(
