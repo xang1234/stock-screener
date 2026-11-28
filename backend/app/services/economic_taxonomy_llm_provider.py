@@ -9,8 +9,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import func, select
+
 from app.config import settings
-from app.models.economic_taxonomy_runtime import EvidencePacket, ProcessingRequest
+from app.models.economic_taxonomy_runtime import (
+    EvidencePacket,
+    ProcessingRequest,
+    ProcessingRequestEvent,
+)
 from app.services.economic_exposure_extraction import (
     RetryableProviderError,
     TerminalProviderError,
@@ -222,6 +228,15 @@ class RoutedEconomicReservationManager:
                 else None
             )
             social_work_id = (packet.source_metadata or {}).get("social_work_id") if packet else None
+            # A terminal outcome closes the logical operation. A requeued request
+            # reserves a new one, so an uncertain earlier attempt keeps its charge
+            # without blocking the retry.
+            requeues = session.scalar(
+                select(func.count(ProcessingRequestEvent.id)).where(
+                    ProcessingRequestEvent.processing_request_id == logical_request_id,
+                    ProcessingRequestEvent.event_type == "terminal_failure",
+                )
+            )
         if social_work_id is None:
             return _UnmeteredReservation()
         if not isinstance(social_work_id, int) or isinstance(social_work_id, bool):
@@ -239,7 +254,9 @@ class RoutedEconomicReservationManager:
             output_token_limit=self.OUTPUT_TOKEN_LIMIT,
         ).reserve(
             attempt_key=attempt_key,
-            logical_request_id=logical_request_id,
+            logical_request_id=(
+                f"{logical_request_id}:requeue-{requeues}" if requeues else logical_request_id
+            ),
             operation_kind=operation_kind,
         )
 

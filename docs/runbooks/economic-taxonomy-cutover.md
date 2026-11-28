@@ -420,6 +420,10 @@ contributes no interpretation, its lineage keeps its previous completed
 attempt, and the result lists the revisions in `attention_revision_ids` with a
 warning log. Find the affected work with
 `SELECT id, source_lineage_id, completion_code FROM economic_processing_requests WHERE status = 'terminal_failure'`.
+To retry the ones a provider failure ended (by default `provider_outcome_uncertain`,
+`invalid_result_status` and `invalid_provider_json`), run
+`python scripts/requeue_economic_processing_requests.py` from `backend/` to count
+them, then again with `--apply`; `--completion-code` and `--limit` narrow the run.
 Monitor `refresh_economic_taxonomy_generation`; `backlog_preserved: true` is
 retryable, not data loss.
 

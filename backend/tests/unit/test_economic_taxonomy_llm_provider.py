@@ -271,10 +271,17 @@ def social_request(monkeypatch, *effects):
         approved_dimensions={"industry"},
         reservations=reservations,
     )
+
+    def process(rid, lease_token):
+        extractor.extract(rid)
+        with SessionLocal() as db:
+            EconomicTaxonomyWorkRepository(db).complete(
+                rid, lease_token=lease_token, result_payload={}
+            )
+            db.commit()
+
     service = EconomicTaxonomyTaskService(
-        SessionLocal,
-        pipeline=SimpleNamespace(process=lambda rid, _lease: extractor.extract(rid)),
-        clock=lambda: NOW,
+        SessionLocal, pipeline=SimpleNamespace(process=process), clock=lambda: NOW
     )
     return request_id, service
 

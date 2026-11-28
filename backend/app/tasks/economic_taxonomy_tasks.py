@@ -791,11 +791,20 @@ class EconomicTaxonomyTaskService:
                 EconomicTaxonomyWorkRepository(session)._append_request_event(
                     request.id, "terminal_failure", {"reason": reason}
                 )
+                logical_key = f"processing_request:{request.id}"
+                # A requeued request can end the same way again.
+                latest = session.scalar(
+                    select(func.max(TaxonomySourceRevisionLog.revision_number)).where(
+                        TaxonomySourceRevisionLog.producer_kind == "economic_taxonomy",
+                        TaxonomySourceRevisionLog.logical_source_key == logical_key,
+                        TaxonomySourceRevisionLog.revision_kind == revision_kind,
+                    )
+                )
                 EconomicTaxonomyPublicationRepository(session).append_source_revision(
                     producer_kind="economic_taxonomy",
-                    logical_source_key=f"processing_request:{request.id}",
+                    logical_source_key=logical_key,
                     revision_kind=revision_kind,
-                    revision_number=1,
+                    revision_number=int(latest or 0) + 1,
                     content_hash=str(request.id),
                     authority_epoch=authority.authority_epoch,
                 )
