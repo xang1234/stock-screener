@@ -162,6 +162,7 @@ CODES = (
     "invalid_result_status",
     "invalid_provider_json",
     "claim_review_not_accepted",
+    "provider_output_truncated",
     "completed",
 )
 
@@ -186,6 +187,7 @@ def test_dry_run_counts_and_apply_is_bounded_and_idempotent(capsys):
     assert _states() == [
         ("claim_review_not_accepted", "terminal_failure"),
         ("completed", "completed"),
+        ("provider_output_truncated", "terminal_failure"),
         ("requeued", "retryable"),
         ("requeued", "retryable"),
         ("requeued", "retryable"),

@@ -64,7 +64,7 @@ class _LLM:
 def _response(payload: str):
     return SimpleNamespace(
         id="request-1",
-        choices=[SimpleNamespace(message=SimpleNamespace(content=payload))],
+        choices=[SimpleNamespace(message=SimpleNamespace(content=payload), finish_reason="stop")],
     )
 
 
@@ -178,6 +178,7 @@ def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
                 ),
             ],
             usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
+            stop_reason="end_turn",
         )
 
     _anthropic_create(monkeypatch, create)
@@ -189,7 +190,7 @@ def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
     )
 
     assert sent["model"] == "claude-haiku-5-5"
-    assert sent["max_tokens"] == RoutedEconomicReservationManager.OUTPUT_TOKEN_LIMIT
+    assert sent["max_tokens"] == RoutedEconomicReservationManager.OUTPUT_TOKEN_LIMIT == 8_000
     assert sent["output_config"] == {"effort": "medium"}
     assert 0 < 2 * sent["timeout"] < LEASE_DURATION.total_seconds()
     assert "temperature" not in sent and "response_format" not in sent
@@ -276,7 +277,10 @@ def status_error(status):
 
 
 def social_request(monkeypatch, *effects):
-    """One Social-backed processing request served by a scripted Haiku client."""
+    """One Social-backed processing request served by a scripted Haiku client.
+
+    Each effect is an exception to raise, a JSON answer, or text cut off at max_tokens.
+    """
     _credentials(monkeypatch, anthropic="test-key")
     with SessionLocal.begin() as db:
         db.add_all(
@@ -325,11 +329,13 @@ def social_request(monkeypatch, *effects):
         effect = effects.pop(0)
         if isinstance(effect, Exception):
             raise effect
+        truncated = isinstance(effect, str)
         return SimpleNamespace(
             id="msg_ok",
             model="claude-haiku-5-5",
-            content=[SimpleNamespace(type="text", text=json.dumps(effect))],
+            content=[SimpleNamespace(type="text", text=effect if truncated else json.dumps(effect))],
             usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
+            stop_reason="max_tokens" if truncated else "end_turn",
         )
 
     _anthropic_create(monkeypatch, create)
@@ -384,4 +390,17 @@ def test_rate_limited_haiku_dispatch_leaves_the_request_retryable_at_zero_cost(
         ("retryable", "provider_retryable"),
         ["retryable_failure"],
         [("reconciled", Decimal("0"))],
+    )
+
+
+def test_truncated_haiku_answer_ends_as_truncated_at_its_reported_cost(monkeypatch):
+    request_id, service = social_request(monkeypatch, '{"status":"accepted_candidates","candi')
+
+    result = service.process(limit=1, worker_id="worker:test")
+
+    assert result["terminal_failures"] == 1
+    assert outcomes(request_id) == (
+        ("terminal_failure", "provider_output_truncated"),
+        ["terminal_failure"],
+        [("reconciled", Decimal("0.0002"))],
     )

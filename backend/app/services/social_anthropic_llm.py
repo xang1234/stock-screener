@@ -67,7 +67,11 @@ class AnthropicMeteredLLM:
         text = "".join(block.text for block in response.content if block.type == "text")
         return SimpleNamespace(
             id=response.id, model=response.model,
-            choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+            # "length" is LiteLLM's finish reason for a reply cut off at max_tokens.
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content=text),
+                finish_reason="length" if response.stop_reason == "max_tokens" else response.stop_reason,
+            )],
             usage=SimpleNamespace(prompt_tokens=response.usage.input_tokens,
                                   completion_tokens=response.usage.output_tokens),
             _hidden_params={"custom_llm_provider": PROVIDER},

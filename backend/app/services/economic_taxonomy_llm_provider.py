@@ -65,6 +65,8 @@ whose theme, mechanism, facets, securities, and quoted evidence are mutually sup
 CLAUDE_HAIKU_55 = ModelConfig(model_id="anthropic/claude-haiku-5-5")
 # Extraction and review both dispatch inside one processing lease.
 REQUEST_TIMEOUT_SECONDS = LEASE_DURATION.total_seconds() / 3
+# Claude's thinking counts against this cap.
+MAX_OUTPUT_TOKENS = 8_000
 
 # The first entry whose credential is configured serves every call.
 _PROVIDERS = (
@@ -145,7 +147,7 @@ class EconomicTaxonomyLLMProvider:
                     allow_fallbacks=False,
                     response_format={"type": "json_object"},
                     temperature=0,
-                    max_tokens=4000,
+                    max_tokens=MAX_OUTPUT_TOKENS,
                     timeout=REQUEST_TIMEOUT_SECONDS,
                     num_retries=0,
                     metered=True,
@@ -167,6 +169,13 @@ class EconomicTaxonomyLLMProvider:
             ) from exc
 
         request_id, actual_cost = self._response_metadata(response)
+        if response.choices and response.choices[0].finish_reason == "length":
+            raise TerminalProviderError(
+                "provider_output_truncated",
+                provider_request_id=request_id,
+                actual_cost=actual_cost,
+                dispatch_confirmed=True,
+            )
         try:
             result = _json_payload(LLMService.extract_content(response))
         except (json.JSONDecodeError, TypeError) as exc:
@@ -222,7 +231,7 @@ class RoutedEconomicReservationManager:
     """Use Social's durable budget only for evidence admitted from Social work."""
 
     INPUT_TOKEN_LIMIT = 20_000
-    OUTPUT_TOKEN_LIMIT = 4_000
+    OUTPUT_TOKEN_LIMIT = MAX_OUTPUT_TOKENS
 
     def __init__(self, session_factory, *, budget: SocialLLMBudgetService, model: str):
         self.session_factory = session_factory

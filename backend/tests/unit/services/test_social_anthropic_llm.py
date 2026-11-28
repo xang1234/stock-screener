@@ -44,6 +44,7 @@ def test_sends_one_schema_constrained_request_and_returns_the_ledger_shape():
             id="msg_1", model="claude-haiku-5-5",
             content=[SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text='{"posts": []}')],
             usage=SimpleNamespace(input_tokens=120, output_tokens=40),
+            stop_reason="end_turn",
         )
 
     response = call(llm_with(create))
@@ -56,6 +57,18 @@ def test_sends_one_schema_constrained_request_and_returns_the_ledger_shape():
     assert (response.id, response.model, response.choices[0].message.content) == ("msg_1", "claude-haiku-5-5", '{"posts": []}')
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (120, 40)
     assert response._hidden_params == {"custom_llm_provider": "anthropic"}
+
+
+def test_reports_a_reply_cut_off_at_max_tokens_as_length():
+    async def create(**_kwargs):
+        return SimpleNamespace(
+            id="msg_1", model="claude-haiku-5-5",
+            content=[SimpleNamespace(type="text", text='{"posts": [')],
+            usage=SimpleNamespace(input_tokens=120, output_tokens=8192),
+            stop_reason="max_tokens",
+        )
+
+    assert call(llm_with(create)).choices[0].finish_reason == "length"
 
 
 @pytest.mark.parametrize(("error", "expected"), [
