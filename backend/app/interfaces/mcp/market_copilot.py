@@ -2239,8 +2239,7 @@ class MarketCopilotService:
                 return False
             if not normalized_market:
                 return True
-            run_market = feature_run_market(run)
-            return run_market is None or run_market == normalized_market
+            return self._run_applies_to_market(run, normalized_market)
 
         if normalized_market:
             market_run = self._run_behind_pointer(
@@ -2290,6 +2289,26 @@ class MarketCopilotService:
         return run
 
     @staticmethod
+    def _activated_for_market(
+        live_pointers: dict[str, int],
+        run_id: int,
+        run_market: str | None,
+        market: str,
+    ) -> bool:
+        """True when a live pointer activates *run_id* for *market*.
+
+        Only that market's own pointer counts, or the global pointer when the run cannot belong
+        to another market. A pointer of a different market naming the run - a hand-set key, or a
+        rollout repointed under the wrong market - is not activation for this one.
+        """
+        normalized = (market or "").strip().upper()
+        if normalized and live_pointers.get(f"latest_published_market:{normalized}") == run_id:
+            return True
+        if live_pointers.get("latest_published") == run_id:
+            return run_market is None or not normalized or run_market == normalized
+        return False
+
+    @staticmethod
     def _published_as_a_staged_rollout(run: FeatureRunDomain) -> bool:
         """True when the run's own config says it was published to a rollout pointer."""
         key = feature_run_publish_pointer_key(run)
@@ -2302,14 +2321,18 @@ class MarketCopilotService:
         declared = feature_run_market(run)
         return declared is None or declared == (market or "").strip().upper()
 
-    def _pointer_run_ids(self, uow: SqlUnitOfWork, key_pattern: str) -> set[int]:
-        """The run ids named by pointers whose key matches *key_pattern*."""
+    def _pointer_targets(self, uow: SqlUnitOfWork, key_pattern: str) -> dict[str, int]:
+        """Pointer key → run id, for keys matching *key_pattern*.
+
+        The key is kept because a pointer only ever proves something for its own market: a
+        ``latest_published_market:DE`` naming a US run does not activate that run for US.
+        """
         rows = (
-            uow.session.query(FeatureRunPointer.run_id)
+            uow.session.query(FeatureRunPointer.key, FeatureRunPointer.run_id)
             .filter(FeatureRunPointer.key.like(key_pattern))
             .all()
         )
-        return {run_id for (run_id,) in rows if run_id is not None}
+        return {key: run_id for key, run_id in rows if run_id is not None}
 
     def _published_run_for_market(
         self,
@@ -2351,11 +2374,11 @@ class MarketCopilotService:
         # validated and before ``MarketRsActivator`` repoints the market pointer. It carries
         # ``status = published`` without ever having gone live, so the scan must not serve it;
         # a run that did go live is named by a live pointer and is skipped only when it is not.
-        staged = self._pointer_run_ids(uow, f"{ROLLOUT_POINTER_PREFIX}%")
-        live = self._pointer_run_ids(uow, "latest_published%")
+        rollout_targets = set(
+            self._pointer_targets(uow, f"{ROLLOUT_POINTER_PREFIX}%").values()
+        )
+        live_pointers = self._pointer_targets(uow, "latest_published%")
         for (run_id,) in rows:
-            if run_id in staged and run_id not in live:
-                continue
             try:
                 run = uow.feature_runs.get_run(run_id)
             except ValueError as exc:
@@ -2363,13 +2386,18 @@ class MarketCopilotService:
                     f"Stored run {run_id} has an unknown status or run type"
                 ) from exc
             run_market = feature_run_market(run)
-            if not market or run_market is None or run_market == market:
-                # A retry moves the rollout pointer to the newer run and leaves the rejected one
-                # behind no pointer at all, so the pointer table no longer knows it was staged.
-                # The run's own config still does: it records the key it was published to.
-                if run_id not in live and self._published_as_a_staged_rollout(run):
-                    continue
-                return run
+            if market and run_market is not None and run_market != market:
+                continue
+            # A run counts as staged while a rollout pointer names it, or - after a retry moved
+            # that pointer away and left the rejected run behind nothing - while its own config
+            # records the rollout key it was published to. Only a live pointer of this market
+            # releases it; a pointer of another market proves nothing here.
+            staged = run_id in rollout_targets or self._published_as_a_staged_rollout(run)
+            if staged and not self._activated_for_market(
+                live_pointers, run_id, run_market, market
+            ):
+                continue
+            return run
         return None
 
     def _latest_breadth(self, db: Session, as_of_date: date | None) -> MarketBreadth | None:

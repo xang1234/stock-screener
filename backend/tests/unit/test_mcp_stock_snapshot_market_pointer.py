@@ -762,3 +762,29 @@ def test_breadth_ignores_a_us_pointer_that_names_another_markets_run(service, se
 
     assert payload["breadth"] is not None
     assert payload["breadth"]["date"] == "2026-03-29"
+
+
+def test_stock_snapshot_does_not_activate_a_us_rollout_through_a_german_pointer(
+    service, session_factory
+):
+    """Only this market's pointer activates a staged run.
+
+    ``latest_published_market:DE`` naming the US rollout proves nothing about US: the run was
+    never activated for the market the symbol lives in, and a pointer of another market must not
+    release it.
+    """
+    rollout_run = _seed_rollout_run(session_factory)
+    _set_market(session_factory, "NVDA", "US")
+    _drop_pointer(session_factory, "latest_published")
+    _drop_pointer(session_factory, "latest_published_market:US")
+    session = session_factory()
+    try:
+        session.add(FeatureRunPointer(key="latest_published_market:DE", run_id=rollout_run))
+        session.commit()
+    finally:
+        session.close()
+    _fail_runs(session_factory, (US_RUN, NEWEST_US_RUN))
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is None
