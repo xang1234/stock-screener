@@ -24,22 +24,25 @@ EFFORT = "medium"
 
 
 class AnthropicMeteredLLM:
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, *, output_schema: dict | None = EXTRACTION_SCHEMA):
         key = settings.anthropic_api_key if api_key is None else api_key
         if not key:
             raise LLMPreDispatchError("metered_provider_configuration_error")
         # One reserved dispatch per call: the backlog owns retries.
         self.client = anthropic.AsyncAnthropic(api_key=key, max_retries=0)
+        self.output_config = {"effort": EFFORT}
+        if output_schema is not None:
+            self.output_config["format"] = {"type": "json_schema", "schema": output_schema}
 
     async def completion(self, *, messages, model, max_tokens, timeout=None, **_ignored):
         # Sampling overrides (temperature) are rejected by current Claude models; the
-        # schema replaces response_format, which has no Claude equivalent.
+        # schema, when set, replaces response_format, which has no Claude equivalent.
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
         try:
             response = await self.client.messages.create(
                 model=model.removeprefix(f"{PROVIDER}/"), max_tokens=max_tokens, system=system,
                 messages=[m for m in messages if m["role"] != "system"], timeout=timeout,
-                output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA}},
+                output_config=self.output_config,
             )
         except anthropic.APIStatusError as exc:
             status = exc.status_code

@@ -20,6 +20,7 @@ from app.services.llm.config import (
     MINIMAX_M27,
     OPENCODE_GO_DEEPSEEK_V4_FLASH,
     ZAI_GLM_47_FLASH,
+    ModelConfig,
     ModelPreset,
 )
 from app.services.llm.llm_service import (
@@ -29,6 +30,7 @@ from app.services.llm.llm_service import (
     LLMRateLimitError,
     LLMService,
 )
+from app.services.social_anthropic_llm import AnthropicMeteredLLM
 from app.services.social_llm_budget_service import (
     SocialEconomicReservationManager,
     SocialLLMBudgetService,
@@ -49,14 +51,19 @@ candidate_key, decision (accepted, held, or rejected), and reason. Accept only c
 whose theme, mechanism, facets, securities, and quoted evidence are mutually supported."""
 
 
-def _configured_preset() -> ModelPreset | None:
-    if (settings.minimax_api_key or "").strip():
-        return ModelPreset(primary=MINIMAX_M27)
-    if settings.zai_api_keys_list:
-        return ModelPreset(primary=ZAI_GLM_47_FLASH)
-    if (settings.opencode_go_api_key or "").strip():
-        return ModelPreset(primary=OPENCODE_GO_DEEPSEEK_V4_FLASH)
-    return None
+CLAUDE_HAIKU_55 = ModelConfig(model_id="anthropic/claude-haiku-5-5")
+
+# The first entry whose credential is configured serves every call.
+_PROVIDERS = (
+    (lambda: bool((settings.anthropic_api_key or "").strip()), CLAUDE_HAIKU_55),
+    (lambda: bool((settings.minimax_api_key or "").strip()), MINIMAX_M27),
+    (lambda: bool(settings.zai_api_keys_list), ZAI_GLM_47_FLASH),
+    (lambda: bool((settings.opencode_go_api_key or "").strip()), OPENCODE_GO_DEEPSEEK_V4_FLASH),
+)
+
+
+def _configured_model() -> ModelConfig | None:
+    return next((model for configured, model in _PROVIDERS if configured()), None)
 
 
 def _json_payload(text: str) -> dict[str, Any]:
@@ -75,9 +82,15 @@ def _json_payload(text: str) -> dict[str, Any]:
 class EconomicTaxonomyLLMProvider:
     """One-dispatch JSON provider shared by extraction and claim review."""
 
-    def __init__(self, llm: LLMService, *, budget: SocialLLMBudgetService | None = None):
+    def __init__(
+        self,
+        llm: LLMService | AnthropicMeteredLLM,
+        *,
+        model: str,
+        budget: SocialLLMBudgetService | None = None,
+    ):
         self.llm = llm
-        self.model = llm.preset.primary.model_id
+        self.model = model
         self.budget = budget
 
     def extract(self, *, evidence: Mapping[str, Any], policy_version: str):
@@ -232,17 +245,22 @@ class RoutedEconomicReservationManager:
 
 
 def build_economic_taxonomy_provider(session_factory):
-    preset = _configured_preset()
-    if preset is None:
+    model = _configured_model()
+    if model is None:
         return None, None
     budget = SocialLLMBudgetService(
         session_factory,
         daily_limit_usd=settings.social_llm_daily_budget_usd,
         budget_timezone=settings.social_llm_budget_timezone,
     )
-    provider = EconomicTaxonomyLLMProvider(
-        LLMService(use_case="extraction", preset=preset), budget=budget
+    # Extraction and review each define their JSON shape in the prompt, so
+    # Claude gets no Social schema.
+    llm = (
+        AnthropicMeteredLLM(output_schema=None)
+        if model.model_id.startswith("anthropic/")
+        else LLMService(use_case="extraction", preset=ModelPreset(primary=model))
     )
+    provider = EconomicTaxonomyLLMProvider(llm, model=model.model_id, budget=budget)
     reservations = RoutedEconomicReservationManager(
         session_factory, budget=budget, model=provider.model
     )
