@@ -7,8 +7,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, select
+from sqlalchemy.orm import Session, aliased
 
 from app.infra.db.repositories.economic_taxonomy_publication_repo import (
     PublicationInvariantError,
@@ -18,6 +18,8 @@ from app.models.economic_taxonomy_runtime import (
     ClaimAssignment,
     GenerationInputManifest,
     InterpretationSelection,
+    ServingGeneration,
+    ServingGenerationEvent,
     TaxonomyProjectionEvent,
     ThemeConstituentExposure,
 )
@@ -104,6 +106,42 @@ def event_descriptor(event: TaxonomyProjectionEvent) -> dict[str, Any]:
     }
 
 
+def _generation_modes():
+    generation = aliased(ServingGeneration)
+    prepared = aliased(ServingGenerationEvent)
+    rows = select(
+        generation.id,
+        generation.expected_parent_generation_id.label("parent_id"),
+        prepared.details["target_mode"].as_string().label("mode"),
+    ).join(
+        prepared,
+        and_(
+            prepared.serving_generation_id == generation.id,
+            prepared.event_type == "prepared",
+        ),
+    )
+    return generation, rows
+
+
+def live_ancestor_generation_id(session: Session, generation_id):
+    """Return the nearest ancestor-or-self generation that was not shadow.
+
+    Shadow generations stage only shadow-scope projections, so the lineages
+    legacy readers last received live on the generation before them.
+    """
+    start, rows = _generation_modes()
+    chain = rows.where(start.id == generation_id).cte("live_ancestor", recursive=True)
+    parent, rows = _generation_modes()
+    chain = chain.union(
+        rows.join(chain, parent.id == chain.c.parent_id).where(
+            chain.c.mode == "shadow"
+        )
+    )
+    return session.scalar(
+        select(chain.c.id).where(chain.c.mode.is_distinct_from("shadow"))
+    )
+
+
 def build_default_compatibility_projections(
     session: Session,
     context: PreparationContext,
@@ -177,12 +215,14 @@ def build_default_compatibility_projections(
 
     projections: dict[tuple[str, str, str], CompatibilityProjection] = {}
     previous_theme_lineages: set[str] = set()
-    if context.expected_parent_generation_id is not None:
+    parent_id = live_ancestor_generation_id(
+        session, context.expected_parent_generation_id
+    )
+    if parent_id is not None:
         parent_rows = session.scalars(
             select(TaxonomyProjectionEvent)
             .where(
-                TaxonomyProjectionEvent.serving_generation_id
-                == context.expected_parent_generation_id,
+                TaxonomyProjectionEvent.serving_generation_id == parent_id,
                 TaxonomyProjectionEvent.delivery_scope == "candidate",
             )
             .order_by(TaxonomyProjectionEvent.projection_revision)

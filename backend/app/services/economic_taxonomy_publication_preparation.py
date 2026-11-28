@@ -17,7 +17,11 @@ from app.models.economic_taxonomy_runtime import (
     GenerationInputManifest,
     ReaderCapabilityManifest,
 )
-from app.services.economic_taxonomy_benchmark_store import verify_benchmark_reference
+from app.services.economic_taxonomy_benchmark_store import (
+    BENCHMARK_EXEMPT_MODES,
+    benchmark_anchor_version,
+    verify_benchmark_reference,
+)
 from app.services.economic_taxonomy_interpretations import (
     EconomicTaxonomyInterpretationService,
 )
@@ -36,7 +40,10 @@ from app.services.economic_taxonomy_publication_validation import (
     require_prior_acknowledgement,
     verify_capability,
 )
-from app.services.economic_taxonomy_runtime import EconomicTaxonomyRuntimeService
+from app.services.economic_taxonomy_runtime import (
+    EconomicTaxonomyRuntimeService,
+    generation_delivery_scope,
+)
 from app.services.economic_taxonomy_snapshot_builder import (
     GenerationSnapshotInputs,
     build_snapshot_bundle,
@@ -133,20 +140,23 @@ class PublicationPreparer:
                 staged_epoch=cutoff.authority_epoch,
                 target_mode=target_mode,
             )
-            benchmark = self.benchmark_verifier(session, context)
-            if benchmark is False or not isinstance(benchmark, Mapping):
-                raise BenchmarkRejected("economic_taxonomy_benchmark_failed")
-            if not bool(benchmark.get("passed", False)):
-                raise BenchmarkRejected("economic_taxonomy_benchmark_failed")
-            try:
-                benchmark = verify_benchmark_reference(
-                    session,
-                    benchmark,
-                    taxonomy_semantic_hash=str(taxonomy.semantic_hash),
-                    policy_bundle=self.required_policy_bundle,
-                )
-            except (LookupError, ValueError) as exc:
-                raise BenchmarkRejected(str(exc)) from exc
+            benchmark = None
+            if target_mode not in BENCHMARK_EXEMPT_MODES:
+                benchmark = self.benchmark_verifier(session, context)
+                if benchmark is False or not isinstance(benchmark, Mapping):
+                    raise BenchmarkRejected("economic_taxonomy_benchmark_failed")
+                if not bool(benchmark.get("passed", False)):
+                    raise BenchmarkRejected("economic_taxonomy_benchmark_failed")
+                try:
+                    anchor = benchmark_anchor_version(session, taxonomy.id)
+                    benchmark = verify_benchmark_reference(
+                        session,
+                        benchmark,
+                        taxonomy_semantic_hash=str(anchor.semantic_hash),
+                        policy_bundle=self.required_policy_bundle,
+                    )
+                except (LookupError, ValueError) as exc:
+                    raise BenchmarkRejected(str(exc)) from exc
 
             projections = assign_projection_revisions(
                 session, self.compatibility_builder(session, context)
@@ -160,7 +170,7 @@ class PublicationPreparer:
                 "interpretation_hash": interpretation.semantic_hash,
                 "metrics_hash": metrics.semantic_hash,
                 "snapshot_hash": snapshots.semantic_hash,
-                "benchmark": dict(benchmark),
+                "benchmark": benchmark,
                 "target_mode": target_mode,
                 "expected_projections": expected_projections,
             }
@@ -203,11 +213,7 @@ class PublicationPreparer:
                     "snapshot": snapshots.artifact_integrity_hash,
                 },
                 "expected_projections": expected_projections,
-                "benchmark": (
-                    dict(benchmark)
-                    if isinstance(benchmark, Mapping)
-                    else {"passed": True}
-                ),
+                "benchmark": benchmark,
             }
             generation = EconomicTaxonomyPublicationRepository(
                 session
@@ -240,7 +246,7 @@ class PublicationPreparer:
                         projection.selected_interpretation_version
                     ),
                     mapping_version=projection.mapping_version,
-                    delivery_scope="candidate",
+                    delivery_scope=generation_delivery_scope(target_mode),
                 )
             session.commit()
             return PreparedGeneration(

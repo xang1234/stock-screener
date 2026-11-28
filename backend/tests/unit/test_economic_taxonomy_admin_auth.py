@@ -85,3 +85,12 @@ def test_admin_dependency_exposes_no_settings_in_openapi():
             }
             assert "settings" not in names, path
     assert "admin_api_key" not in str(spec)
+
+
+def test_admin_principal_cannot_claim_the_reserved_system_subject():
+    from app.config.settings import Settings
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="reserved"):
+        Settings(admin_principal_id="system:economic-taxonomy-refresh")
+    assert Settings(admin_principal_id="").admin_principal_id == ""

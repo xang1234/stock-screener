@@ -187,6 +187,8 @@ def seed_governed_snapshot(session: Session, *, actor: str) -> UUID:
     kept (#473). Refuses a row that already has a processing taxonomy, is not
     in legacy mode, or has writes fenced; then nothing is written.
     """
+    if actor.startswith("system:"):
+        raise SeedRefused(f"actor {actor!r} uses the reserved 'system:' prefix")
     with exclusive_publication(session) as authority:
         if (
             authority.mode != "legacy"

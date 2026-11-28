@@ -7,9 +7,11 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
+from app.models.economic_taxonomy import TaxonomyVersion
 from app.models.economic_taxonomy_runtime import TaxonomyBenchmarkResult
+from app.services.economic_taxonomy_processor import SYSTEM_ACTOR
 from app.utils.file_hashing import canonical_json_sha256
 
 
@@ -56,6 +58,42 @@ def register_verified_benchmark(
     session.add(result)
     session.flush()
     return result
+
+
+# Shadow is an unbenchmarked preview whose projections never reach legacy
+# tables. Every other mode, rollback included, serves its taxonomy for real.
+BENCHMARK_EXEMPT_MODES = frozenset({"shadow"})
+
+
+def benchmark_anchor_version(session: Session, version_id) -> TaxonomyVersion:
+    """Return the nearest ancestor-or-self version the processor did not create.
+
+    Processor-derived versions inherit the benchmark of this anchor. A seed or a
+    reviewed operation becomes a new anchor that needs its own benchmark.
+    """
+    lineage = (
+        select(
+            TaxonomyVersion.id,
+            TaxonomyVersion.parent_version_id,
+            TaxonomyVersion.created_by,
+        )
+        .where(TaxonomyVersion.id == version_id)
+        .cte("anchor_lineage", recursive=True)
+    )
+    parent = aliased(TaxonomyVersion)
+    lineage = lineage.union(
+        select(parent.id, parent.parent_version_id, parent.created_by)
+        .join(lineage, parent.id == lineage.c.parent_version_id)
+        .where(lineage.c.created_by == SYSTEM_ACTOR)
+    )
+    anchor = session.scalar(
+        select(TaxonomyVersion)
+        .join(lineage, TaxonomyVersion.id == lineage.c.id)
+        .where(lineage.c.created_by != SYSTEM_ACTOR)
+    )
+    if anchor is None or not anchor.semantic_hash:
+        raise LookupError("benchmark_anchor_missing")
+    return anchor
 
 
 def find_verified_benchmark(

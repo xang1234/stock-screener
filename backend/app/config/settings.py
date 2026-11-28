@@ -638,6 +638,15 @@ class Settings(BaseSettings):
             ) from exc
         return v
 
+    @field_validator("admin_principal_id")
+    @classmethod
+    def validate_admin_principal_id(cls, v: str) -> str:
+        if v.startswith("system:"):
+            raise ValueError(
+                "admin_principal_id must not use the reserved 'system:' prefix"
+            )
+        return v
+
     @field_validator('universe_source_timeout_seconds')
     @classmethod
     def validate_universe_source_timeout_seconds(cls, v: int) -> int:

@@ -73,6 +73,10 @@ class ProjectionDeliveryResult:
     applied: bool
 
 
+def generation_delivery_scope(target_mode: str) -> str:
+    return "shadow" if target_mode == "shadow" else "candidate"
+
+
 class _LegacyWrite:
     def __init__(
         self,

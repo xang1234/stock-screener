@@ -93,15 +93,6 @@ All remaining commands target the migrated deployment database:
 export DATABASE_URL="$TARGET_DATABASE_URL"
 ```
 
-Before shadow mode, verify that the worker constructed the default Economic
-Taxonomy pipeline from a sanctioned extraction-provider credential and the
-current processing taxonomy. The default binds extraction, claim review,
-resolution, and Social's durable budget adapter. A deployment may replace it
-through `configure_economic_taxonomy_pipeline(...)`. Dispatch one synthetic
-request and require `processed: 1`. The repository deliberately fails closed as
-`processor_unconfigured` when neither the default nor an explicit override can
-be built; entering shadow without a successful synthetic request is prohibited.
-
 ## 2. Seed the governed V1 snapshot
 
 Run this once, while `taxonomy_authority.processing_taxonomy_version_id` is
@@ -233,6 +224,27 @@ This publication verifies the reader capability and performs its final
 compare-and-set barrier inside the coordinator. In shadow mode, legacy remains
 the read and write authority; comparison projections are not live state.
 
+Shadow publication needs no benchmark. Its generation records `benchmark: null`.
+Its compatibility projections stay in shadow scope, so delivery never writes
+them to the legacy tables. Every other generation needs a benchmark, rollback
+included, because rollback publishes the current processing taxonomy.
+
+The shadow generation is still a readable preview. The Themes page economic
+catalog and the review routes serve it, unbenchmarked, and the benchmark export
+below reads it through the shadow reader. Legacy tables and legacy readers are
+untouched. Shadow publication is refused once authority is `dual` or
+`economic` (`shadow_after_dual_unsupported`); to go back, roll back to legacy.
+
+Now verify the processing pipeline. Processing is skipped in legacy mode, so
+this check cannot run before shadow. The worker builds the default Economic
+Taxonomy pipeline from a sanctioned extraction-provider credential and the
+current processing taxonomy. The default binds extraction, claim review,
+resolution, and Social's durable budget adapter. A deployment may replace it
+through `configure_economic_taxonomy_pipeline(...)`. Dispatch one synthetic
+request and require `processed: 1`. The worker fails closed as
+`processor_unconfigured` when neither the default nor an override can be
+built. Do not start catch-up until a synthetic request succeeds.
+
 Run discovery and processing repeatedly through the deployed Celery workers:
 
 ```bash
@@ -248,13 +260,38 @@ Repeat until eligible work is complete or durably held for review. This is
 catch-up outside the publication transaction. Provider calls must not occur
 inside the Social projection transaction or the publication fence.
 
+Republish shadow after catch-up. Readers serve the published shadow
+generation, so they still show the state before catch-up. The `refresh` task
+skips every mode except `economic`, so it does not republish shadow. The
+benchmark export below must read current output:
+
+```bash
+./venv/bin/python scripts/publish_economic_taxonomy.py \
+  --capability-id "$READER_CAPABILITY_ID" --mode shadow
+```
+
+The benchmark is registered against the anchor. The anchor is the last
+taxonomy version a seed or reviewed operation created. Versions created by
+`system:economic-taxonomy-refresh` inherit its benchmark. That covers processor
+catch-up and the automatic lifecycle job. The `system:` prefix is reserved, so
+the seed refuses such an `--actor` and settings reject such an
+`ADMIN_PRINCIPAL_ID`. After catch-up, the anchor is the sealed migration
+target unless a reviewed operation ran since. Use the anchor's semantic hash as
+`RECORDED_SEMANTIC_HASH` below.
+
+The repository has no exporter for `benchmark-actual.json` yet. The
+`benchmark_cases` in `contract_cases.json` hold only `required` and `forbidden`
+outcome labels. They hold no inputs. An exporter needs an input scenario for
+each case before it can produce this file. Running the fixtures processes new
+requests, so republish shadow again after they finish and before you export.
+
 Create `$RELEASE_DIR/benchmark-actual.json` by running every named
 `benchmark_cases` fixture through the deployed shadow processor and exporting
 the shadow reader's observed identities, relationships, assignments,
 interpretation selections, and retractions. This is a reviewed release input,
 not a file that may be synthesized from each fixture's `required` section (that
-would make the benchmark tautological). The export must contain the sealed
-taxonomy semantic hash, `economic-taxonomy-v1` policy bundle, and exactly one
+would make the benchmark tautological). The export must contain the anchor's
+semantic hash, `economic-taxonomy-v1` policy bundle, and exactly one
 complete outcome for every fixture name. Preserve the case-to-source evidence
 map alongside it.
 
@@ -272,9 +309,9 @@ Validate that export with the fail-closed contrast benchmark:
 An absent case, wrong taxonomy/policy hash, forbidden result, or benchmark
 failure is a stop.
 
-Register the passed report in the target database. Publication fails closed
-unless this append-only result matches the sealed taxonomy semantic hash and
-the `economic-taxonomy-v1` policy bundle:
+Register the passed report in the target database. Every publication except
+shadow fails closed unless this append-only result matches the anchor's
+semantic hash and the `economic-taxonomy-v1` policy bundle:
 
 ```bash
 ./venv/bin/python scripts/register_economic_taxonomy_benchmark.py \
@@ -282,9 +319,10 @@ the `economic-taxonomy-v1` policy bundle:
   --verified-by "$TAXONOMY_ACTOR"
 ```
 
-Record the printed benchmark-result UUID with the release evidence. A taxonomy
-or policy change requires a new report and registration before another
-generation can be prepared.
+Record the printed benchmark-result UUID with the release evidence. A reviewed
+operation creates a new anchor. It needs a new report and registration before
+the next generation that is not shadow, a rollback included. A policy change
+does too. Processor catch-up does not.
 
 ## 5. Enter dual and drain required compatibility work
 
