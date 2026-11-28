@@ -225,6 +225,8 @@ compare-and-set barrier inside the coordinator. In shadow mode, legacy remains
 the read and write authority; comparison projections are not live state.
 
 Shadow publication needs no benchmark. Its generation records `benchmark: null`.
+Only dual and economic generations need one. Rollback publishes legacy and
+needs none, so a missing benchmark never blocks it.
 
 Now verify the processing pipeline. Processing is skipped in legacy mode, so
 this check cannot run before shadow. The worker builds the default Economic

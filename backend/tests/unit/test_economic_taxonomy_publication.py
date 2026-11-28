@@ -552,13 +552,14 @@ def test_reviewed_operation_requires_a_new_benchmark(db_session):
     assert benchmark["taxonomy_hash"] == reviewed.semantic_hash
 
 
-def test_shadow_publication_needs_no_benchmark(db_session):
+@pytest.mark.parametrize("mode", ["shadow", "legacy"])
+def test_non_economic_publication_needs_no_benchmark(db_session, mode):
     taxonomy, capability = _seed(db_session, include_benchmark=False)
     _advance_processing_head(
         db_session, taxonomy, actor=SYSTEM_ACTOR, theme_name="Tanker Shipping"
     )
 
-    assert _prepare_and_publish(db_session, capability, "shadow") is None
+    assert _prepare_and_publish(db_session, capability, mode) is None
 
 
 def test_processor_lineage_without_a_reviewed_anchor_fails_closed(db_session):

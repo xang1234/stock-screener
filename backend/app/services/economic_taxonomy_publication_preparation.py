@@ -18,6 +18,7 @@ from app.models.economic_taxonomy_runtime import (
     ReaderCapabilityManifest,
 )
 from app.services.economic_taxonomy_benchmark_store import (
+    BENCHMARKED_MODES,
     benchmark_anchor_version,
     verify_benchmark_reference,
 )
@@ -137,7 +138,7 @@ class PublicationPreparer:
                 target_mode=target_mode,
             )
             benchmark = None
-            if target_mode != "shadow":
+            if target_mode in BENCHMARKED_MODES:
                 benchmark = self.benchmark_verifier(session, context)
                 if benchmark is False or not isinstance(benchmark, Mapping):
                     raise BenchmarkRejected("economic_taxonomy_benchmark_failed")

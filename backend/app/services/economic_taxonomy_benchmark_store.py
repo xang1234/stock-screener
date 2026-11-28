@@ -60,6 +60,11 @@ def register_verified_benchmark(
     return result
 
 
+# Only modes that serve economic results need a benchmark. Shadow and legacy
+# (including rollback) serve legacy readers.
+BENCHMARKED_MODES = frozenset({"dual", "economic"})
+
+
 def benchmark_anchor_version(session: Session, version_id) -> TaxonomyVersion:
     """Return the nearest ancestor-or-self version the processor did not create.
 
