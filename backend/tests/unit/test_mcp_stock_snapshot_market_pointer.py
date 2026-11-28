@@ -515,15 +515,147 @@ def test_stock_snapshot_answers_an_unknown_symbol_even_when_a_run_row_is_damaged
     assert "NOSUCH" in payload["summary"]
 
 
-def test_stock_snapshot_leaves_breadth_out_for_a_symbol_outside_the_us(
+def test_stock_snapshot_dates_breadth_by_the_us_run_for_a_symbol_outside_the_us(
     service, session_factory
 ):
-    """US breadth under a German run date would be a series this symbol never traded on."""
+    """Breadth is a US series, so its date comes from the US run, not from the German one.
+
+    The German run is moved to 2026-03-27, where the US breadth row is 1.55; the US run sits on
+    2026-03-29 with 1.82. Answering with the German run's date would hand a reader the older US
+    row and call it this symbol's context.
+    """
     _seed_de_run(session_factory)
+    session = session_factory()
+    try:
+        session.query(FeatureRun).filter(FeatureRun.id == DE_RUN).update(
+            {FeatureRun.as_of_date: date(2026, 3, 27)}, synchronize_session=False
+        )
+        session.query(StockFeatureDaily).filter(StockFeatureDaily.run_id == DE_RUN).update(
+            {StockFeatureDaily.as_of_date: date(2026, 3, 27)}, synchronize_session=False
+        )
+        session.commit()
+    finally:
+        session.close()
     _point(session_factory, "latest_published_market:DE", DE_RUN)
 
     payload = _snapshot(service, "SAP.DE")
 
     assert payload["technicals"] is not None
     assert payload["technicals"]["run_id"] == DE_RUN
-    assert payload["breadth"] is None
+    assert payload["breadth"] is not None
+    assert payload["breadth"]["date"] == "2026-03-29"
+
+
+def _seed_rollout_run(session_factory, run_id: int = 5) -> int:
+    """A staged Market RS rollout run: published, but never activated.
+
+    ``build_balanced_feature_snapshot`` publishes it under
+    ``rollout_rs:{formula}:{market}``, and ``MarketRsActivator`` repoints
+    ``latest_published_market:{market}`` only after the run passes validation. Until then it
+    carries ``status = published`` and real rows, without ever having gone live.
+    """
+    session = session_factory()
+    try:
+        session.add(
+            FeatureRun(
+                id=run_id,
+                as_of_date=date(2026, 3, 31),
+                run_type="daily_snapshot",
+                status="published",
+                config_json={"universe": {"market": "US"}},
+                created_at=datetime(2026, 3, 31, 18, 0, tzinfo=UTC),
+                completed_at=datetime(2026, 3, 31, 19, 0, tzinfo=UTC),
+                published_at=datetime(2026, 3, 31, 19, 30, tzinfo=UTC),
+            )
+        )
+        session.add(
+            StockFeatureDaily(
+                run_id=run_id,
+                symbol="NVDA",
+                as_of_date=date(2026, 3, 31),
+                composite_score=97.0,
+                overall_rating=5,
+                passes_count=2,
+                details_json=_details(
+                    "NVDA",
+                    97.0,
+                    "Strong Buy",
+                    2,
+                    99,
+                    "Semiconductors",
+                    150.0,
+                    30_000_000,
+                    3_000_000_000_000,
+                    40.0,
+                    33.0,
+                ),
+            )
+        )
+        session.add(
+            FeatureRunPointer(key="rollout_rs:balanced_v3:US", run_id=run_id)
+        )
+        session.commit()
+    finally:
+        session.close()
+    return run_id
+
+
+def test_stock_snapshot_does_not_serve_a_staged_rollout_run(service, session_factory):
+    """A run staged by the rollout builder is published, but it never went live.
+
+    Without a live pointer the scan is the only thing that could answer, and it must not
+    answer with a run that failed (or has not yet passed) market activation.
+    """
+    rollout_run = _seed_rollout_run(session_factory)
+    _set_market(session_factory, "NVDA", "US")
+    _drop_pointer(session_factory, "latest_published")
+    _drop_pointer(session_factory, "latest_published_market:US")
+    session = session_factory()
+    try:
+        session.query(FeatureRun).filter(FeatureRun.id.in_((US_RUN, NEWEST_US_RUN))).update(
+            {FeatureRun.status: "failed"}, synchronize_session=False
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    assert _newest_published_run_id(session_factory) == rollout_run
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is None
+
+
+def test_stock_snapshot_serves_a_rollout_run_that_was_activated(service, session_factory):
+    """Once activation repoints the market pointer, the same run is the market's run."""
+    rollout_run = _seed_rollout_run(session_factory)
+    _set_market(session_factory, "NVDA", "US")
+    _drop_pointer(session_factory, "latest_published")
+    _point(session_factory, "latest_published_market:US", rollout_run)
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is not None
+    assert payload["technicals"]["run_id"] == rollout_run
+    assert payload["technicals"]["run_source"] == "market_pointer"
+
+
+def test_stock_snapshot_ignores_a_market_pointer_that_names_another_markets_run(
+    service, session_factory
+):
+    """A hand-set pointer can disagree with the run behind it; the chain falls through.
+
+    ``publish_pointer_key`` is passed into the build unchanged and nothing compares it with
+    the build's market, so the check belongs on the target, as it already was for the global
+    pointer.
+    """
+    _seed_de_run(session_factory)
+    _set_market(session_factory, "NVDA", "US")
+    _point(session_factory, "latest_published_market:US", DE_RUN)  # run declares market DE
+    _point(session_factory, "latest_published", NEWEST_US_RUN)
+
+    payload = _snapshot(service, "NVDA")
+
+    assert payload["technicals"] is not None
+    assert payload["technicals"]["run_id"] == NEWEST_US_RUN
+    assert payload["technicals"]["run_source"] == "global_pointer"
