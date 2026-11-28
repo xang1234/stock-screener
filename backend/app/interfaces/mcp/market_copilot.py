@@ -1539,8 +1539,6 @@ class MarketCopilotService:
                 .filter(StockUniverse.symbol == args.symbol, StockUniverse.is_active.is_(True))
                 .first()
             )
-            run = self._latest_published_run(db) if args.include_technicals else None
-
         if stock is None:
             return self._envelope(
                 f"Symbol {args.symbol!r} was not found in the active stock universe.",
@@ -1551,6 +1549,13 @@ class MarketCopilotService:
                 stock=None,
                 technicals=None,
             )
+
+        run = None
+        if args.include_technicals:
+            # Market-first: publication writes a pointer per market and no longer maintains
+            # the global one, so a symbol must be resolved against the run of its own market.
+            with self._uow_scope() as uow:
+                run = self._latest_published_run_for_symbol(uow, args.symbol)
 
         stock_info = {
             "symbol": stock.symbol,
@@ -1608,13 +1613,27 @@ class MarketCopilotService:
         )
 
     def _stock_snapshot(self, args: StockSnapshotArgs) -> ToolEnvelope:
+        """Build the combined snapshot of one symbol from the run that applies to it.
+
+        The run is resolved market-first (see ``_latest_published_run_for_symbol``).
+        Publication writes a pointer per market and no longer maintains the global one, so
+        reading the newest published run resolved every symbol against whichever run
+        finished last: on a US/DE install that was the smaller DE run, ``stock_snapshot``
+        answered ``technicals: null`` for every US symbol although the figures existed, and
+        consumers reading ``technicals.stage`` failed.
+
+        Intended change: a single-market install without a global pointer now finds its run
+        through the market pointer instead of reporting that none is published.
+        """
+        with self._uow_scope() as uow:
+            run = self._latest_published_run_for_symbol(uow, args.symbol)
+
         with self._session_scope() as db:
             stock = (
                 db.query(StockUniverse)
                 .filter(StockUniverse.symbol == args.symbol, StockUniverse.is_active.is_(True))
                 .first()
             )
-            run = self._latest_published_run(db)
             breadth = self._latest_breadth(db, getattr(run, "as_of_date", None))
             watchlists = (
                 db.query(UserWatchlist)
@@ -2111,6 +2130,12 @@ class MarketCopilotService:
         Deliberately does **not** create a global ``latest_published`` pointer as a
         side effect: publication owns that key, and writing it here would mask a
         genuinely missing publication.
+
+        A pointer is only trusted while its target is still published:
+        ``get_latest_published`` follows the pointer and does not check the run's status,
+        so a pointer left behind on a failed run would otherwise answer with it. The
+        caller gets the global pointer's run instead, or ``None`` when that is not
+        published either - the same guard ``_published_candidate_market_run`` applies.
         """
         market = (
             uow.session.query(StockUniverse.market)
@@ -2126,10 +2151,13 @@ class MarketCopilotService:
             latest_run = uow.feature_runs.get_latest_published(
                 pointer_key=f"latest_published_market:{normalized_market}"
             )
-            if latest_run is not None:
+            if latest_run is not None and latest_run.status == RunStatus.PUBLISHED:
                 return latest_run
 
-        return uow.feature_runs.get_latest_published()
+        global_run = uow.feature_runs.get_latest_published()
+        if global_run is not None and global_run.status == RunStatus.PUBLISHED:
+            return global_run
+        return None
 
     def _latest_breadth(self, db: Session, as_of_date: date | None) -> MarketBreadth | None:
         # Market copilot is US-scoped today.
