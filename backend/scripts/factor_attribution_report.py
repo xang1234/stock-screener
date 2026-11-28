@@ -1,8 +1,9 @@
 """Factor attribution of the replay picks against Ken French US daily factors.
 
 Holds every replay pick counted at one validation horizon from its entry session's open to
-its exit session's close (the last completed session while its window is open), averages the held picks' daily returns into a calendar-time
-portfolio, and regresses its excess return on each model in FACTOR_MODELS. A significant
+its exit session's close (the last completed session while its window is open), averages
+the held picks' daily returns into a calendar-time portfolio, and regresses its excess
+return on each model in FACTOR_MODELS. A significant
 alpha that survives momentum and size is skill; one that vanishes was factor exposure.
 
 Mid-session: it reads cached prices through the market's last completed session only, so
