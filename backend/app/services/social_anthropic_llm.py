@@ -12,7 +12,12 @@ from types import SimpleNamespace
 import anthropic
 
 from app.config.settings import settings
-from app.services.llm.llm_service import LLMError, LLMPreDispatchError, LLMProviderRejectedError
+from app.services.llm.llm_service import (
+    LLMError,
+    LLMPreDispatchError,
+    LLMProviderRejectedError,
+    LLMRateLimitError,
+)
 from app.services.social_extraction_service import EXTRACTION_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -50,8 +55,10 @@ class AnthropicMeteredLLM:
             if status == 400 and "credit balance" in str(exc.message).lower():
                 status = 402
             logger.warning("Metered Anthropic dispatch failed: %s status=%s", type(exc).__name__, status)
-            # A timeout (408) or rate limit (429) may still have been billed.
-            if 400 <= status < 500 and status not in (408, 429):
+            # A rate limit (429) is refused before inference; a timeout (408) may still have been billed.
+            if status == 429:
+                raise LLMRateLimitError("metered_provider_rate_limited") from None
+            if 400 <= status < 500 and status != 408:
                 raise LLMProviderRejectedError("metered_provider_rejected", status) from None
             raise LLMError("metered_provider_error") from None
         except anthropic.APIError as exc:

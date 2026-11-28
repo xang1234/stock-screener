@@ -5,7 +5,12 @@ import anthropic
 import httpx2
 import pytest
 
-from app.services.llm.llm_service import LLMError, LLMPreDispatchError, LLMProviderRejectedError
+from app.services.llm.llm_service import (
+    LLMError,
+    LLMPreDispatchError,
+    LLMProviderRejectedError,
+    LLMRateLimitError,
+)
 from app.services.social_anthropic_llm import AnthropicMeteredLLM
 from app.services.social_extraction_service import EXTRACTION_SCHEMA
 
@@ -57,7 +62,7 @@ def test_sends_one_schema_constrained_request_and_returns_the_ledger_shape():
     (status_error(401), LLMProviderRejectedError),
     (status_error(400, "Your credit balance is too low to access the Anthropic API."), LLMProviderRejectedError),
     (status_error(400, "invalid request"), LLMProviderRejectedError),
-    (status_error(429), LLMError),
+    (status_error(429), LLMRateLimitError),
     (status_error(529), LLMError),
     (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com")), LLMError),
 ])
@@ -71,7 +76,7 @@ def test_maps_provider_errors_to_the_metered_contract(error, expected):
         message = str(error.message).lower()
         assert raised.value.status_code == (402 if "credit balance" in message else error.status_code)
     else:
-        assert not isinstance(raised.value, LLMProviderRejectedError)
+        assert type(raised.value) is expected
 
 
 def test_missing_key_fails_before_dispatch(monkeypatch):

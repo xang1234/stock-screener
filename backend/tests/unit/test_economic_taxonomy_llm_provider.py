@@ -1,15 +1,36 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
+import anthropic
+import httpx2
 import pytest
+from sqlalchemy import select
 
 from app.database import SessionLocal
+from app.infra.db.models.social_analysis import SocialLLMAttempt
+from app.infra.db.models.social_signals import SocialSourceRegistry
+from app.infra.db.repositories.economic_taxonomy_work_repo import (
+    EconomicTaxonomyWorkRepository,
+)
 from app.models.app_settings import AppSetting
+from app.models.economic_taxonomy_runtime import (
+    ProcessingRequest,
+    ProviderAttempt,
+    TaxonomyAuthority,
+)
 from app.services import economic_taxonomy_llm_provider as provider_module
-from app.services.economic_exposure_extraction import RetryableProviderError
+from app.services.economic_exposure_extraction import (
+    EconomicExposureExtractor,
+    RetryableProviderError,
+)
+from app.services.economic_source_admission import (
+    EconomicSourceAdmissionService,
+    EvidenceAdmission,
+)
 from app.services.economic_taxonomy_llm_provider import (
     EconomicTaxonomyLLMProvider,
     RoutedEconomicReservationManager,
@@ -17,6 +38,10 @@ from app.services.economic_taxonomy_llm_provider import (
 )
 from app.services.llm.llm_service import LLMPreDispatchError, LLMService
 from app.services.social_anthropic_llm import AnthropicMeteredLLM
+from app.tasks.economic_taxonomy_tasks import (
+    POLICY_BUNDLE_VERSION,
+    EconomicTaxonomyTaskService,
+)
 
 HAIKU = "anthropic/claude-haiku-5-5"
 
@@ -162,3 +187,124 @@ def test_haiku_dispatch_sends_free_json_and_settles_social_cost(monkeypatch):
         "actual_cost": provider.budget.price(HAIKU).cost(1000, 200),
     }
     assert result["actual_cost"] == Decimal("0.0002")
+
+
+NOW = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
+HAIKU_PRICE = {
+    "provider": "anthropic",
+    "actual_models": ["claude-haiku-5-5"],
+    "input_usd_per_million": "0.10",
+    "output_usd_per_million": "0.50",
+}
+
+
+def status_error(status):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.APIStatusError(
+        "refused", response=httpx2.Response(status, request=request), body=None
+    )
+
+
+def social_request(monkeypatch, *effects):
+    """One Social-backed processing request served by a scripted Haiku client."""
+    _credentials(monkeypatch, anthropic="test-key")
+    with SessionLocal.begin() as db:
+        db.add_all(
+            [
+                TaxonomyAuthority(
+                    id=1,
+                    mode="shadow",
+                    processing_head_revision=1,
+                    authority_epoch=7,
+                    writes_fenced=False,
+                    semantic_invalidation_revision=0,
+                    cutover_catch_up_cursor=[],
+                    rollback_state="ready",
+                ),
+                SocialSourceRegistry(id=1),
+                AppSetting(
+                    key="social_llm_pricing",
+                    category="social",
+                    value=json.dumps({"version": "haiku-v1", "models": {HAIKU: HAIKU_PRICE}}),
+                ),
+            ]
+        )
+    with SessionLocal.begin() as db:
+        admitted = EconomicSourceAdmissionService(db).admit_content(
+            EvidenceAdmission(
+                provider="x",
+                canonical_item_id="haiku-post",
+                capture_route="social",
+                original_text="Memory pricing rose.",
+                preparation_version="social-v1",
+                available_at=NOW,
+                evidence_channels=("narrative",),
+                source_metadata={"social_work_id": 1},
+            )
+        )
+        request_id = EconomicTaxonomyWorkRepository(db).enqueue_request(
+            source_lineage_id=admitted.source_lineage_id,
+            evidence_packet_id=admitted.packet_id,
+            policy_bundle_version=POLICY_BUNDLE_VERSION,
+            available_at=NOW,
+        ).id
+
+    effects = list(effects)
+
+    async def create(**_kwargs):
+        effect = effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+        return SimpleNamespace(
+            id="msg_ok",
+            model="claude-haiku-5-5",
+            content=[SimpleNamespace(type="text", text=json.dumps(effect))],
+            usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
+        )
+
+    provider, reservations = build_economic_taxonomy_provider(SessionLocal)
+    provider.llm.client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    extractor = EconomicExposureExtractor(
+        SessionLocal,
+        provider=provider,
+        extraction_policy_version="economic-extraction-v1",
+        approved_dimensions={"industry"},
+        reservations=reservations,
+    )
+    service = EconomicTaxonomyTaskService(
+        SessionLocal,
+        pipeline=SimpleNamespace(process=lambda rid, _lease: extractor.extract(rid)),
+        clock=lambda: NOW,
+    )
+    return request_id, service
+
+
+def outcomes(request_id):
+    with SessionLocal() as db:
+        request = db.get(ProcessingRequest, request_id)
+        attempts = db.scalars(
+            select(ProviderAttempt)
+            .where(ProviderAttempt.logical_request_id == request_id)
+            .order_by(ProviderAttempt.attempt_number)
+        ).all()
+        social = db.scalars(select(SocialLLMAttempt).order_by(SocialLLMAttempt.id)).all()
+        return (
+            (request.status, request.completion_code),
+            [attempt.outcome for attempt in attempts],
+            [(row.state, row.actual_usd) for row in social],
+        )
+
+
+def test_rate_limited_haiku_dispatch_leaves_the_request_retryable_at_zero_cost(
+    monkeypatch,
+):
+    request_id, service = social_request(monkeypatch, status_error(429))
+
+    result = service.process(limit=1, worker_id="worker:test")
+
+    assert (result["retryable"], result["held"], result["terminal_failures"]) == (1, 0, 0)
+    assert outcomes(request_id) == (
+        ("retryable", "provider_retryable"),
+        ["retryable_failure"],
+        [("reconciled", Decimal("0"))],
+    )

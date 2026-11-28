@@ -401,15 +401,16 @@ def test_a_model_that_returns_only_unusable_output_defers_every_post_and_logs_on
 
 
 class FlakyLLM(FakeLLM):
-    def __init__(self, failures):
+    def __init__(self, failures, error=None):
         super().__init__()
         self.failures = failures
+        self.error = error or TimeoutError("provider timed out")
 
     async def completion(self, **kwargs):
         if self.failures:
             self.failures -= 1
             self.calls += 1
-            raise TimeoutError("provider timed out")
+            raise self.error
         return await super().completion(**kwargs)
 
 
@@ -435,6 +436,23 @@ def test_request_with_unknown_outcome_is_retried_once_within_the_run_cap(
         work = db.get(SocialExtractionWork, work_id)
         attempts = sorted(attempt.state for attempt in db.scalars(select(SocialLLMAttempt)))
         assert ((result.succeeded, result.failed), llm.calls, (work.state, work.error_code), attempts) == expected
+
+
+def test_rate_limited_dispatch_is_still_an_unknown_social_outcome(backlog):
+    from app.infra.db.models.social_analysis import SocialLLMAttempt
+    from app.services.llm.llm_service import LLMRateLimitError
+    from app.services.social_signal_backlog_service import ProcessSocialBacklog
+
+    configure_budget(backlog)
+    llm = FlakyLLM(1, LLMRateLimitError("metered_provider_rate_limited"))
+    worker = ProcessSocialBacklog(backlog, llm=llm)
+    enqueue(backlog, worker, post(1))
+
+    result = asyncio.run(worker.execute(NOW, 1))
+
+    with backlog() as db:
+        attempts = sorted(attempt.state for attempt in db.scalars(select(SocialLLMAttempt)))
+    assert (result.succeeded, llm.calls, attempts) == (1, 2, ["reconciled", "uncertain"])
 
 
 def test_deferred_retry_keeps_the_unknown_outcome_terminal(backlog):

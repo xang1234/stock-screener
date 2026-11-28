@@ -334,8 +334,10 @@ class LLMService:
                 status = getattr(exc, "status_code", None)
                 # The class and status tell an expired key from an outage; the message can carry the prompt.
                 logger.warning("Metered LLM dispatch failed: %s status=%s", type(exc).__name__, status)
-                # A timeout (408) or rate limit (429) may still have been billed.
-                if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                # A rate limit (429) is refused before inference; a timeout (408) may still have been billed.
+                if status == 429:
+                    raise LLMRateLimitError("metered_provider_rate_limited") from None
+                if isinstance(status, int) and 400 <= status < 500 and status != 408:
                     raise LLMProviderRejectedError("metered_provider_rejected", status) from None
                 raise LLMError("metered_provider_error") from None
 
