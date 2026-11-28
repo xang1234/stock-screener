@@ -660,6 +660,33 @@ def test_shadow_generation_never_delivers_to_legacy_tables(db_session):
     } == {"AI Memory"}
 
 
+def test_dual_after_shadow_retracts_lineages_the_live_ancestor_delivered(db_session):
+    _taxonomy, capability = _seed(db_session)
+    theme_id = uuid4()
+    mirrored = _coordinator(
+        db_session, compatibility_builder=_legacy_theme_compatibility(theme_id)
+    )
+    prepared = mirrored.prepare_generation(
+        mirrored.capture_cutoff(principal=ADMIN, selections=[]),
+        principal=ADMIN,
+        reader_capability_manifest_id=capability.id,
+        target_mode="dual",
+    )
+    mirrored.publish_generation(prepared.id, principal=ADMIN)
+    _deliver_all(db_session)
+    mirrored.rollback(principal=ADMIN)
+    _deliver_all(db_session)
+    assert all(c.is_active for c in _legacy_clusters(db_session, theme_id))
+
+    _prepare_and_publish(db_session, capability, "shadow")
+    _prepare_and_publish(db_session, capability, "dual")
+    _deliver_all(db_session)
+
+    clusters = _legacy_clusters(db_session, theme_id)
+    assert clusters
+    assert not any(c.is_active for c in clusters)
+
+
 def test_processor_lineage_without_a_reviewed_anchor_fails_closed(db_session):
     _taxonomy, capability = _seed(db_session, actor=SYSTEM_ACTOR)
     coordinator = _coordinator(db_session)
