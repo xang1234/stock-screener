@@ -2297,9 +2297,10 @@ class MarketCopilotService:
     ) -> bool:
         """True when a live pointer activates *run_id* for *market*.
 
-        Only that market's own pointer counts, or the global pointer when the run cannot belong
-        to another market. A pointer of a different market naming the run - a hand-set key, or a
-        rollout repointed under the wrong market - is not activation for this one.
+        Two ways count. That market's own pointer naming the run, or the global pointer naming a
+        run whose declared market is this one, undeclared, or unknown to the caller. A run that
+        declares another market is not activated here: a single-market install repointing the
+        global pointer must not release a rollout that belongs to a different market.
         """
         normalized = (market or "").strip().upper()
         if normalized and live_pointers.get(f"latest_published_market:{normalized}") == run_id:
