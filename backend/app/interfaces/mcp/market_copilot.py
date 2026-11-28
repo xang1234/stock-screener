@@ -1644,8 +1644,8 @@ class MarketCopilotService:
 
         The symbol is looked up before the run, so a run row that cannot be read does not turn
         "not in the universe" into an error. ``technicals["run_source"]`` says which pointer -
-        or which published-run scan - answered, and breadth is left out for symbols outside
-        the US, whose breadth series this tool does not have.
+        or which published-run scan - answered. Breadth is a US series, so a symbol outside the
+        US gets it dated by the US run rather than by its own.
         """
         # The symbol first: an unknown symbol has no market to resolve a run for, and a run row
         # that cannot be read must not turn "not in the universe" into an error.
@@ -2159,35 +2159,7 @@ class MarketCopilotService:
         uow: SqlUnitOfWork,
         symbol: str,
     ) -> FeatureRunDomain | None:
-        """Return the published run that applies to *symbol*, market first.
-
-        Publication now writes per-market pointers (``latest_published_market:US``)
-        and the global ``latest_published`` pointer is no longer maintained. Reading
-        only the global pointer therefore reported "no published feature run" while a
-        perfectly valid market run existed — exactly what ``find_candidates`` was
-        still showing. Mirrors ``api.v1.stocks._get_latest_feature_run_for_symbol``:
-        resolve the symbol's market, try its pointer, then fall back to the global
-        pointer so a legacy single-market install keeps working.
-
-        The market lookup is deliberately local rather than importing
-        ``api.v1._price_history.resolve_symbol_market``: that module exists to
-        share price-history helpers between two route modules and pulls in pandas,
-        so it is not a dependency the MCP layer should take. This module already
-        queries ``StockUniverse`` directly and imports it.
-
-        Deliberately does **not** create a global ``latest_published`` pointer as a
-        side effect: publication owns that key, and writing it here would mask a
-        genuinely missing publication.
-
-        Thin wrapper over ``_resolve_published_run_for_symbol`` for callers that do not need
-        to say where the figures came from (``explain_symbol`` does not).
-
-        A pointer is only trusted while its target is still published:
-        ``get_latest_published`` follows the pointer and does not check the run's status,
-        so a pointer left behind on a failed run would otherwise answer with it. The
-        caller gets the global pointer's run instead, or ``None`` when that is not
-        published either - the same guard ``_published_candidate_market_run`` applies.
-        """
+        """The published run that applies to *symbol*, market first (see the resolver)."""
         run, _source = self._resolve_published_run_for_symbol(uow, symbol)
         return run
 
@@ -2212,57 +2184,34 @@ class MarketCopilotService:
     ) -> tuple[FeatureRunDomain | None, str | None]:
         """The published run that applies to *symbol*, and what answered for it.
 
-        ``source`` names the answer - ``"market_pointer"``, ``"global_pointer"`` or
-        ``"published_run"`` - or is ``None`` when nothing applies. A caller that shows the
-        figures can therefore say where they came from instead of presenting a fallback as
-        today's publication.
+        Chain: the symbol's market pointer, then the global pointer while it applies, then -
+        with *allow_published_scan* - the newest published run of the symbol's market. The scan
+        keeps a pointerless install working: the previous code read ``status == "published"``
+        directly, so published rows without a pointer still answered. ``explain_symbol`` keeps
+        the pointer-only contract its own tests pin.
 
-        The chain is the symbol's market pointer, then the global pointer while it is
-        published and belongs to the symbol's market (or declares no market at all), then -
-        with *allow_published_scan* - the newest published run of the symbol's market.
-
-        The scan exists because the previous code read ``status == "published"`` directly: an
-        install whose pointers were never written (legacy database, cleaned-up pointer, rows
-        inserted without one) has published runs but no pointer, and resolving through
-        pointers alone would answer ``technicals: null`` for every symbol. ``explain_symbol``
-        deliberately keeps the pointer-only contract its own tests pin; the snapshot tools
-        answer from published rows as they did before.
-
-        Raises ``StoredFeatureRunInvalid`` when a stored run cannot be read: the row is
-        damaged, the request was not.
+        ``source`` is ``"market_pointer"``, ``"global_pointer"``, ``"published_run"`` or ``None``.
+        Raises ``StoredFeatureRunInvalid`` when a stored run cannot be read.
         """
-        normalized_market = self._symbol_market(uow, symbol)
+        market = self._symbol_market(uow, symbol)
 
-        def applies_to_the_market(run: FeatureRunDomain | None) -> bool:
-            """Whether *run* may answer for the symbol: same market, or none declared."""
-            if run is None:
-                return False
-            if not normalized_market:
-                return True
-            return self._run_applies_to_market(run, normalized_market)
-
-        if normalized_market:
-            market_run = self._run_behind_pointer(
-                uow, f"latest_published_market:{normalized_market}"
-            )
+        if market:
             # Publication derives the pointer key from the market, but ``publish_pointer_key``
-            # can be passed in by hand and nothing compares it with the build's market, so a
-            # mismatched pointer is possible. Check the target like the global branch does,
-            # and let the chain fall through to a run that really applies.
-            if applies_to_the_market(market_run):
-                return market_run, "market_pointer"
+            # can be passed in by hand, so the target is checked here as well.
+            run = self._run_behind_pointer(uow, f"latest_published_market:{market}")
+            if self._run_applies_to_market(run, market):
+                return run, "market_pointer"
 
-        global_run = self._run_behind_pointer(uow, "latest_published")
-        if applies_to_the_market(global_run):
-            # The global pointer is not maintained on a market-first install, so it may be
-            # frozen on another market's or an old run; the market check is what keeps it
-            # from answering for this symbol.
-            return global_run, "global_pointer"
+        # The global pointer is not maintained on a market-first install, so it may be frozen on
+        # another market's run; the market check is what keeps it from answering for this one.
+        run = self._run_behind_pointer(uow, "latest_published")
+        if self._run_applies_to_market(run, market):
+            return run, "global_pointer"
 
         if allow_published_scan:
-            scanned = self._newest_published_run_of_market(uow, normalized_market)
-            if scanned is not None:
-                return scanned, "published_run"
+            run = self._newest_published_run_of_market(uow, market)
+            if run is not None:
+                return run, "published_run"
 
         return None, None
 
@@ -2271,12 +2220,11 @@ class MarketCopilotService:
         uow: SqlUnitOfWork,
         pointer_key: str,
     ) -> FeatureRunDomain | None:
-        """The run behind *pointer_key*, when it is published.
+        """The run behind *pointer_key* while it is published, else ``None``.
 
-        ``get_latest_published`` follows the pointer without checking its target, and mapping a
-        stored row with an unknown status or run type raises ``ValueError``. Neither may reach
-        ``call_tool``'s ``ValueError`` branch, which would report the caller's arguments as
-        invalid - the row is damaged, the request was not.
+        ``get_latest_published`` does not check its target's status, and mapping a damaged row
+        raises ``ValueError``, which ``call_tool`` reports as invalid arguments. The row is
+        damaged, the request was not.
         """
         try:
             run = uow.feature_runs.get_latest_published(pointer_key=pointer_key)
@@ -2284,72 +2232,30 @@ class MarketCopilotService:
             raise StoredFeatureRunInvalid(
                 f"Stored run behind {pointer_key} has an unknown status or run type"
             ) from exc
-        if run is None or run.status != RunStatus.PUBLISHED:
-            return None
-        return run
-
-    @staticmethod
-    def _activated_for_market(
-        live_pointers: dict[str, int],
-        run_id: int,
-        run_market: str | None,
-        market: str,
-    ) -> bool:
-        """True when a live pointer activates *run_id* for *market*.
-
-        Two ways count. That market's own pointer naming the run, or the global pointer naming a
-        run whose declared market is this one, undeclared, or unknown to the caller. A run that
-        declares another market is not activated here: a single-market install repointing the
-        global pointer must not release a rollout that belongs to a different market.
-        """
-        normalized = (market or "").strip().upper()
-        if normalized and live_pointers.get(f"latest_published_market:{normalized}") == run_id:
-            return True
-        if live_pointers.get("latest_published") == run_id:
-            return run_market is None or not normalized or run_market == normalized
-        return False
-
-    @staticmethod
-    def _published_as_a_staged_rollout(run: FeatureRunDomain) -> bool:
-        """True when the run's own config says it was published to a rollout pointer."""
-        key = feature_run_publish_pointer_key(run)
-        return key is not None and key.startswith(ROLLOUT_POINTER_PREFIX)
+        return run if run is not None and run.status == RunStatus.PUBLISHED else None
 
     def _run_applies_to_market(self, run: FeatureRunDomain | None, market: str) -> bool:
-        """A run applies to *market* when it declares that market, or no market at all."""
+        """Whether *run* may answer for *market*: same market, none declared, or market unknown."""
         if run is None:
             return False
         declared = feature_run_market(run)
-        return declared is None or declared == (market or "").strip().upper()
-
-    def _pointer_targets(self, uow: SqlUnitOfWork, key_pattern: str) -> dict[str, int]:
-        """Pointer key → run id, for keys matching *key_pattern*.
-
-        The key is kept because a pointer only ever proves something for its own market: a
-        ``latest_published_market:DE`` naming a US run does not activate that run for US.
-        """
-        rows = (
-            uow.session.query(FeatureRunPointer.key, FeatureRunPointer.run_id)
-            .filter(FeatureRunPointer.key.like(key_pattern))
-            .all()
-        )
-        return {key: run_id for key, run_id in rows if run_id is not None}
+        normalized = (market or "").strip().upper()
+        return not normalized or declared is None or declared == normalized
 
     def _published_run_for_market(
         self,
         uow: SqlUnitOfWork,
         market: str,
     ) -> FeatureRunDomain | None:
-        """The run of one market, for callers that have a market but no symbol.
-
-        Same chain as a symbol's resolution: the market pointer, then the newest published run
-        of that market.
-        """
+        """The run of one market: its pointer, then the newest published run of that market."""
         normalized = (market or "").strip().upper()
-        if normalized:
-            run = self._run_behind_pointer(uow, f"latest_published_market:{normalized}")
-            if self._run_applies_to_market(run, normalized):
-                return run
+        run = (
+            self._run_behind_pointer(uow, f"latest_published_market:{normalized}")
+            if normalized
+            else None
+        )
+        if self._run_applies_to_market(run, normalized):
+            return run
         return self._newest_published_run_of_market(uow, normalized)
 
     def _newest_published_run_of_market(
@@ -2357,12 +2263,19 @@ class MarketCopilotService:
         uow: SqlUnitOfWork,
         market: str,
     ) -> FeatureRunDomain | None:
-        """The newest published run of *market*, for installs whose pointers were never written.
+        """The newest published run of *market* that could be live.
 
-        A run that declares no market is accepted: it predates market publication, so it
-        cannot belong to another market. Only the newest ``PUBLISHED_RUN_SCAN_LIMIT`` runs are
-        inspected - the search exists for a legacy install, not for a busy one. Runs a rollout
-        staged but never activated are skipped; see ``ROLLOUT_POINTER_PREFIX``.
+        Exists for a pointerless install - legacy database, cleaned-up pointer, rows inserted
+        without one - so only the newest ``PUBLISHED_RUN_SCAN_LIMIT`` rows are read. A run that
+        declares no market is accepted: it predates market publication, so it cannot belong to
+        another market.
+
+        A run a Market RS rollout staged is skipped unless a live pointer of *market* released
+        it: ``build_balanced_feature_snapshot`` publishes it under
+        ``rollout_rs:{formula}:{market}`` with ``status = published`` and
+        ``MarketRsActivator`` repoints the market pointer only after validation, so published
+        alone does not mean live. The run records that key in its own config, which is what
+        still identifies it after a retry moved the rollout pointer to a newer run.
         """
         rows = (
             uow.session.query(FeatureRun.id)
@@ -2371,14 +2284,12 @@ class MarketCopilotService:
             .limit(PUBLISHED_RUN_SCAN_LIMIT)
             .all()
         )
-        # A staged rollout run is published under ``rollout_rs:{formula}:{market}`` before it is
-        # validated and before ``MarketRsActivator`` repoints the market pointer. It carries
-        # ``status = published`` without ever having gone live, so the scan must not serve it;
-        # a run that did go live is named by a live pointer and is skipped only when it is not.
-        rollout_targets = set(
-            self._pointer_targets(uow, f"{ROLLOUT_POINTER_PREFIX}%").values()
-        )
-        live_pointers = self._pointer_targets(uow, "latest_published%")
+        live = self._pointer_targets(uow, "latest_published%")
+        normalized = (market or "").strip().upper()
+        released = {
+            live.get(f"latest_published_market:{normalized}"),
+            live.get("latest_published"),
+        }
         for (run_id,) in rows:
             try:
                 run = uow.feature_runs.get_run(run_id)
@@ -2386,20 +2297,22 @@ class MarketCopilotService:
                 raise StoredFeatureRunInvalid(
                     f"Stored run {run_id} has an unknown status or run type"
                 ) from exc
-            run_market = feature_run_market(run)
-            if market and run_market is not None and run_market != market:
+            if not self._run_applies_to_market(run, market):
                 continue
-            # A run counts as staged while a rollout pointer names it, or - after a retry moved
-            # that pointer away and left the rejected run behind nothing - while its own config
-            # records the rollout key it was published to. Only a live pointer of this market
-            # releases it; a pointer of another market proves nothing here.
-            staged = run_id in rollout_targets or self._published_as_a_staged_rollout(run)
-            if staged and not self._activated_for_market(
-                live_pointers, run_id, run_market, market
-            ):
+            published_to = feature_run_publish_pointer_key(run) or ""
+            if published_to.startswith(ROLLOUT_POINTER_PREFIX) and run_id not in released:
                 continue
             return run
         return None
+
+    def _pointer_targets(self, uow: SqlUnitOfWork, key_pattern: str) -> dict[str, int]:
+        """Pointer key → run id, for keys matching *key_pattern*."""
+        rows = (
+            uow.session.query(FeatureRunPointer.key, FeatureRunPointer.run_id)
+            .filter(FeatureRunPointer.key.like(key_pattern))
+            .all()
+        )
+        return {key: run_id for key, run_id in rows if run_id is not None}
 
     def _latest_breadth(self, db: Session, as_of_date: date | None) -> MarketBreadth | None:
         # Market copilot is US-scoped today.
