@@ -22,6 +22,7 @@ from app.models.economic_taxonomy_runtime import (
 from app.services.economic_taxonomy_fence import producer_write
 
 LEASE_DURATION = timedelta(minutes=5)
+OPERATOR_REQUEUE_REASON = "operator_requeue"
 
 
 class WorkLeaseError(RuntimeError):

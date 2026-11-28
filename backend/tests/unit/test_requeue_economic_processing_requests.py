@@ -20,6 +20,7 @@ from app.services.economic_source_admission import (
     EvidenceAdmission,
 )
 from app.services.economic_taxonomy_fence import AuthorityWritesFenced
+from app.services.economic_taxonomy_llm_provider import build_economic_taxonomy_provider
 from app.tasks.economic_taxonomy_tasks import POLICY_BUNDLE_VERSION
 from scripts.requeue_economic_processing_requests import main, requeue
 from tests.unit.test_economic_taxonomy_llm_provider import (
@@ -68,6 +69,21 @@ def test_requeued_uncertain_request_reserves_again_and_completes(monkeypatch):
         ).all()
     assert keys == [str(request_id), f"{request_id}:requeue-1"]
     assert terminal_revisions(request_id) == [("provider_outcome_uncertain", 1)]
+
+
+def test_a_stale_worker_cannot_take_the_budget_operation_a_requeue_opens(monkeypatch):
+    request_id, service = social_request(monkeypatch, status_error(529), EMPTY)
+    service.process(limit=1, worker_id="worker:test")
+    _provider, reservations = build_economic_taxonomy_provider(SessionLocal)
+
+    stale = reservations.reserve(
+        attempt_key="stale-dispatch", logical_request_id=request_id, operation_kind="extract"
+    )
+    requeue(SessionLocal, NOW, apply=True)
+    result = service.process(limit=1, worker_id="worker:test")
+
+    assert stale is None
+    assert (result["processed"], outcomes(request_id)[0]) == (1, ("completed", "completed"))
 
 
 def test_requeued_request_that_fails_again_records_a_second_terminal_revision(

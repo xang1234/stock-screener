@@ -28,13 +28,13 @@ COMPLETION_CODES = (
     "invalid_result_status",
     "invalid_provider_json",
 )
-REASON = "operator_requeue"
 
 
 def requeue(session_factory, now, *, apply=False, codes=COMPLETION_CODES, limit=None):
     from sqlalchemy import select
 
     from app.infra.db.repositories.economic_taxonomy_work_repo import (
+        OPERATOR_REQUEUE_REASON,
         EconomicTaxonomyWorkRepository,
     )
     from app.models.economic_taxonomy_runtime import ProcessingRequest, TaxonomyAuthority
@@ -63,7 +63,7 @@ def requeue(session_factory, now, *, apply=False, codes=COMPLETION_CODES, limit=
             work = EconomicTaxonomyWorkRepository(db)
             counts = Counter()
             for request_id, code in db.execute(query.with_for_update()).all():
-                work.retry(request_id, available_at=now, reason=REASON)
+                work.retry(request_id, available_at=now, reason=OPERATOR_REQUEUE_REASON)
                 counts[code] += 1
             db.commit()
         return counts

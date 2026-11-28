@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.config import settings
+from app.infra.db.repositories.economic_taxonomy_work_repo import OPERATOR_REQUEUE_REASON
 from app.models.economic_taxonomy_runtime import (
     EvidencePacket,
     ProcessingRequest,
@@ -231,13 +232,14 @@ class RoutedEconomicReservationManager:
                 else None
             )
             social_work_id = (packet.source_metadata or {}).get("social_work_id") if packet else None
-            # A terminal outcome closes the logical operation. A requeued request
-            # reserves a new one, so an uncertain earlier attempt keeps its charge
-            # without blocking the retry.
+            # An operator requeue opens a new logical operation, so an uncertain
+            # earlier attempt keeps its charge without blocking the retry.
             requeues = session.scalar(
                 select(func.count(ProcessingRequestEvent.id)).where(
                     ProcessingRequestEvent.processing_request_id == logical_request_id,
-                    ProcessingRequestEvent.event_type == "terminal_failure",
+                    ProcessingRequestEvent.event_type == "retry_scheduled",
+                    ProcessingRequestEvent.event_payload["reason"].as_string()
+                    == OPERATOR_REQUEUE_REASON,
                 )
             )
         if social_work_id is None:
